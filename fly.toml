@@ -1,0 +1,29 @@
+# fly.toml app configuration file generated for zone-watch-app-1794487481 on 2026-11-12T12:44:48Z
+#
+# See https://docs.fly.io/reference/configuration for information about how to use this file.
+#
+
+app = 'zone-watch-app-1794487481'
+primary_region = 'sjc'
+
+[build]
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # This app must never sleep: the watcher has to poll prices even when nobody
+  # opens the dashboard. auto_stop must stay false or Fly parks the machine as
+  # soon as it sees no traffic.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 1024
+
+[mounts]
+  source = "data"
+  destination = "/app/data"

@@ -1,0 +1,24 @@
+[Unit]
+Description=Zone Watch trading alerts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Change this to the folder where you copied the app
+WorkingDirectory=/opt/zone-watch
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=WATCH_INTERVAL_MS=10000
+# Logs go to the journal: journalctl -u zone-watch -f
+StandardOutput=journal
+StandardError=journal
+
+# Basic hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

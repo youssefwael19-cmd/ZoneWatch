@@ -1,0 +1,2 @@
+# Currently zero external dependencies.
+# Add only if you extend the project later (e.g. polars for large logs).

@@ -1,0 +1,610 @@
+/**
+ * Local settings store.
+ *
+ * The price API key lives here, in a file on the machine running the app.
+ * It is never sent back to the browser in full and never logged. The browser
+ * only ever sees a masked hint such as "••••abcd".
+ */
+
+const fs = require("fs");
+const path = require("path");
+
+const FILE = path.join(__dirname, "..", "settings.json");
+
+function read() {
+  try {
+    const raw = fs.readFileSync(FILE, "utf-8").trim();
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function write(obj) {
+  fs.writeFileSync(FILE, JSON.stringify(obj, null, 2), "utf-8");
+  try {
+    fs.chmodSync(FILE, 0o600);
+  } catch {}
+}
+
+function getKey() {
+  const stored = read();
+  return typeof stored.twelveDataKey === "string" ? stored.twelveDataKey : "";
+}
+
+function setKey(key) {
+  const stored = read();
+  stored.twelveDataKey = String(key || "").trim();
+  write(stored);
+}
+
+function clearKey() {
+  const stored = read();
+  delete stored.twelveDataKey;
+  write(stored);
+}
+
+/** Per-instrument provider symbol overrides, e.g. { NASDAQ: "QQQ" }. */
+function getSymbols() {
+  const stored = read();
+  const s = stored.symbols;
+  return s && typeof s === "object" ? s : {};
+}
+
+function setSymbols(symbols) {
+  const stored = read();
+  const clean = {};
+  if (symbols && typeof symbols === "object") {
+    for (const [k, v] of Object.entries(symbols)) {
+      const val = String(v || "").trim();
+      if (val) clean[k] = val.slice(0, 24);
+    }
+  }
+  stored.symbols = clean;
+  write(stored);
+}
+
+/** Per-instrument provider choice, e.g. { NASDAQ: "yahoo" }. */
+function getProviders() {
+  const stored = read();
+  const p = stored.providers;
+  return p && typeof p === "object" ? p : {};
+}
+
+function setProviders(providers) {
+  const stored = read();
+  const clean = {};
+  const allowed = new Set(["yahoo", "twelvedata", "demo"]);
+  if (providers && typeof providers === "object") {
+    for (const [k, v] of Object.entries(providers)) {
+      const val = String(v || "").trim();
+      if (allowed.has(val)) clean[k] = val;
+    }
+  }
+  stored.providers = clean;
+  write(stored);
+}
+
+/** Discord webhook URL for alert delivery. */
+function getDiscord() {
+  const stored = read();
+  return typeof stored.discordWebhook === "string" ? stored.discordWebhook : "";
+}
+
+function setDiscord(url) {
+  const stored = read();
+  const value = String(url || "").trim();
+  if (value) stored.discordWebhook = value;
+  else delete stored.discordWebhook;
+  write(stored);
+}
+
+/**
+ * Trading preferences: sizing, news blackout, timeframe filter and the daily
+ * loss guard. Stored under a single `trading` object so one call reads them all.
+ */
+function getTradingConfig() {
+  const stored = read();
+  const c = stored.trading && typeof stored.trading === "object" ? stored.trading : {};
+
+  const num = (value, fallback, min) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= min ? n : fallback;
+  };
+
+  return {
+    accountSize: num(c.accountSize, 0, 0),
+    riskPercent: num(c.riskPercent, 0, 0),
+    newsBlackout: c.newsBlackout !== false,
+    blackoutMinutes: num(c.blackoutMinutes, 15, 1),
+    mtfFilter: c.mtfFilter !== false,
+    dailyMaxLosses: num(c.dailyMaxLosses, 3, 0),
+    dailyMaxLossR: num(c.dailyMaxLossR, 2, 0),
+    // Measured in research/confluence_test.js: requiring a higher score did not
+    // improve results (min 3 was actually worse than min 0). Kept at 0 so the
+    // checklist is shown for information but does not block a setup.
+    minConfluence: num(c.minConfluence, 0, 0),
+  };
+}
+
+function setTradingConfig(patch) {
+  const stored = read();
+  const current = getTradingConfig();
+  const next = { ...current };
+
+  if (patch && typeof patch === "object") {
+    if (patch.accountSize != null) next.accountSize = Math.max(0, Number(patch.accountSize) || 0);
+    if (patch.riskPercent != null) next.riskPercent = Math.max(0, Number(patch.riskPercent) || 0);
+    if (patch.blackoutMinutes != null)
+      next.blackoutMinutes = Math.max(1, Number(patch.blackoutMinutes) || 15);
+    if (patch.dailyMaxLosses != null)
+      next.dailyMaxLosses = Math.max(0, Number(patch.dailyMaxLosses) || 0);
+    if (patch.dailyMaxLossR != null)
+      next.dailyMaxLossR = Math.max(0, Number(patch.dailyMaxLossR) || 0);
+    if (patch.newsBlackout != null) next.newsBlackout = Boolean(patch.newsBlackout);
+    if (patch.mtfFilter != null) next.mtfFilter = Boolean(patch.mtfFilter);
+    if (patch.minConfluence != null)
+      next.minConfluence = Math.min(5, Math.max(0, Number(patch.minConfluence) || 0));
+  }
+
+  stored.trading = next;
+  write(stored);
+  return next;
+}
+
+/** Which markets the watcher should follow. Missing = enabled. */
+function getEnabledMarkets() {
+  const stored = read();
+  const m = stored.markets;
+  if (!m || typeof m !== "object") return null;
+  return m;
+}
+
+function setEnabledMarkets(patch) {
+  const stored = read();
+  const current = stored.markets && typeof stored.markets === "object" ? stored.markets : {};
+  const next = { ...current };
+  if (patch && typeof patch === "object") {
+    for (const [symbol, enabled] of Object.entries(patch)) {
+      next[String(symbol).toUpperCase()] = Boolean(enabled);
+    }
+  }
+  stored.markets = next;
+  write(stored);
+  return next;
+}
+
+/**
+ * Assistant credentials. Stored server-side only; the UI and API only ever see
+ * a masked hint, never the key itself.
+ */
+function getAiConfig() {
+  const stored = read();
+  const c = stored.ai && typeof stored.ai === "object" ? stored.ai : {};
+  return {
+    apiKey: typeof c.apiKey === "string" ? c.apiKey : "",
+    baseUrl: typeof c.baseUrl === "string" ? c.baseUrl : "",
+    model: typeof c.model === "string" ? c.model : "",
+  };
+}
+
+function setAiConfig(patch) {
+  const stored = read();
+  const current = getAiConfig();
+  const next = { ...current };
+  if (patch && typeof patch === "object") {
+    if (typeof patch.apiKey === "string" && patch.apiKey.trim()) next.apiKey = patch.apiKey.trim();
+    if (patch.baseUrl != null) next.baseUrl = String(patch.baseUrl).trim();
+    if (patch.model != null) next.model = String(patch.model).trim();
+  }
+  stored.ai = next;
+  write(stored);
+  return next;
+}
+
+function clearAiConfig() {
+  const stored = read();
+  if (stored.ai) {
+    stored.ai = { apiKey: "", baseUrl: stored.ai.baseUrl || "", model: stored.ai.model || "" };
+    write(stored);
+  }
+  return getAiConfig();
+}
+
+function getIvbAlerts() {
+  const stored = read();
+  return stored.ivbAlerts !== false;
+}
+
+function setIvbAlerts(enabled) {
+  const stored = read();
+  stored.ivbAlerts = Boolean(enabled);
+  write(stored);
+}
+
+/**
+ * Markets allowed to send signals even though the lab blocked them. These
+ * alerts are labelled unproven so the override is never mistaken for an edge.
+ * Gold is here by request.
+ */
+/**
+ * Markets that move together. Only one alert is sent per group, so this is the
+ * list that decides what counts as "the same trade".
+ */
+const DEFAULT_CORRELATION_GROUPS = [
+  ["EURUSD", "GBPUSD"],
+  ["AUDJPY", "NZDJPY"],
+  ["USDJPY", "USDCHF"],
+  ["AUDUSD", "NZDUSD"],
+];
+
+function cleanGroups(groups) {
+  if (!Array.isArray(groups)) return [];
+  return groups
+    .map((g) => {
+      if (!Array.isArray(g)) return [];
+      const symbols = g
+        .map((s) => String(s || "").toUpperCase().trim())
+        .filter(Boolean);
+      return [...new Set(symbols)];
+    })
+    .filter((g) => g.length >= 2);
+}
+
+/**
+ * External uptime ping. The URL belongs to a service like Healthchecks.io;
+ * it contains a token, so it is stored like a secret and only shown masked.
+ */
+function getStatusPingUrl() {
+  const stored = read();
+  return typeof stored.statusPingUrl === "string" ? stored.statusPingUrl : "";
+}
+
+function getStatusPingHint() {
+  const url = getStatusPingUrl();
+  return url ? "••••" + url.slice(-6) : "";
+}
+
+function setStatusPingUrl(url) {
+  const stored = read();
+  stored.statusPingUrl = String(url || "").trim();
+  write(stored);
+  return stored.statusPingUrl;
+}
+
+/** Only send Discord alerts while the market is actually open. */
+function getAlertOnlyWhenOpen() {
+  const stored = read();
+  return stored.alertOnlyWhenOpen !== false;
+}
+
+function setAlertOnlyWhenOpen(on) {
+  const stored = read();
+  stored.alertOnlyWhenOpen = Boolean(on);
+  write(stored);
+  return stored.alertOnlyWhenOpen;
+}
+
+/**
+ * Only alert when the brain has a proven rule for this market's current
+ * condition. On by default: silence is the correct answer when nothing has
+ * been shown to work, and every held-back signal is listed in the dashboard.
+ */
+function getBrainGate() {
+  const stored = read();
+  return stored.brainGate !== false;
+}
+
+function setBrainGate(on) {
+  const stored = read();
+  stored.brainGate = Boolean(on);
+  write(stored);
+  return stored.brainGate;
+}
+
+/** Master switch. Off means every market alerts on its own. */
+function getCorrelationEnabled() {
+  const stored = read();
+  return stored.correlationEnabled !== false;
+}
+
+function setCorrelationEnabled(on) {
+  const stored = read();
+  stored.correlationEnabled = Boolean(on);
+  write(stored);
+  return stored.correlationEnabled;
+}
+
+function getCorrelationGroups() {
+  const stored = read();
+  if (!Array.isArray(stored.correlationGroups)) {
+    return DEFAULT_CORRELATION_GROUPS.map((g) => [...g]);
+  }
+  return cleanGroups(stored.correlationGroups);
+}
+
+/** Passing null (or nothing) resets to the built-in groups. */
+function setCorrelationGroups(groups) {
+  const stored = read();
+  if (groups == null) {
+    delete stored.correlationGroups;
+    write(stored);
+    return getCorrelationGroups();
+  }
+  stored.correlationGroups = cleanGroups(groups);
+  write(stored);
+  return stored.correlationGroups;
+}
+
+function getUnprovenMarkets() {
+  const stored = read();
+  const list = stored.unprovenMarkets;
+  if (!Array.isArray(list)) return ["XAUUSD"];
+  return list.map((s) => String(s).toUpperCase()).filter(Boolean);
+}
+
+function setUnprovenMarkets(list) {
+  const stored = read();
+  const clean = Array.isArray(list)
+    ? list.map((s) => String(s).toUpperCase()).filter(Boolean)
+    : [];
+  stored.unprovenMarkets = clean;
+  write(stored);
+  return clean;
+}
+
+/** Quiet hours, in UTC. Alerts are suppressed but the watcher keeps running. */
+function getQuietHours() {
+  const stored = read();
+  const q = stored.quietHours && typeof stored.quietHours === "object" ? stored.quietHours : {};
+  const num = (v, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 && n <= 23 ? n : fallback;
+  };
+  return {
+    enabled: q.enabled === true,
+    from: num(q.from, 22),
+    to: num(q.to, 7),
+  };
+}
+
+function setQuietHours(patch) {
+  const stored = read();
+  const current = getQuietHours();
+  const next = { ...current };
+  if (patch && typeof patch === "object") {
+    if (patch.enabled != null) next.enabled = Boolean(patch.enabled);
+    if (patch.from != null) next.from = Math.min(23, Math.max(0, Number(patch.from) || 0));
+    if (patch.to != null) next.to = Math.min(23, Math.max(0, Number(patch.to) || 0));
+  }
+  stored.quietHours = next;
+  write(stored);
+  return next;
+}
+
+const CHANNEL_KEYS = ["alerts", "news", "recap"];
+
+/** Per-purpose webhook overrides, e.g. { news: "https://discord.com/api/webhooks/..." }. */
+function getDiscordChannels() {
+  const stored = read();
+  const raw = stored.discordChannels;
+  const out = {};
+  if (raw && typeof raw === "object") {
+    for (const key of CHANNEL_KEYS) {
+      if (typeof raw[key] === "string" && raw[key].trim()) out[key] = raw[key].trim();
+    }
+  }
+  return out;
+}
+
+/** Merge a patch of channel webhooks. An empty string clears that channel. */
+function setDiscordChannels(patch) {
+  const stored = read();
+  const current = getDiscordChannels();
+  if (patch && typeof patch === "object") {
+    for (const key of CHANNEL_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+      const value = String(patch[key] || "").trim();
+      if (value) current[key] = value;
+      else delete current[key];
+    }
+  }
+  stored.discordChannels = current;
+  write(stored);
+}
+
+/** Whether news-risk warnings are also posted to Discord. */
+function getDiscordNews() {
+  const stored = read();
+  return stored.discordNews !== false;
+}
+
+function setDiscordNews(enabled) {
+  const stored = read();
+  stored.discordNews = Boolean(enabled);
+  write(stored);
+}
+
+/** Whether the bot draws its own zones from candle data. */
+function getAutoZones() {
+  const stored = read();
+  return stored.autoZones !== false;
+}
+
+function setAutoZones(enabled) {
+  const stored = read();
+  stored.autoZones = Boolean(enabled);
+  write(stored);
+}
+
+/** Whether signal changes are posted to Discord. */
+function getSignalAlerts() {
+  const stored = read();
+  return stored.signalAlerts !== false;
+}
+
+function setSignalAlerts(enabled) {
+  const stored = read();
+  stored.signalAlerts = Boolean(enabled);
+  write(stored);
+}
+
+/** Whether market session open/close alerts are posted to Discord. */
+function getSessionAlerts() {
+  const stored = read();
+  return stored.sessionAlerts !== false;
+}
+
+function getApproachAlerts() {
+  const stored = read();
+  return stored.approachAlerts !== false;
+}
+
+function setApproachAlerts(enabled) {
+  const stored = read();
+  stored.approachAlerts = Boolean(enabled);
+  write(stored);
+}
+
+function setSessionAlerts(enabled) {
+  const stored = read();
+  stored.sessionAlerts = Boolean(enabled);
+  write(stored);
+}
+
+/** Only ever reveal the last four characters. */
+function mask(key) {
+  if (!key) return "";
+  const tail = key.length >= 4 ? key.slice(-4) : key;
+  return "••••" + tail;
+}
+
+/* ------------------------------------------------------------------ *
+ * Auto-trading
+ *
+ * Off by default, paper mode by default, and every value clamped to
+ * something survivable. The executor refuses anything outside these.
+ * ------------------------------------------------------------------ */
+
+const EXEC_DEFAULTS = {
+  enabled: false,
+  mode: "paper",
+  riskPct: 0.5,
+  maxDailyLossPct: 2,
+  maxPositions: 2,
+  accountBalance: 1000,
+  symbolSuffix: "m",
+  symbolOverrides: { NASDAQ: "USTEC" },
+  bridgeUrl: "",
+  bridgeSecret: "",
+  requireGate: true,
+};
+
+function getExecConfig() {
+  const stored = read();
+  const exec = stored.exec && typeof stored.exec === "object" ? stored.exec : {};
+  return { ...EXEC_DEFAULTS, ...exec, symbolOverrides: { ...EXEC_DEFAULTS.symbolOverrides, ...(exec.symbolOverrides || {}) } };
+}
+
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function setExecConfig(patch = {}) {
+  const stored = read();
+  const current = getExecConfig();
+  const next = { ...current };
+
+  if (patch.enabled !== undefined) next.enabled = Boolean(patch.enabled);
+  if (patch.mode !== undefined) next.mode = patch.mode === "bridge" ? "bridge" : "paper";
+  if (patch.riskPct !== undefined) next.riskPct = clampNumber(patch.riskPct, 0.01, 3, current.riskPct);
+  if (patch.maxDailyLossPct !== undefined) {
+    next.maxDailyLossPct = clampNumber(patch.maxDailyLossPct, 0.5, 10, current.maxDailyLossPct);
+  }
+  if (patch.maxPositions !== undefined) {
+    next.maxPositions = Math.round(clampNumber(patch.maxPositions, 1, 5, current.maxPositions));
+  }
+  if (patch.accountBalance !== undefined) {
+    next.accountBalance = clampNumber(patch.accountBalance, 1, 1e9, current.accountBalance);
+  }
+  if (patch.requireGate !== undefined) next.requireGate = Boolean(patch.requireGate);
+  if (patch.symbolOverrides && typeof patch.symbolOverrides === "object") {
+    for (const [k, v] of Object.entries(patch.symbolOverrides)) {
+      if (typeof v === "string" && v.trim()) next.symbolOverrides[k] = v.trim().slice(0, 40);
+    }
+  }
+  if (typeof patch.symbolSuffix === "string") next.symbolSuffix = patch.symbolSuffix.trim().slice(0, 10);
+  if (typeof patch.bridgeUrl === "string") next.bridgeUrl = patch.bridgeUrl.trim().slice(0, 500);
+  if (typeof patch.bridgeSecret === "string" && patch.bridgeSecret.trim()) {
+    next.bridgeSecret = patch.bridgeSecret.trim().slice(0, 200);
+  }
+  if (patch.clearBridgeSecret) next.bridgeSecret = "";
+
+  stored.exec = next;
+  write(stored);
+  return next;
+}
+
+function getExecHint() {
+  const config = getExecConfig();
+  const secret = config.bridgeSecret || "";
+  if (!secret) return "";
+  return `••••${secret.slice(-4)}`;
+}
+
+module.exports = {
+  getBrainGate,
+  getExecConfig,
+  setExecConfig,
+  getExecHint,
+  setBrainGate,
+  getKey,
+  setKey,
+  clearKey,
+  getSymbols,
+  setSymbols,
+  getProviders,
+  setProviders,
+  getDiscord,
+  setDiscord,
+  getDiscordChannels,
+  setDiscordChannels,
+  getTradingConfig,
+  setTradingConfig,
+  getEnabledMarkets,
+  setEnabledMarkets,
+  getUnprovenMarkets,
+  setUnprovenMarkets,
+  getCorrelationGroups,
+  setCorrelationGroups,
+  getCorrelationEnabled,
+  setCorrelationEnabled,
+  getAlertOnlyWhenOpen,
+  setAlertOnlyWhenOpen,
+  getStatusPingUrl,
+  getStatusPingHint,
+  setStatusPingUrl,
+  DEFAULT_CORRELATION_GROUPS,
+  getIvbAlerts,
+  setIvbAlerts,
+  getAiConfig,
+  setAiConfig,
+  clearAiConfig,
+  getQuietHours,
+  setQuietHours,
+  getDiscordNews,
+  setDiscordNews,
+  getAutoZones,
+  setAutoZones,
+  getSignalAlerts,
+  setSignalAlerts,
+  getSessionAlerts,
+  setSessionAlerts,
+  getApproachAlerts,
+  setApproachAlerts,
+  mask,
+};

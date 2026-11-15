@@ -1,0 +1,3088 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zone Watch · Trading Agent</title>
+<meta name="theme-color" content="#0f1115" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Zone Watch" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/icon.svg" />
+<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+<style>
+  :root{
+    --bg:#0a0e13; --panel:#121820; --panel2:#0f151c; --border:#212b36;
+    --text:#e7eef5; --muted:#8b98a6; --accent:#22d3ee;
+    --supply:#ff7a7a; --demand:#5fd3a3; --warn:#ffc857; --bad:#ff5f5f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px}
+  header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+  h1{font-size:18px;margin:0;letter-spacing:.2px}
+  .pill{font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid var(--border);color:var(--muted);background:var(--panel)}
+  .pill.live{color:#0b1218;background:var(--accent);border-color:var(--accent);font-weight:700}
+  .pill.warn{color:#241a00;background:var(--warn);border-color:var(--warn);font-weight:700}
+  .spacer{flex:1}
+  nav{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+  nav button{background:var(--panel);border:1px solid var(--border);color:var(--muted);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600}
+  nav button.active{background:var(--accent);border-color:var(--accent);color:#06121a}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px}
+  .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 12px}
+  .grid{display:grid;gap:12px}
+  .quotes{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .card{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .card .name{font-size:12px;color:var(--muted);margin-bottom:6px}
+  .price{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums}
+  .price.err{font-size:15px;color:var(--bad);font-weight:600}
+  .sub{font-size:12px;color:var(--muted);margin-top:6px}
+  .banner{border-radius:10px;padding:12px 14px;margin-bottom:14px;font-weight:600;font-size:13px}
+  .banner.risk{background:rgba(255,200,87,.12);border:1px solid rgba(255,200,87,.45);color:var(--warn)}
+  .banner.calm{background:rgba(95,211,163,.08);border:1px solid rgba(95,211,163,.3);color:var(--demand)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;padding:6px 8px;border-bottom:1px solid var(--border)}
+  td{padding:9px 8px;border-bottom:1px solid rgba(33,43,54,.6);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  .badge{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;white-space:nowrap}
+  .b-inside{background:rgba(255,95,95,.18);color:#ff9b9b;border:1px solid rgba(255,95,95,.45)}
+  .b-approaching{background:rgba(255,200,87,.16);color:var(--warn);border:1px solid rgba(255,200,87,.45)}
+  .b-near{background:rgba(34,211,238,.12);color:var(--accent);border:1px solid rgba(34,211,238,.35)}
+  .b-far{background:rgba(139,152,166,.1);color:var(--muted);border:1px solid var(--border)}
+  .b-inactive{background:transparent;color:#5c6875;border:1px dashed var(--border)}
+  .t-supply{color:var(--supply);font-weight:700}
+  .t-demand{color:var(--demand);font-weight:700}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-variant-numeric:tabular-nums}
+  button.act{background:var(--accent);color:#06121a;border:none;padding:8px 14px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px}
+  button.ghost{background:transparent;color:var(--text);border:1px solid var(--border);padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600}
+  button.tiny{padding:4px 9px;font-size:11px}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  input,select,textarea{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 10px;font-size:13px;font-family:inherit;width:100%}
+  label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+  .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .feed{max-height:320px;overflow:auto}
+  .alert{padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);margin-bottom:8px;font-size:13px}
+  .alert .when{font-size:11px;color:var(--muted)}
+  .empty{color:var(--muted);font-size:13px;padding:8px 0}
+  iframe{width:100%;height:420px;border:1px solid var(--border);border-radius:10px;background:#000}
+  .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
+  pre{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto;font-size:12px;white-space:pre-wrap;margin:0}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px}
+  a{color:var(--accent)}
+</style>
+<style id="pro-ui">
+  :root{
+    --bg:#070b10; --bg-2:#0b1118;
+    --panel:#0e151d; --panel2:#111a23;
+    --border:rgba(148,178,209,.13); --border-strong:rgba(148,178,209,.26);
+    --text:#e8eef6; --muted:#8aa0b6; --accent:#4cc9f0; --accent-2:#3a86ff;
+    --supply:#ff6b81; --demand:#31d0a5; --warn:#f5b942; --bad:#ff5d5d;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 16px 34px -22px rgba(0,0,0,.9);
+    --radius:14px;
+  }
+  html{background:#070b10}
+  body{
+    background:
+      radial-gradient(1000px 560px at 8% -10%, rgba(76,201,240,.09), transparent 62%),
+      radial-gradient(820px 480px at 96% 0%, rgba(58,134,255,.09), transparent 64%),
+      linear-gradient(180deg,#070b10 0%, #080d13 45%, #060a0f 100%);
+    background-attachment:fixed;
+    -webkit-font-smoothing:antialiased;
+  }
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background-image:
+      linear-gradient(rgba(148,178,209,.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148,178,209,.035) 1px, transparent 1px);
+    background-size:72px 72px;
+    -webkit-mask-image:radial-gradient(circle at 50% 0%, #000 0%, transparent 70%);
+    mask-image:radial-gradient(circle at 50% 0%, #000 0%, transparent 70%);
+  }
+  .wrap{position:relative; z-index:1; max-width:1180px; padding:22px 20px 72px}
+
+  /* ---------- header & nav ---------- */
+  header{
+    position:sticky; top:0; z-index:20; gap:10px; padding:12px 0; margin-bottom:10px;
+    -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px);
+    background:linear-gradient(180deg, rgba(7,11,16,.95), rgba(7,11,16,.55));
+    border-bottom:1px solid var(--border);
+  }
+  h1{font-size:15px; font-weight:650; letter-spacing:-.01em; display:flex; align-items:center; gap:9px; margin:0}
+  h1 img.mark{width:28px; height:28px; display:block; flex:0 0 auto; padding:2px; border-radius:50%; background:rgba(255,255,255,.06)}
+  .pill{border-radius:999px; padding:4px 10px; font-size:11px; font-weight:600; background:rgba(148,178,209,.06); border:1px solid var(--border); color:var(--muted); white-space:nowrap}
+  .pill.live{background:rgba(49,208,165,.13); border-color:rgba(49,208,165,.38); color:#7ff0cf}
+  .pill.warn{background:rgba(245,185,66,.13); border-color:rgba(245,185,66,.38); color:#ffd889}
+  nav{
+    position:sticky; top:56px; z-index:19; gap:2px; padding:5px; margin-bottom:18px;
+    display:inline-flex; border:1px solid var(--border); border-radius:11px;
+    background:rgba(14,21,29,.8); -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
+  }
+  nav button{background:transparent; border:none; color:var(--muted); padding:7px 14px; border-radius:7px; font-size:12.5px; font-weight:600; transition:.15s}
+  nav button:hover{color:var(--text); background:rgba(148,178,209,.07)}
+  nav button.active{background:linear-gradient(180deg, rgba(76,201,240,.2), rgba(58,134,255,.14)); color:#dff6ff; box-shadow:inset 0 0 0 1px rgba(76,201,240,.32)}
+
+  /* keep the header on one line: details collapse before the layout wraps */
+  @media(max-width:1320px){ .hitem em{display:none} }
+  @media(max-width:1120px){ #statusPill{display:none} }
+
+  /* ---------- health dots ---------- */
+  .health{display:flex; align-items:center; gap:12px; padding:0 2px}
+  .hitem{display:inline-flex; align-items:center; gap:6px; font-size:11px; color:#7c90a6; letter-spacing:.02em}
+  .hitem b{font-weight:600; color:#93a9bf}
+  .hitem em{font-style:normal; color:#5d728a}
+  .dot{width:7px; height:7px; border-radius:50%; background:#54657a; display:inline-block}
+  .hitem.ok .dot{background:#31d0a5; box-shadow:0 0 0 3px rgba(49,208,165,.18)}
+  .hitem.warn .dot{background:#f5b942; box-shadow:0 0 0 3px rgba(245,185,66,.18)}
+  .hitem.bad .dot{background:#ff5d5d; box-shadow:0 0 0 3px rgba(255,93,93,.2)}
+  .hitem.bad b, .hitem.bad em{color:#ff9b9b}
+
+  /* ---------- one button system ---------- */
+  button.act, button.ghost, button.quiet, a.btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:6px;
+    height:34px; padding:0 14px; border-radius:9px; font-size:12.5px; font-weight:650;
+    cursor:pointer; border:1px solid transparent; transition:.15s; white-space:nowrap;
+    text-decoration:none; line-height:1;
+  }
+  a.btn{background:rgba(148,178,209,.06); border-color:var(--border); color:#cfdcea}
+  a.btn:hover{background:rgba(148,178,209,.11); border-color:var(--border-strong)}
+  button.act{background:linear-gradient(180deg,#5fd0f5,#3aa8dd); color:#04121a; box-shadow:0 8px 18px -12px rgba(76,201,240,.9)}
+  button.act:hover{filter:brightness(1.07)}
+  button.ghost{background:rgba(148,178,209,.06); border-color:var(--border); color:#cfdcea}
+  button.ghost:hover{background:rgba(148,178,209,.11); border-color:var(--border-strong)}
+  button.quiet{background:transparent; border-color:transparent; color:var(--muted); padding:0 8px}
+  button.quiet:hover{color:var(--text); background:rgba(148,178,209,.07)}
+  button.act.tiny, button.ghost.tiny, button.quiet.tiny, a.btn.tiny{height:26px; padding:0 10px; font-size:11.5px; border-radius:7px}
+  button:disabled{opacity:.45; cursor:not-allowed}
+
+  /* ---------- panels ---------- */
+  .panel{
+    background:linear-gradient(180deg, rgba(17,26,35,.88), rgba(12,18,25,.94));
+    border:1px solid var(--border); border-radius:var(--radius); padding:18px; margin-bottom:14px;
+    box-shadow:var(--shadow);
+  }
+  .panel h2{
+    font-size:10.5px; letter-spacing:.12em; color:#7e93a9; margin:26px 0 14px; font-weight:700;
+    display:flex; align-items:center; gap:10px; min-height:26px;
+  }
+  .panel h2:first-child{margin-top:0}
+  .panel h2 .head-act{margin-left:auto}
+  .cols{display:grid; grid-template-columns:minmax(0,1.55fr) minmax(0,1fr); gap:14px; align-items:start}
+  .cols > div{min-width:0}
+  .cols > div > .panel:last-child{margin-bottom:0}
+
+  /* ---------- quote cards ---------- */
+  .quotes{grid-template-columns:repeat(auto-fill,minmax(228px,1fr)); gap:10px}
+  .card{
+    background:linear-gradient(180deg, rgba(20,30,40,.85), rgba(14,21,29,.92));
+    border:1px solid var(--border); border-radius:11px; padding:13px 14px; transition:.16s;
+  }
+  .card:hover{border-color:var(--border-strong)}
+  .qhead{display:flex; align-items:baseline; gap:6px; margin-bottom:6px}
+  .qsym{font-size:11.5px; font-weight:700; letter-spacing:.05em; color:#93a9bf}
+  .qsrc{font-size:10px; color:#5d728a; margin-left:auto; text-transform:lowercase}
+  .qprice{font-size:26px; font-weight:650; letter-spacing:-.02em; font-variant-numeric:tabular-nums; line-height:1.15}
+  .qunit{font-size:10.5px; font-weight:600; color:#6f8399; margin-left:5px; letter-spacing:.04em}
+  .qzone{display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:8px; font-size:11.5px; color:var(--muted)}
+  .qzone .z{font-variant-numeric:tabular-nums; color:#b9c8d8}
+  .qzone .badge{margin-left:auto}
+
+  /* ---------- signal / proximity / alerts rows ---------- */
+  .strip{display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:rgba(148,178,209,.035); border:1px solid var(--border); font-size:12.5px; color:var(--muted)}
+  .prox{display:grid; gap:4px}
+  .proxrow{
+    display:grid; grid-template-columns:66px 56px 1fr auto; gap:10px; align-items:center;
+    padding:8px 10px; border-radius:8px; font-size:12.5px; background:rgba(148,178,209,.025);
+  }
+  .proxrow:hover{background:rgba(148,178,209,.06)}
+  .proxrow .sym{font-weight:650; color:#c9d7e5; font-size:11.5px; letter-spacing:.03em}
+  .proxrow .z{font-variant-numeric:tabular-nums; color:#a9bacb; font-size:12px}
+  .proxrow .badge{justify-self:end}
+  .feed{max-height:300px; padding-right:2px; -webkit-mask-image:linear-gradient(180deg,#000 88%,transparent 100%); mask-image:linear-gradient(180deg,#000 88%,transparent 100%); overflow:auto; display:grid; gap:6px}
+  .alert{display:grid; grid-template-columns:58px 1fr; gap:10px; align-items:start; padding:9px 11px; border-radius:9px; background:rgba(148,178,209,.03); border:1px solid var(--border); font-size:12.5px}
+  .alert .when{font-size:10.5px; color:#6f8399; font-variant-numeric:tabular-nums; padding-top:2px}
+  .alert .amsg{color:#cddaea; line-height:1.45}
+  .alert .amsg .p{color:#6f8399; font-size:11px}
+
+  /* ---------- the rest ---------- */
+  #strategyList{grid-template-columns:repeat(auto-fill,minmax(172px,1fr))}
+  .strat{min-width:0;overflow-wrap:anywhere;padding:9px 11px;border:1px solid var(--border);border-radius:9px;background:rgba(148,178,209,.025)}
+  .strat .hd{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px}
+  .strat .hd strong{font-size:12px;letter-spacing:.03em;color:#cfdcea}
+  .strat .vd{font-size:11.5px;color:#7c90a6;line-height:1.45;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+  table{font-size:13px}
+  th{font-size:10.5px; letter-spacing:.1em; color:#6f8399; padding:8px; border-bottom:1px solid var(--border)}
+  td{padding:10px 8px; border-bottom:1px solid rgba(148,178,209,.07)}
+  tbody tr:hover td{background:rgba(148,178,209,.03)}
+  input,select,textarea{background:#0a1017; border:1px solid var(--border); border-radius:9px; padding:9px 11px; transition:.15s}
+  input:focus,select:focus,textarea:focus{outline:none; border-color:rgba(76,201,240,.5); box-shadow:0 0 0 3px rgba(76,201,240,.11)}
+  label{font-size:10px; letter-spacing:.09em; color:#71869c}
+  .badge{border-radius:999px; font-weight:700; font-size:10px; padding:3px 8px; letter-spacing:.03em}
+  .banner{border-radius:11px; font-weight:600; font-size:12.5px; padding:11px 14px; margin-bottom:14px}
+  .banner.risk{background:rgba(245,185,66,.1); border:1px solid rgba(245,185,66,.36); color:#ffd889}
+  .banner.calm{background:rgba(49,208,165,.06); border:1px solid rgba(49,208,165,.24); color:#7ff0cf}
+  .empty{color:#6f8399; font-size:12.5px}
+  .hint{color:#7c90a6; line-height:1.55}
+  pre{background:#080e14; border:1px solid var(--border); border-radius:10px}
+  iframe{border-radius:11px; border:1px solid var(--border)}
+  .mono{font-variant-numeric:tabular-nums}
+
+  @media(max-width:880px){
+    .cols{grid-template-columns:minmax(0,1fr)}
+  }
+  @media(max-width:680px){
+    .wrap{padding:14px 12px 56px}
+    header{position:static; background:none; border:none; -webkit-backdrop-filter:none; backdrop-filter:none; padding:4px 0 10px}
+    nav{position:static; width:100%; overflow:auto; display:flex; margin-bottom:14px}
+    nav button{padding:7px 12px}
+    .hitem b, .hitem em{display:none}
+    .health{gap:9px}
+    .quotes{grid-template-columns:repeat(2,1fr); gap:8px}
+    .card{padding:11px 12px}
+    .qprice{font-size:20px}
+    .qzone{font-size:11px}
+    .panel{padding:14px}
+    .proxrow{grid-template-columns:58px 48px 1fr; font-size:12px}
+    .proxrow .badge{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><img class="mark" src="/logo-mark-on-dark.svg" alt="" width="28" height="28" />Zone Watch</h1>
+    <span class="pill" id="providerPill">connecting…</span>
+    <div class="health" id="healthStrip">
+      <span class="hitem" id="h-feed"><i class="dot"></i><b>feed</b><em></em></span>
+      <span class="hitem" id="h-discord"><i class="dot"></i><b>discord</b><em></em></span>
+      <span class="hitem" id="h-watcher"><i class="dot"></i><b>watcher</b><em></em></span>
+    </div>
+    <span class="pill" id="marketPill">…</span>
+    <span class="pill" id="statusPill">idle</span>
+    <span class="spacer"></span>
+    <button class="ghost tiny" id="toggleBtn">Pause updates</button>
+    <button class="ghost" id="soundBtn">🔔 Sound on</button>
+    <button class="ghost" id="voiceBtn" title="Read alerts aloud">🗣 Voice off</button>
+  </header>
+
+  <nav>
+    <button data-tab="watch" class="active">Watch</button>
+    <button data-tab="zones">Zones</button>
+    <button data-tab="news">News</button>
+    <button data-tab="risk">Risk</button>
+    <button data-tab="journal">Journal</button>
+    <button data-tab="learning">Learning</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+
+  <!-- WATCH -->
+  <section id="tab-watch">
+    <div id="newsBanner" class="banner calm">Checking the calendar…</div>
+
+    <div class="cols">
+      <div>
+        <div class="panel">
+          <h2>Markets &amp; nearest zone</h2>
+          <div class="grid quotes" id="quotes"></div>
+          <div class="hint" id="pollHint">The server checks the market on its own. This page is just a viewer.</div>
+          <div id="marketNote" class="strip" style="display:none;margin-top:10px"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Zone proximity
+            <button class="quiet tiny head-act" id="proxToggle">Show all</button>
+          </h2>
+          <div id="zoneStates" class="empty">No zones yet.</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel">
+          <h2>Signals <span class="hint" id="signalMeta" style="letter-spacing:0;text-transform:none"></span></h2>
+          <div id="signals" class="empty">No signal right now.</div>
+        </div>
+
+        <div class="panel">
+          <h2>Alerts <button class="quiet tiny head-act" id="clearAlerts">Clear</button></h2>
+          <div class="feed" id="alertFeed"><div class="empty">No alerts yet.</div></div>
+        </div>
+
+        <div class="panel">
+          <h2>Charts</h2>
+          <div class="row" style="margin-bottom:10px">
+            <button class="ghost" id="chartsBtn">Show charts</button>
+          </div>
+          <div class="charts" id="charts" style="display:none"></div>
+          <div class="hint">TradingView embeds for viewing only. Alerts come from the configured data provider.</div>
+        </div>
+
+        <div class="panel">
+          <h2>Position size</h2>
+            <p class="hint" style="margin:-6px 0 12px">How much to trade so a stopped-out trade costs only your chosen percentage. It fills itself from a live signal.</p>
+            <div class="fields">
+              <div><label>Balance</label><input id="szBal" type="number" step="any" value="1000" /></div>
+              <div><label>Risk %</label><input id="szRisk" type="number" step="0.25" value="1" /></div>
+              <div><label>Entry</label><input id="szEntry" type="number" step="any" placeholder="3890.5" /></div>
+              <div><label>Stop</label><input id="szStop" type="number" step="any" placeholder="3884" /></div>
+              <div>
+                <label>Market</label>
+                <select id="szSym">
+                  <option>XAUUSD</option><option>NASDAQ</option><option>EURUSD</option><option>GBPUSD</option>
+                  <option>USDJPY</option><option>AUDUSD</option><option>USDCAD</option><option>USDCHF</option>
+                  <option>AUDJPY</option><option>NZDJPY</option>
+                </select>
+              </div>
+            </div>
+            <div id="szOut" class="hint">Enter an entry and a stop.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-zones" style="display:none">
+    <div class="cols">
+      <div>
+        <div class="panel">
+          <h2>Your zones</h2>
+          <div id="zonesTable" class="empty">Loading…</div>
+        </div>
+
+        <div class="panel">
+          <h2>Order flow &amp; key levels</h2>
+          <p class="hint" style="margin:-6px 0 12px">
+            Volume profile shows where volume actually traded (POC, value area, high-volume nodes); the level list clusters swing
+            highs and lows, prior-day extremes and round numbers. Volume comes from futures and index data — FX spot has none, so
+            those show structure only.
+          </p>
+          <div id="levelsBox" class="empty">Loading…</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel">
+          <h2>Add a supply / demand zone</h2>
+          <div class="fields">
+            <div><label>Instrument</label>
+              <select id="zSymbol"><option value="XAUUSD">XAU/USD</option><option value="NASDAQ">NASDAQ 100</option></select>
+            </div>
+            <div><label>Type</label>
+              <select id="zType"><option value="supply">Supply</option><option value="demand">Demand</option></select>
+            </div>
+            <div><label>Zone low</label><input id="zLow" type="number" step="any" placeholder="2628" /></div>
+            <div><label>Zone high</label><input id="zHigh" type="number" step="any" placeholder="2635" /></div>
+            <div style="grid-column:1/-1"><label>Alert distance</label><input id="zDist" type="number" step="any" placeholder="3.5" /></div>
+          </div>
+          <div class="fields" style="margin-top:10px">
+            <div style="grid-column:1/-1"><label>Label</label><input id="zLabel" placeholder="XAUUSD demand base" /></div>
+            <div style="grid-column:1/-1"><label>Notes</label><input id="zNotes" placeholder="First return is the clean read" /></div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="act" id="addZone">Add zone</button>
+            <span class="hint" id="zoneMsg"></span>
+          </div>
+          <div class="hint" id="zPriceHint">Waiting for a price…</div>
+          <div class="hint">Alert distance is how close price must get before you are warned, in price units (dollars for gold, points for Nasdaq).</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- NEWS -->
+  <section id="tab-news" style="display:none">
+    <div class="panel">
+      <h2>Economic calendar · filter available</h2>
+      <div class="row" style="margin-bottom:12px">
+        <label class="row" style="margin:0;text-transform:none;letter-spacing:0;font-size:12px">
+          <input type="checkbox" id="onlyHigh" style="width:auto;margin-right:6px" /> High impact only
+        </label>
+        <button class="ghost tiny" id="refreshNews">Refresh</button>
+        <span class="hint" id="newsMeta"></span>
+      </div>
+      <div id="calendar" class="empty">Loading…</div>
+    </div>
+    <div class="panel">
+      <h2>Headlines</h2>
+      <div id="headlines" class="empty">Loading…</div>
+    </div>
+  </section>
+
+  <!-- RISK -->
+  <section id="tab-risk" style="display:none">
+    <div class="panel">
+      <h2>Position size &amp; risk</h2>
+      <div class="fields">
+        <div><label>Account balance</label><input id="rBal" type="number" step="any" value="10000" /></div>
+        <div><label>Risk per trade (%)</label><input id="rPct" type="number" step="any" value="1" /></div>
+        <div><label>Stop distance (price units)</label><input id="rStop" type="number" step="any" value="5" /></div>
+        <div><label>Value per 1.0 price / lot</label><input id="rVal" type="number" step="any" value="100" /></div>
+      </div>
+      <div class="panel" style="margin-top:12px;background:var(--panel2)">
+        <div class="sub">Risk amount</div>
+        <div class="price mono" id="rRisk">$100.00</div>
+        <div class="sub">Suggested position size</div>
+        <div class="price mono" id="rLots">0.20 lots</div>
+      </div>
+      <div class="hint">Gold: 1 lot = 100 oz, so value per 1.0 price ≈ 100. Nasdaq CFDs are usually ~1 per point — check your broker.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Auto-trading · Exness via MetaTrader 5</h2>
+      <p class="hint" style="margin:-6px 0 12px">
+        Places the app's own signals as orders. It starts on a <strong>demo</strong>: paper mode needs nothing but a balance figure,
+        and bridge mode talks to MetaTrader 5 through the small service in <code>bridge/</code>. It will only ever trade a market the
+        brain gate has approved, never more than one position at a time per market, and it stops for the day once the loss limit is hit.
+      </p>
+
+      <div class="fields">
+        <div><label>Auto-trading</label><label style="display:flex;gap:8px;align-items:center;height:34px">
+          <input id="exOn" type="checkbox" style="width:auto" /> <span class="hint">place orders from signals</span>
+        </label></div>
+        <div><label>Mode</label><select id="exMode">
+          <option value="paper">Paper (nothing leaves the app)</option>
+          <option value="bridge">Bridge (MetaTrader 5)</option>
+        </select></div>
+        <div><label>Risk per trade (%)</label><input id="exRisk" type="number" step="0.1" min="0.01" max="3" /></div>
+        <div><label>Daily loss limit (%)</label><input id="exDayLoss" type="number" step="0.1" min="0.5" max="10" /></div>
+        <div><label>Max open positions</label><input id="exMax" type="number" step="1" min="1" max="5" /></div>
+        <div><label>Account balance (paper)</label><input id="exBal" type="number" step="any" min="1" /></div>
+      </div>
+
+      <div class="fields" style="margin-top:12px">
+        <div><label>Bridge URL</label><input id="exUrl" placeholder="https://your-tunnel.example.com" /></div>
+        <div><label>Bridge secret</label><input id="exSecret" placeholder="unchanged" autocomplete="off" /></div>
+      </div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button id="exSave">Save</button>
+        <button id="exTestBridge" class="quiet">Test bridge</button>
+        <button id="exKill" class="quiet">Stop everything</button>
+        <button id="exRevive" class="quiet">Clear stop</button>
+        <span id="exMsg" class="hint" style="align-self:center"></span>
+      </div>
+
+      <div class="panel" style="margin-top:12px;background:var(--panel2)">
+        <div class="sub">Status</div>
+        <div id="exStatus" class="hint">Loading…</div>
+      </div>
+      <div id="exOpen" style="margin-top:12px"></div>
+      <div id="exClosed" style="margin-top:12px"></div>
+      <div class="hint" style="margin-top:12px;color:#e0b96a">
+        Auto-trading can lose real money. Everything here is built so that being wrong is survivable, not so that being right is certain.
+      </div>
+    </div>
+  </section>
+
+  <!-- JOURNAL -->
+  <section id="tab-journal" style="display:none">
+    <div class="panel">
+      <h2>Trade review</h2>
+      <div class="row" style="margin-bottom:10px">
+        <button class="ghost" id="loadExample">Load example log</button>
+        <button class="ghost" id="loadLog">Load my trades.json</button>
+        <button class="act" id="analyzeBtn">Analyze</button>
+      </div>
+      <textarea id="jsonInput" rows="10" placeholder="Paste or load a trade log (JSON array)…"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" id="saveLogBtn">Save as trades.json</button>
+        <span class="hint" id="journalMsg"></span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Output</h2>
+      <pre id="journalOut">Nothing yet.</pre>
+    </div>
+  </section>
+
+  <!-- LEARNING -->
+  <section id="tab-learning" style="display:none">
+    <div class="cols">
+      <div>
+        <div class="panel">
+          <h2>Equity curve</h2>
+          <p class="hint" style="margin:-6px 0 12px">Cumulative R from every closed signal — the app's actual record, not a projection.</p>
+          <canvas id="equityCanvas" style="width:100%;height:180px;display:block"></canvas>
+          <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:12px">
+            <span class="pill" id="perfWinrate">…</span>
+            <span class="pill" id="perfAvg">…</span>
+            <span class="pill" id="perfDrawdown">…</span>
+            <span class="pill" id="perfStreak">…</span>
+            <a class="btn tiny" href="/api/export/signals.csv" style="margin-left:auto">Download CSV</a>
+          </div>
+          <div id="perfMarkets" style="display:grid;gap:5px;margin-top:14px"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Scoreboard</h2>
+          <p class="hint" style="margin:-6px 0 12px">Every setup the app has actually posted, scored on what happened. A setup is only muted at 15+ closed trades, an average worse than −0.15R, and a t-statistic past −1.5 — a real edge, not a bad week.</p>
+          <div style="overflow-x:auto">
+            <table id="learnTable">
+              <thead>
+                <tr>
+                  <th>Market</th><th>Side</th><th>Setup</th><th>Closed</th><th>Won</th><th>R each</th><th>Verdict</th>
+                </tr>
+              </thead>
+              <tbody id="learnBody"><tr><td colspan="7" class="hint">Nothing closed yet.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Market conditions
+            <span class="head-act" style="display:flex;gap:6px;align-items:center">
+              <select id="brainSym" style="width:auto;padding:4px 8px;font-size:11.5px;height:26px">
+                <option>XAUUSD</option><option>NASDAQ</option><option>EURUSD</option><option>GBPUSD</option>
+                <option>USDJPY</option><option>AUDUSD</option><option>USDCAD</option><option>USDCHF</option>
+                <option>AUDJPY</option><option>NZDJPY</option>
+              </select>
+              <button class="quiet tiny" id="brainRun">Test now</button>
+            </span>
+          </h2>
+          <p class="hint" style="margin:-6px 0 12px">
+            What the market is doing right now, and whether any of the app's rules has actually made money in that condition
+            on this market — measured on blocks of history the rule never saw. "No proven strategy" means exactly that: trade
+            that condition with your own eyes. This is separate from <em>Strategy search</em> on the right, which scores the app's
+            own zone signals — here the app is testing three other rule families.
+          </p>
+          <div style="overflow-x:auto">
+            <table id="brainTable">
+              <thead><tr><th>Market</th><th>Condition</th><th>Best strategy</th><th>Evidence</th><th>Verdict</th></tr></thead>
+              <tbody id="brainBody"><tr><td colspan="5" class="hint">Nothing tested yet.</td></tr></tbody>
+            </table>
+          </div>
+          <div class="hint" id="brainMsg"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Held back</h2>
+          <p class="hint" style="margin:-6px 0 12px">Signals the learner chose not to send, and why.</p>
+          <div id="suppressedList" style="display:grid;gap:6px"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel">
+          <h2>What it has learned</h2>
+          <div class="row" style="margin-bottom:10px;gap:8px;flex-wrap:wrap">
+            <span class="pill" id="learnClosed">…</span>
+            <span class="pill" id="learnTotalR">…</span>
+            <span class="pill" id="learnMuted">…</span>
+          </div>
+          <div id="lessonList" style="display:grid;gap:8px"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Who is working</h2>
+          <p class="hint" style="margin:-6px 0 12px">Live state from the app itself — not an animation. A time in the past means that job last finished then.</p>
+          <div id="crewList" style="display:grid;gap:8px"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Strategy search</h2>
+          <p class="hint" style="margin:-6px 0 12px">Each market's structure is re-tuned on older data and then scored on data it has never seen. A market is only allowed to send signals when that unseen result is clearly positive.</p>
+          <div id="strategyList" style="display:grid;gap:6px"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Journal</h2>
+      <p class="hint" style="margin:-6px 0 12px">
+        Every alert written down at the moment it was sent — the daily bias, the 1h trend, whether the zone was fresh, the session,
+        the market condition — and then scored when it closed, with the reason it failed. This is the raw material for real
+        learning. Nothing here is a model or a prediction: it is what actually happened, and how many times.
+      </p>
+      <div id="journalTotals" class="hint" style="margin-bottom:12px">Loading…</div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Breakdown</th><th>Trades</th><th>Won</th><th>R each</th></tr></thead>
+          <tbody id="journalBody"><tr><td colspan="4" class="hint">Nothing logged yet.</td></tr></tbody>
+        </table>
+      </div>
+      <div id="journalFailures" class="hint" style="margin-top:12px"></div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="tab-settings" style="display:none">
+    <div class="panel">
+      <h2>Live prices</h2>
+      <div class="row" style="margin-bottom:12px">
+        <span class="pill" id="setProvider">…</span>
+        <span class="pill" id="setKeyState">…</span>
+      </div>
+      <div class="fields">
+        <div style="grid-column:span 2">
+          <label>Twelve Data API key</label>
+          <input id="keyInput" type="password" placeholder="paste your key here" autocomplete="off" spellcheck="false" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="act" id="saveKey">Save key</button>
+        <button class="ghost" id="testKey">Test connection</button>
+        <button class="ghost" id="clearKey">Remove key</button>
+        <span class="hint" id="keyMsg"></span>
+      </div>
+      <div class="hint">The key is stored on the machine running this app and is never sent back to this screen — you only see the last four characters.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Instruments &amp; sources</h2>
+      <div id="instRows" class="empty">Loading…</div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" id="saveInstruments">Save instruments</button>
+        <span class="hint" id="instMsg"></span>
+      </div>
+      <div class="hint">Gold uses Twelve Data (needs the key, spot XAU/USD). Nasdaq uses Yahoo, which gives the real index level without a key. Switch either to <span class="mono">demo</span> to test without a connection.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Discord alerts</h2>
+      <div class="row" style="margin-bottom:12px">
+        <span class="pill" id="discState">…</span>
+      </div>
+      <div class="fields">
+        <div style="grid-column:span 2">
+          <label>Default Discord webhook URL</label>
+          <input id="hookInput" type="password" placeholder="https://discord.com/api/webhooks/..." autocomplete="off" spellcheck="false" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="act" id="saveHook">Save webhook</button>
+        <button class="ghost" id="testHook">Send test alert</button>
+        <button class="ghost" id="clearHook">Remove</button>
+        <span class="hint" id="hookMsg"></span>
+      </div>
+
+      <h3 style="margin:20px 0 4px;font-size:13px">Separate channels (optional)</h3>
+      <div class="hint" style="margin-bottom:10px">Leave a box empty and that kind of alert uses the default webhook above.</div>
+      <div>
+        <label>Alerts — zones, signals, results</label>
+        <input id="chAlerts" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
+      </div>
+      <div style="margin-top:10px">
+        <label>News — calendar, sessions, market open/close</label>
+        <input id="chNews" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Weekly recap</label>
+        <input id="chRecap" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="act" id="saveChannels">Save channels</button>
+        <button class="ghost" id="clearChannels">Use default for all</button>
+        <span class="hint" id="chanMsg"></span>
+      </div>
+      <label class="row" style="margin-top:12px;text-transform:none;letter-spacing:0;font-size:12px">
+        <input type="checkbox" id="hookNews" style="width:auto;margin-right:6px" checked /> Also post news-risk warnings
+      </label>
+      <div class="hint" style="margin-top:10px">
+        <strong>How to get the URL:</strong> in Discord, right-click your channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL.
+        The app checks the market every 30 seconds by itself, so alerts reach Discord even when this page is closed.
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Automation</h2>
+      <label class="row" style="text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="autoZonesBox" style="width:auto;margin-right:8px" checked />
+        Bot draws its own supply and demand zones from candle data
+      </label>
+      <label class="row" style="margin-top:10px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="signalBox" style="width:auto;margin-right:8px" checked />
+        Post buy/sell signals to Discord
+      </label>
+      <label class="row" style="margin-top:10px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="approachBox" style="width:auto;margin-right:8px" checked />
+        Early heads-up before price reaches a zone (so you have time to react)
+      </label>
+      <label class="row" style="margin-top:10px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="ivbBox" style="width:auto;margin-right:8px" checked />
+        Initial balance breakout at the New York open (Nasdaq &amp; gold)
+      </label>
+      <label class="row" style="margin-top:10px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="sessionBox" style="width:auto;margin-right:8px" checked />
+        Post session and market open/close alerts to Discord (news channel)
+      </label>
+      <label class="row" style="margin-top:10px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="openOnlyBox" style="width:auto;margin-right:8px" checked />
+        Only alert while the market is actually open
+      </label>
+      <div class="hint">When this is on, nothing is sent at the weekend, during the daily rollover gap, or when the price feed has stopped ticking. The app keeps tracking zones the whole time, so it picks up where it left off.</div>
+      <label class="row" style="margin-top:14px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="brainGateBox" style="width:auto;margin-right:8px" checked />
+        Only alert when a rule is proven for the market's current condition
+      </label>
+      <div class="hint">
+        The strictest filter in the app. With this on, a zone touch or signal is only sent when the brain has shown some rule makes
+        money in this market, in the kind of market it is right now — it will often mean silence, which is the intent. Everything
+        withheld appears under <strong>Held back</strong> in the Learning tab with its reason. Turn it off to get every setup again.
+      </div>
+      <div class="hint">Signals are rule-based confluence, not backtested, and not financial advice.</div>
+      <button class="btn ghost" id="sendRecap" style="margin-top:12px">Send weekly recap now</button>
+    </div>
+
+    <div class="panel">
+      <h2>Trading preferences</h2>
+      <div>
+        <label>Account size</label>
+        <input id="acctSize" type="number" min="0" step="1" placeholder="e.g. 5000" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Risk per trade (%)</label>
+        <input id="riskPct" type="number" min="0" step="0.1" placeholder="e.g. 1" />
+      </div>
+      <div style="margin-top:10px">
+        <label>News blackout (± minutes)</label>
+        <input id="blackoutMin" type="number" min="1" step="1" placeholder="15" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Stop after this many losses in a day</label>
+        <input id="maxLosses" type="number" min="0" step="1" placeholder="3" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Stop after losing this much R in a day</label>
+        <input id="maxLossR" type="number" min="0" step="0.5" placeholder="2" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Minimum confluence to issue a signal (0–5)</label>
+        <input id="minConf" type="number" min="0" max="5" step="1" placeholder="3" />
+      </div>
+      <label class="row" style="margin-top:12px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="blackoutBox" style="width:auto;margin-right:8px" checked />
+        Pause signals around high-impact USD news
+      </label>
+      <label class="row" style="margin-top:10px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="mtfBox" style="width:auto;margin-right:8px" checked />
+        Only signal when the 1-hour trend agrees
+      </label>
+      <div class="row" style="margin-top:12px">
+        <button class="act" id="saveTrading">Save preferences</button>
+        <span class="hint" id="tradingMsg"></span>
+      </div>
+      <div class="hint">Account size and risk % add a lot-size suggestion to each alert. Leave them empty to hide it.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Markets watched</h2>
+      <div id="marketToggles" style="margin-top:6px"></div>
+      <h2 style="margin-top:18px">Quiet hours (UTC)</h2>
+      <label class="row" style="margin-top:6px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="quietBox" style="width:auto;margin-right:8px" />
+        Mute alerts during these hours
+      </label>
+      <div style="margin-top:10px">
+        <label>From (hour, 0–23)</label>
+        <input id="quietFrom" type="number" min="0" max="23" step="1" placeholder="22" />
+      </div>
+      <div style="margin-top:10px">
+        <label>To (hour, 0–23)</label>
+        <input id="quietTo" type="number" min="0" max="23" step="1" placeholder="7" />
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="act" id="saveMarkets">Save markets &amp; quiet hours</button>
+        <span class="hint" id="marketsMsg"></span>
+      </div>
+      <div class="hint">Quiet hours suppress Discord alerts only — the watcher keeps tracking zones so nothing is missed.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Correlated markets</h2>
+      <p class="hint" style="margin:-6px 0 10px">
+        Markets on the same line move together, so only one alert is sent for each group — otherwise your phone buzzes twice for
+        the same trade. Write one group per line, separated by commas. A symbol needs a partner to form a group; single symbols are ignored.
+      </p>
+      <label class="switch-row" style="display:flex;align-items:center;gap:9px;margin-bottom:12px;text-transform:none;letter-spacing:0;font-size:12.5px;color:#cfdcea">
+        <input type="checkbox" id="corrEnabled" style="width:auto" />
+        Send only one alert per group
+      </label>
+      <textarea id="corrGroups" rows="5" spellcheck="false" placeholder="EURUSD, GBPUSD"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="act" id="saveCorr">Save groups</button>
+        <button class="ghost" id="resetCorr">Reset to defaults</button>
+        <span class="hint" id="corrMsg"></span>
+      </div>
+
+      <h2>Uptime monitoring</h2>
+      <p class="hint" style="margin:-6px 0 10px">
+        The app cannot tell you it is dead — a stopped app sends nothing. This fixes that the other way round: the app pings an
+        external service, and that service alerts you when the pings <strong>stop</strong>.
+      </p>
+      <div class="fields">
+        <div style="grid-column:1/-1">
+          <label>Ping URL <span class="hint" id="pingHint"></span></label>
+          <input id="pingUrl" placeholder="https://hc-ping.com/your-check-uuid" autocomplete="off" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="act" id="savePing">Save URL</button>
+        <button class="ghost" id="testPing">Send test ping</button>
+        <span class="hint" id="pingMsg"></span>
+      </div>
+      <div class="hint">
+        Uptime monitor endpoint for other services: <code>/healthz</code> returns 200 while the watcher is alive and recently
+        checked the market, and 503 if it is stuck.
+      </div>
+
+      <h2>Strategy lab</h2>
+      <div class="hint">
+        The app tests its own signals against a year of history every day — tuning on older data, scoring only on data it has
+        never seen. Signal alerts are only sent for markets where that test finds an edge. It is allowed to conclude “no edge”.
+      </div>
+      <div id="labList" style="margin-top:12px"></div>
+      <div style="margin-top:14px">
+        <label>Always send signals for these markets, even when blocked (comma separated)</label>
+        <input id="unprovenMarkets" placeholder="XAUUSD" />
+      </div>
+      <div class="hint">These alerts are sent with an ⚠️ UNPROVEN label and the lab's verdict, so they can never be mistaken for a validated edge.</div>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px">
+        <button class="act" id="runLab">Test a market now</button>
+        <button class="btn ghost" id="saveUnproven">Save override</button>
+        <span class="hint" id="labMsg"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Connection test</h2>
+      <div id="testResults" class="empty">Not tested yet.</div>
+      <h2 style="margin-top:18px">Recent deliveries</h2>
+      <div class="hint">Every send attempt, newest first. “ok” with status 204 means Discord accepted the message.</div>
+      <div id="deliveryLog" class="empty">Loading…</div>
+    </div>
+
+    <div class="panel">
+      <h2>Assistant (LLM + retrieval)</h2>
+      <div class="hint" id="aiStatus">Checking…</div>
+      <div style="margin-top:10px">
+        <label>Ask about your app</label>
+        <input id="aiQuestion" placeholder="e.g. why is gold blocked?" />
+      </div>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+        <button class="act" id="aiAsk">Ask</button>
+        <button class="act" id="aiMic" title="Ask by speaking">🎤 Speak</button>
+        <button class="act" id="aiSpeak" title="Read the answer aloud">🔊 Read aloud</button>
+        <button class="btn ghost" data-agent="briefing">Briefing</button>
+        <button class="btn ghost" data-agent="risk">Risk check</button>
+        <button class="btn ghost" data-agent="coach">Coach</button>
+      </div>
+      <div id="aiMicHint" class="hint" style="margin-top:8px"></div>
+      <div id="aiAnswer" class="hint" style="margin-top:12px;white-space:pre-wrap"></div>
+
+      <h2 style="margin-top:20px">Connection</h2>
+      <div class="fields">
+        <div><label>Provider base URL</label><input id="aiBase" placeholder="https://api.groq.com/openai/v1" /></div>
+        <div><label>Model</label><input id="aiModel" placeholder="openai/gpt-oss-120b" /></div>
+        <div style="grid-column:1/-1"><label>API key</label><input id="aiKey" type="password" autocomplete="off" placeholder="paste your key — stored on the server, never shown again" /></div>
+      </div>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+        <button class="act" id="aiSave">Save key</button>
+        <button class="btn ghost" id="aiTest">Test connection</button>
+        <button class="btn ghost" id="aiClear">Remove key</button>
+        <span class="hint" id="aiMsg"></span>
+      </div>
+      <div class="hint">
+        Free option: create a key at <strong>console.groq.com</strong> → API Keys. Leave the fields as they are for Groq
+        (base URL <code>https://api.groq.com/openai/v1</code>, model <code>openai/gpt-oss-120b</code>) and paste the key above.
+        Google Gemini also works with base URL <code>https://generativelanguage.googleapis.com/v1beta/openai/</code>.
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>How to get a free key</h2>
+      <ol style="margin:0;padding-left:20px;font-size:13px;line-height:1.9">
+        <li>Go to <a href="https://twelvedata.com/register" target="_blank" rel="noopener">twelvedata.com/register</a> and sign up — no card needed.</li>
+        <li>On the dashboard, find your <strong>API key</strong>: a long string of letters and numbers.</li>
+        <li>Copy it, paste it in the box above, then press <strong>Save key</strong>.</li>
+        <li>Press <strong>Test connection</strong> to confirm gold and Nasdaq both return prices.</li>
+      </ol>
+      <div class="hint">Free plan: 800 requests a day, 8 per minute, real-time forex including XAU/USD. If Nasdaq shows an error, tell me and I will switch it to a symbol your plan covers.</div>
+    </div>
+  </section>
+</div>
+
+<script>
+const api = async (p, opts) => {
+  const res = await fetch(p, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+};
+
+let pollMs = 30000;
+let timer = null;
+let soundOn = true;
+let instruments = [];
+let lastPrices = {};
+
+/**
+ * Guard against the classic mistake of drawing a zone on one price scale
+ * (index points) while watching another (an ETF, or a re-based contract).
+ * If the zone is wildly far from the live price, say so.
+ */
+function scaleWarning(zone) {
+  const price = lastPrices[zone.symbol];
+  if (!price) return '<span class="sub">—</span>';
+  const mid = (zone.low + zone.high) / 2;
+  const gap = Math.abs(mid - price) / price;
+  if (gap > 0.4) {
+    return '<span class="badge b-inside" title="Zone is far from the live price — is it drawn on a different scale?">check scale</span>';
+  }
+  return '<span class="badge b-near">ok</span>';
+}
+
+function updateZoneHint() {
+  const el = document.getElementById("zPriceHint");
+  if (!el) return;
+  const sym = document.getElementById("zSymbol").value;
+  const p = lastPrices[sym];
+  el.textContent = p != null
+    ? `Current ${sym} price: ${p} — draw the zone around the level you actually see.`
+    : `No live price for ${sym} yet.`;
+}
+
+/* ---------- tabs ---------- */
+const tabs = ["watch","zones","news","risk","journal","learning","settings"];
+document.addEventListener("click", async (event) => {
+  const id = event.target && event.target.id;
+  if (!id || !id.startsWith("ex")) return;
+  const msg = document.getElementById("exMsg");
+  const say = (text, bad) => {
+    if (!msg) return;
+    msg.textContent = text;
+    msg.style.color = bad ? "#ff9a9a" : "#7ff0cf";
+  };
+  try {
+    if (id === "exSave") {
+      const payload = {
+        enabled: document.getElementById("exOn").checked,
+        mode: document.getElementById("exMode").value,
+        riskPct: Number(document.getElementById("exRisk").value),
+        maxDailyLossPct: Number(document.getElementById("exDayLoss").value),
+        maxPositions: Number(document.getElementById("exMax").value),
+        accountBalance: Number(document.getElementById("exBal").value),
+        bridgeUrl: document.getElementById("exUrl").value,
+      };
+      const secret = document.getElementById("exSecret").value.trim();
+      if (secret) payload.bridgeSecret = secret;
+      const d = await api("/api/exec/config", { method: "POST", body: JSON.stringify(payload) });
+      if (d.ok) {
+        document.getElementById("exSecret").value = "";
+        say("saved");
+        loadExec();
+      } else say(d.error || "could not save", true);
+    }
+    if (id === "exTestBridge") {
+      say("asking the bridge…");
+      const d = await api("/api/exec/test-bridge", { method: "POST", body: "{}" });
+      if (d.ok) say(`bridge alive · ${d.bridge.login} on ${d.bridge.server} · ${d.bridge.demo ? "demo" : "LIVE"} · balance ${d.bridge.balance} ${d.bridge.currency}`);
+      else say(d.error || "bridge refused", true);
+    }
+    if (id === "exKill") {
+      await api("/api/exec/kill", { method: "POST", body: JSON.stringify({ reason: "stopped from the dashboard" }) });
+      say("stopped — no new orders");
+      loadExec();
+    }
+    if (id === "exRevive") {
+      await api("/api/exec/revive", { method: "POST", body: "{}" });
+      say("stop cleared");
+      loadExec();
+    }
+  } catch (err) {
+    say(err.message, true);
+  }
+});
+
+document.querySelectorAll("nav button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    tabs.forEach(t => document.getElementById("tab-"+t).style.display = t === b.dataset.tab ? "" : "none");
+    if (b.dataset.tab === "news") loadNews();
+    if (b.dataset.tab === "zones") loadZones();
+    if (b.dataset.tab === "risk") loadExec();
+    if (b.dataset.tab === "learning") loadLearning();
+    if (b.dataset.tab === "settings") loadSettings();
+  });
+});
+
+document.getElementById("proxToggle").addEventListener("click", () => {
+  showAllZones = !showAllZones;
+  renderZoneStates(lastZones);
+});
+
+/* ---------- learning ---------- */
+function ago(iso) {
+  if (!iso) return "not yet";
+  const secs = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  if (secs < 60) return `${Math.max(secs, 0)}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
+}
+
+async function loadLearning() {
+  try {
+    const d = await api("/api/learning");
+
+    loadPerformance();
+
+    document.getElementById("crewList").innerHTML = (d.crew || []).map(c => `
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:8px 10px;border:1px solid rgba(255,255,255,.07);border-radius:10px">
+        <div><strong>${c.name}</strong> <span class="hint">${c.role}</span></div>
+        <span class="pill">${c.busy ? "working now" : ago(c.last)}</span>
+      </div>`).join("");
+
+    const closedN = d.closedTrades || 0;
+    document.getElementById("learnClosed").textContent = `${closedN} closed trade${closedN === 1 ? "" : "s"}`;
+    document.getElementById("learnTotalR").textContent = `${d.totalR > 0 ? "+" : ""}${d.totalR || 0}R total`;
+    document.getElementById("learnMuted").textContent = `${d.mutedCount || 0} setups muted`;
+
+    document.getElementById("lessonList").innerHTML = (d.lessons || []).map(l => {
+      const colour = l.tone === "bad" ? "#ff8b8b" : l.tone === "good" ? "#7ee0a8" : "var(--muted)";
+      return `<div style="padding:9px 11px;border-left:3px solid ${colour};background:rgba(255,255,255,.03);border-radius:6px;font-size:13px;line-height:1.5">${l.text}</div>`;
+    }).join("");
+
+    const body = document.getElementById("learnBody");
+    body.innerHTML = (d.rows && d.rows.length)
+      ? d.rows.map(r => {
+          const colour = r.status === "muted" ? "#ff8b8b" : r.status === "working" ? "#7ee0a8" : "var(--muted)";
+          return `<tr style="border-top:1px solid rgba(255,255,255,.06)">
+            <td style="padding:7px 8px;font-weight:600">${r.symbol}</td>
+            <td style="padding:7px 8px">${r.side}</td>
+            <td style="padding:7px 8px" class="hint">${r.setup}</td>
+            <td style="padding:7px 8px">${r.n}</td>
+            <td style="padding:7px 8px">${r.wins} (${r.winrate}%)</td>
+            <td style="padding:7px 8px">${r.expectancy > 0 ? "+" : ""}${r.expectancy}</td>
+            <td style="padding:7px 8px;color:${colour};font-weight:600">${r.status}</td>
+          </tr>`;
+        }).join("")
+      : `<tr><td colspan="7" class="hint" style="padding:8px">Nothing closed yet — verdicts appear once posted signals resolve.</td></tr>`;
+
+    document.getElementById("strategyList").innerHTML = Object.entries(d.strategy || {}).map(([sym, s]) => `
+      <div class="strat">
+        <div class="hd">
+          <strong>${sym}</strong>
+          <span class="pill" style="color:${s.tradable ? "#7ff0cf" : "#ffd889"};border-color:${s.tradable ? "rgba(49,208,165,.38)" : "rgba(245,185,66,.38)"}">${s.tradable ? "allowed" : "blocked"}</span>
+        </div>
+        <div class="vd" title="${(s.verdict || "").replace(/"/g, "&quot;")}">${s.verdict || "not tested yet"}</div>
+      </div>`).join("") || `<div class="hint">No market has been tested yet.</div>`;
+
+    loadBrain();
+    loadJournal();
+
+    document.getElementById("suppressedList").innerHTML = (d.suppressed && d.suppressed.length)
+      ? d.suppressed.map(s => `<div class="hint">${ago(s.at)} · ${s.symbol} ${s.side} (${s.setup}) — ${s.reason}</div>`).join("")
+      : `<div class="hint">Nothing has been held back.</div>`;
+  } catch (err) {
+    document.getElementById("crewList").textContent = "Could not load: " + err.message;
+  }
+}
+
+/* ---------- performance ---------- */
+function drawEquity(series) {
+  const canvas = document.getElementById("equityCanvas");
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 600;
+  const h = canvas.clientHeight || 180;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!series.length) {
+    ctx.fillStyle = "rgba(255,255,255,.4)";
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText("No closed trades yet.", 12, h / 2);
+    return;
+  }
+
+  const values = [0, ...series.map((p) => p.cumulative)];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const pad = 14;
+  const x = (i) => pad + (i / Math.max(values.length - 1, 1)) * (w - pad * 2);
+  const y = (v) => h - pad - ((v - min) / span) * (h - pad * 2);
+
+  // zero line
+  if (min < 0 && max > 0) {
+    ctx.strokeStyle = "rgba(255,255,255,.12)";
+    ctx.beginPath();
+    ctx.moveTo(pad, y(0));
+    ctx.lineTo(w - pad, y(0));
+    ctx.stroke();
+  }
+
+  const up = values[values.length - 1] >= 0;
+  const line = up ? "#5ee0b0" : "#ff8b8b";
+
+  // filled area
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, up ? "rgba(94,224,176,.28)" : "rgba(255,139,139,.28)");
+  grad.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.beginPath();
+  values.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+  ctx.lineTo(x(values.length - 1), h - pad);
+  ctx.lineTo(x(0), h - pad);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.beginPath();
+  values.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.stroke();
+
+  const last = series[series.length - 1];
+  ctx.fillStyle = line;
+  ctx.beginPath();
+  ctx.arc(x(values.length - 1), y(last.cumulative), 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "rgba(255,255,255,.45)";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillText(`${max.toFixed(1)}R`, pad, 12);
+  ctx.fillText(`${min.toFixed(1)}R`, pad, h - 2);
+}
+
+async function loadPerformance() {
+  try {
+    const p = await api("/api/performance");
+    drawEquity(p.series || []);
+    document.getElementById("perfWinrate").textContent = p.count
+      ? `${p.wins}W / ${p.losses}L · ${p.winrate}%`
+      : "no closed trades";
+    document.getElementById("perfAvg").textContent = p.avgR == null ? "—" : `${p.avgR > 0 ? "+" : ""}${p.avgR}R per trade`;
+    document.getElementById("perfDrawdown").textContent = `worst drawdown ${p.maxDrawdownR ?? 0}R`;
+    document.getElementById("perfStreak").textContent = `longest losing run ${p.worstLosingStreak ?? 0}`;
+
+    document.getElementById("perfMarkets").innerHTML = (p.byMarket || [])
+      .map(
+        (m) => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.05)">
+          <strong>${m.symbol}</strong>
+          <span class="hint">${m.n} trade${m.n === 1 ? "" : "s"} · ${m.winrate}% won</span>
+          <span style="color:${m.totalR >= 0 ? "#7ee0a8" : "#ff8b8b"};font-weight:600">${m.totalR > 0 ? "+" : ""}${m.totalR}R</span>
+        </div>`
+      )
+      .join("");
+  } catch (err) {
+    drawEquity([]);
+  }
+}
+
+/* ---------- position sizing ---------- */
+// Value of a 1.00 price move per 1.00 unit of the instrument, and the size of
+// one lot. Gold is a 100oz contract, the Nasdaq CFD pays $1 per index point,
+// FX is 100,000 units of the base currency.
+function contractValue(symbol, usdjpyRate) {
+  if (symbol === "XAUUSD") return { perUnit: 1, lot: 100, unit: "oz" };
+  if (symbol === "NASDAQ") return { perUnit: 1, lot: 1, unit: "contract" };
+  if (symbol.endsWith("JPY")) return { perUnit: 1 / (usdjpyRate || 150), lot: 100000, unit: "units" };
+  return { perUnit: 1, lot: 100000, unit: "units" };
+}
+
+function recalcSize() {
+  const out = document.getElementById("szOut");
+  const bal = parseFloat(document.getElementById("szBal").value);
+  const riskPct = parseFloat(document.getElementById("szRisk").value);
+  const entry = parseFloat(document.getElementById("szEntry").value);
+  const stop = parseFloat(document.getElementById("szStop").value);
+  const symbol = document.getElementById("szSym").value;
+
+  if (![bal, riskPct, entry, stop].every(Number.isFinite) || entry === stop) {
+    out.textContent = "Enter an entry and a stop.";
+    return;
+  }
+
+  const jpy = (window.__quotes && window.__quotes.USDJPY) || 150;
+  const { perUnit, lot, unit } = contractValue(symbol, jpy);
+  const riskMoney = (bal * riskPct) / 100;
+  const distance = Math.abs(entry - stop);
+  const units = riskMoney / (distance * perUnit);
+  const lots = units / lot;
+
+  out.innerHTML =
+    `Risking <strong>${riskMoney.toFixed(2)}</strong> over a <strong>${distance.toFixed(2)}</strong> move ` +
+    `→ <strong>${lots >= 1 ? lots.toFixed(2) + " lots" : units.toFixed(0) + " " + unit}</strong>` +
+    ` <span class="hint">(${units.toFixed(0)} ${unit} total)</span><br>` +
+    `<span class="hint">Assumes a standard contract for ${symbol}. Check your broker's spec before ordering — ` +
+    `their contract size and fees decide the real number.</span>`;
+}
+
+["szBal", "szRisk", "szEntry", "szStop", "szSym"].forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("input", recalcSize);
+});
+
+/* ---------- sound ---------- */
+function beep(times = 2) {
+  if (!soundOn) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    for (let i = 0; i < times; i++) {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 880;
+      o.type = "sine";
+      const t = ctx.currentTime + i * 0.22;
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      o.start(t); o.stop(t + 0.2);
+    }
+  } catch {}
+}
+document.getElementById("soundBtn").addEventListener("click", (e) => {
+  soundOn = !soundOn;
+  e.target.textContent = soundOn ? "🔔 Sound on" : "🔕 Sound off";
+  if (soundOn) beep(1);
+});
+
+/* ---------- voice ----------
+ * The browser's own speech engine, so nothing leaves the device, needs no key,
+ * and works on a phone. It speaks what actually happened — a signal firing, an
+ * order going out, a trade closing — rather than narrating the whole app.
+ */
+let voiceOn = false;
+try { voiceOn = localStorage.getItem("zwVoice") === "1"; } catch {}
+
+function voiceSupported() {
+  return typeof window !== "undefined" && "speechSynthesis" in window;
+}
+
+function pickVoice() {
+  if (!voiceSupported()) return null;
+  const voices = window.speechSynthesis.getVoices() || [];
+  if (!voices.length) return null;
+  const preferred = (localStorage.getItem("zwVoiceName") || "");
+  const exact = voices.find((v) => v.name === preferred);
+  if (exact) return exact;
+  // A calm English voice; anything is better than the default on some phones.
+  return (
+    voices.find((v) => /en-GB/i.test(v.lang) && /female|serena|kate/i.test(v.name)) ||
+    voices.find((v) => /en-GB/i.test(v.lang)) ||
+    voices.find((v) => /en-US/i.test(v.lang)) ||
+    voices[0]
+  );
+}
+
+function speak(text, { interrupt = false } = {}) {
+  if (!voiceOn || !voiceSupported() || !text) return false;
+  try {
+    if (interrupt) window.speechSynthesis.cancel();
+    // Three utterances already waiting means the queue is stale news.
+    if (!interrupt && window.speechSynthesis.pending && window.speechSynthesis.speaking) {
+      const backlog = (window._zwSpoken || []).filter((t) => Date.now() - t < 20000).length;
+      if (backlog > 3) return false;
+    }
+    const utterance = new SpeechSynthesisUtterance(String(text).slice(0, 400));
+    const voice = pickVoice();
+    if (voice) utterance.voice = voice;
+    utterance.rate = 1.03;
+    utterance.pitch = 0.95;
+    utterance.volume = 1;
+    window.speechSynthesis.speak(utterance);
+    window._zwSpoken = [...(window._zwSpoken || []), Date.now()].slice(-10);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Turn an alert message into something worth hearing out loud. */
+function spokenAlert(a) {
+  const symbol = String(a.symbol || "").trim();
+  let body = String(a.message || "")
+    .replace(/[·•]/g, " ")
+    .replace(/[–]/g, " to ")   // en dash is a range: 2390–2395
+    .replace(/[—]/g, ", ")     // em dash is a separator, not "to"
+    .replace(/!+/g, ".")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Alerts often start with the symbol; saying it twice sounds broken.
+  if (symbol && body.toUpperCase().startsWith(symbol.toUpperCase())) {
+    body = body.slice(symbol.length).trim();
+  }
+  const price = a.price != null ? `, price ${a.price}` : "";
+  return `${symbol} ${body}${price}`
+    .replace(/\s+,/g, ",")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function updateVoiceBtn() {
+  const btn = document.getElementById("voiceBtn");
+  if (!btn) return;
+  btn.textContent = voiceOn ? "🗣 Voice on" : "🗣 Voice off";
+  btn.style.color = voiceOn ? "#7ff0cf" : "";
+}
+
+document.getElementById("voiceBtn").addEventListener("click", () => {
+  if (!voiceSupported()) {
+    alert("This browser has no speech engine. Chrome, Edge and Safari do; Firefox does not.");
+    return;
+  }
+  voiceOn = !voiceOn;
+  try { localStorage.setItem("zwVoice", voiceOn ? "1" : "0"); } catch {}
+  updateVoiceBtn();
+  if (voiceOn) {
+    // Speaking here, on a real tap, is also what unlocks audio on iOS.
+    window.speechSynthesis.cancel();
+    speak("Voice on. I will read signals and results aloud.", { interrupt: true });
+    // Switching the voice on for the first time today earns today's briefing.
+    if (typeof maybeBrief === "function") setTimeout(() => maybeBrief(), 1600);
+  } else {
+    window.speechSynthesis.cancel();
+  }
+});
+
+if (voiceSupported()) {
+  window.speechSynthesis.onvoiceschanged = () => pickVoice();
+}
+updateVoiceBtn();
+
+/* ---------- spoken warnings ----------
+ * Some things are worth interrupting for: the watcher has gone quiet, the
+ * bridge has stopped answering, or auto-trading has stopped itself. Each warns
+ * once, then stays quiet for a while — a warning that repeats becomes noise you
+ * learn to ignore.
+ */
+const warnAt = {};
+const WARN_COOLDOWN = 20 * 60 * 1000;
+
+function speakWarning(key, text, cooldown = WARN_COOLDOWN) {
+  const now = Date.now();
+  if (warnAt[key] && now - warnAt[key] < cooldown) return false;
+  warnAt[key] = now;
+  speak(text, { interrupt: true });
+  return true;
+}
+
+/** Watcher freshness, judged on the same limit the server's own health check uses. */
+function checkWatcherFreshness(data) {
+  if (!data || !data.checkedAt) return;
+  const age = Date.now() - new Date(data.checkedAt).getTime();
+  const limit = Math.max(90000, (Number(data.intervalMs) || 10000) * 4);
+  if (age > limit) {
+    const mins = Math.round(age / 60000);
+    speakWarning(
+      "watcher-stale",
+      `Warning. The watcher has gone quiet. Last update was ${mins < 1 ? "moments" : mins + " minutes"} ago.`
+    );
+  } else {
+    delete warnAt["watcher-stale"];
+  }
+}
+
+let execCheckedAt = 0;
+let bridgeCheckedAt = 0;
+
+/**
+ * Bridge health and the executor's own stop, checked at most once a minute.
+ * The loaders are injectable so the warning paths can be tested without
+ * pretending a real account has been stopped.
+ */
+async function checkExecWarnings(deps = {}) {
+  if (Date.now() - execCheckedAt < 60000) return;
+  execCheckedAt = Date.now();
+  const loadExec = deps.getExec || (() => api("/api/exec"));
+  const probe = deps.testBridge || (() => api("/api/exec/test-bridge", { method: "POST", body: "{}" }));
+  let exec;
+  try {
+    exec = await loadExec();
+  } catch {
+    return;
+  }
+  if (!exec || !exec.enabled) return;
+
+  if (exec.killSwitch) {
+    speakWarning(
+      "exec-stopped",
+      `Warning. Auto-trading has stopped itself. ${exec.killReason || "no reason recorded"}.`
+    );
+  } else {
+    delete warnAt["exec-stopped"];
+  }
+
+  // Spoken words, not a stack trace: the technical detail stays on the screen.
+  const bridgeVoice = "Warning. The MetaTrader bridge is not answering. Check that MetaTrader is running and the tunnel is open.";
+  const bridgeMode = exec.mode === "bridge" && exec.bridgeConfigured;
+  if (bridgeMode && exec.lastError && /bridge (unreachable|refused)/i.test(exec.lastError)) {
+    speakWarning("bridge", bridgeVoice);
+  }
+
+  if (bridgeMode && Date.now() - bridgeCheckedAt > 5 * 60 * 1000) {
+    bridgeCheckedAt = Date.now();
+    try {
+      const test = await probe();
+      if (test && test.ok) {
+        delete warnAt["bridge"];
+      } else {
+        speakWarning("bridge", bridgeVoice);
+      }
+    } catch (err) {
+      speakWarning("bridge", bridgeVoice);
+    }
+  }
+}
+
+/* ---------- spoken briefing ----------
+ * Once a day, when the app is first opened, say where things stand. Built from
+ * the same data the page already fetched — no model call, no cost, nothing that
+ * can be wrong in a way the screen isn't already showing.
+ */
+async function buildBriefing() {
+  const [watch, brain, exec] = await Promise.all([
+    api("/api/watch"),
+    api("/api/brain").catch(() => null),
+    api("/api/exec").catch(() => null),
+  ]);
+
+  const parts = [];
+  const hour = new Date().getHours();
+  parts.push(hour < 12 ? "Good morning." : "Here is where things stand.");
+
+  if (watch && watch.marketOpen === false) parts.push("Markets are closed.");
+  else if (watch && watch.marketOpen) parts.push("Markets are open.");
+
+  const proven = ((brain && brain.conditions) || [])
+    .filter((r) => r.champion && r.champion.family)
+    .map((r) => r.symbol);
+  const words = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+  if (proven.length) {
+    const count = words[proven.length] || String(proven.length);
+    parts.push(
+      `${count.charAt(0).toUpperCase() + count.slice(1)} market${proven.length === 1 ? " has" : "s have"} a proven rule: ${proven.join(", ")}.`
+    );
+  } else {
+    parts.push("No market has a proven rule right now, so the app is staying quiet.");
+  }
+
+  const openSignals = ((watch && watch.signals) || []).length;
+  if (openSignals) parts.push(`${openSignals} signal${openSignals === 1 ? "" : "s"} currently on the board.`);
+
+  if (exec && exec.enabled) {
+    parts.push(
+      `Auto-trading is on in ${exec.mode} mode, ${exec.openCount} position${exec.openCount === 1 ? "" : "s"} open, ${exec.dayRealized >= 0 ? "up" : "down"} ${Math.abs(exec.dayRealized).toFixed(2)} today.`
+    );
+  }
+
+  const held = ((watch && watch.alertsHeldByBrain) || []).length;
+  if (held) parts.push(`${held} alert${held === 1 ? "" : "s"} held back by the gate.`);
+
+  if (watch && watch.blackout && watch.blackout.active) parts.push("A news blackout is in force.");
+
+  return parts.join(" ");
+}
+
+async function maybeBrief() {
+  if (!voiceOn || window._zwBriefed) return;
+  window._zwBriefed = true;
+  let today = "";
+  try { today = new Date().toISOString().slice(0, 10); } catch {}
+  let alreadyDone = "";
+  try { alreadyDone = localStorage.getItem("zwBriefedOn") || ""; } catch {}
+  if (alreadyDone === today) return;
+
+  try {
+    const text = await buildBriefing();
+    if (!text) return;
+    speak(text, { interrupt: true });
+    try { localStorage.setItem("zwBriefedOn", today); } catch {}
+    window._zwBriefing = text;
+  } catch {
+    // A briefing that fails is silence, never an interruption.
+  }
+}
+
+/* ---------- watch ---------- */
+const stateBadge = (s) => {
+  const map = { inside:"b-inside", approaching:"b-approaching", near:"b-near", far:"b-far", inactive:"b-inactive", unknown:"b-far" };
+  return `<span class="badge ${map[s] || "b-far"}">${s}</span>`;
+};
+
+function renderQuotes(quotes, nearest) {
+  const el = document.getElementById("quotes");
+  window.__quotes = Object.fromEntries(
+    quotes.filter(q => q.price != null).map(q => [q.symbol, q.price])
+  );
+  if (document.getElementById("szOut")) recalcSize();
+
+  el.innerHTML = quotes.map(q => {
+    const n = nearest[q.symbol];
+    const priceHtml = q.price == null
+      ? `<div class="qprice" style="color:var(--bad);font-size:16px">${q.error || "no price"}</div>`
+      : `<div class="qprice mono">${q.price.toFixed(q.decimals)}<span class="qunit">${q.unit}</span></div>`;
+    const zoneHtml = n
+      ? `<div class="qzone">
+           <span class="t-${n.type}">${n.type}</span>
+           <span class="z mono">${n.low}–${n.high}</span>
+           ${stateBadge(n.state)}
+         </div>`
+      : `<div class="qzone"><span>no zone nearby</span></div>`;
+    return `<div class="card">
+      <div class="qhead">
+        <span class="qsym">${q.label}</span>
+        <span class="qsrc">${q.source}</span>
+      </div>
+      ${priceHtml}
+      ${zoneHtml}
+    </div>`;
+  }).join("");
+}
+
+function renderSignals(signals, stats) {
+  const el = document.getElementById("signals");
+  const meta = document.getElementById("signalMeta");
+  if (!el) return;
+  if (!signals || !signals.length) {
+    el.className = "empty";
+    el.textContent = "No signal right now — price is not at a zone.";
+    if (meta && stats) {
+      const bits = [];
+      if (stats.open) bits.push(stats.open + " open");
+      if (stats.wins || stats.losses) bits.push(`${stats.wins}W/${stats.losses}L`);
+      meta.textContent = bits.join(" · ");
+    } else if (meta) {
+      meta.textContent = "";
+    }
+    return;
+  }
+  el.className = "";
+  if (meta) {
+    const bits = [signals.length + " active"];
+    if (stats) {
+      if (stats.open) bits.push(stats.open + " open");
+      if (stats.wins || stats.losses) {
+        bits.push(`${stats.wins}W/${stats.losses}L` + (stats.winrate != null ? ` (${stats.winrate}%)` : ""));
+      }
+      if (stats.totalR) bits.push(`${stats.totalR > 0 ? "+" : ""}${stats.totalR}R`);
+    }
+    meta.textContent = bits.join(" · ");
+  }
+  // Prefill the position sizer from the first live signal, unless the user has
+  // already typed their own levels.
+  const szEntry = document.getElementById("szEntry");
+  const szStop = document.getElementById("szStop");
+  if (szEntry && szStop && !szEntry.value && !szStop.value && signals[0]) {
+    szEntry.value = signals[0].entry ?? signals[0].price ?? "";
+    szStop.value = signals[0].stop ?? "";
+    const sym = document.getElementById("szSym");
+    if (sym && [...sym.options].some(o => o.value === signals[0].symbol || o.text === signals[0].symbol)) {
+      sym.value = signals[0].symbol;
+    }
+    recalcSize();
+  }
+
+  el.innerHTML = signals.map(s => {
+    const buy = s.side === "BUY";
+    const colour = buy ? "var(--demand)" : "var(--supply)";
+    const badge = s.confidence === "high" ? "b-inside" : s.confidence === "medium" ? "b-approaching" : "b-near";
+    return `<div class="card" style="border-color:${buy ? "rgba(95,211,163,.5)" : "rgba(255,122,122,.5)"};margin-bottom:10px">
+      <div class="row">
+        <strong style="font-size:16px;color:${colour}">${s.side} ${s.symbol}</strong>
+        <span class="badge ${badge}">${s.confidence} confidence</span>
+        <span class="sub">${s.score}/${s.maxScore} conditions</span>
+      </div>
+      <div class="sub mono">entry ${s.entry} · stop ${s.stop} · target ${s.target}</div>
+      <ul style="margin:8px 0 0;padding-left:18px;font-size:12px;color:var(--muted);line-height:1.7">
+        ${(s.reasons || []).map(r => `<li>${r}</li>`).join("")}
+      </ul>
+      <div class="hint" style="margin-top:8px">${s.disclaimer || ""}</div>
+    </div>`;
+  }).join("");
+}
+
+let showAllZones = false;
+let lastZones = [];
+
+function renderZoneStates(zones) {
+  const el = document.getElementById("zoneStates");
+  lastZones = zones || [];
+  const toggle = document.getElementById("proxToggle");
+
+  if (!zones.length) {
+    el.className = "empty";
+    el.textContent = "No zones yet.";
+    if (toggle) toggle.style.display = "none";
+    return;
+  }
+
+  const sorted = zones.slice().sort((a, b) => (a.distance ?? 1e12) - (b.distance ?? 1e12));
+  const active = sorted.filter((z) => z.state === "inside" || z.state === "approaching" || z.state === "near");
+  const shown = showAllZones ? sorted : active.slice(0, 7);
+
+  if (toggle) {
+    toggle.style.display = "";
+    toggle.textContent = showAllZones ? "Show nearby only" : `Show all ${sorted.length}`;
+  }
+
+  el.className = "";
+  el.innerHTML = shown.length
+    ? `<div class="prox">${shown.map((z) => `
+        <div class="proxrow">
+          <span class="sym">${z.symbol}</span>
+          <span class="t-${z.type}">${z.type}</span>
+          <span class="z mono">${z.low}–${z.high}${z.distance != null && Math.abs(z.distance) >= 0.05 ? ` <span style="color:#5d728a">· ${Math.abs(z.distance).toFixed(1)} away</span>` : `<span style="color:#5d728a"> · at price</span>`}</span>
+          ${stateBadge(z.state)}
+        </div>`).join("")}</div>`
+    : `<div class="strip">Nothing close enough to watch. <button class="quiet tiny" id="proxShowAll">Show all ${sorted.length} zones</button></div>`;
+
+  const showAll = document.getElementById("proxShowAll");
+  if (showAll) showAll.addEventListener("click", () => { showAllZones = true; renderZoneStates(lastZones); });
+}
+
+function renderAlerts(alerts) {
+  const el = document.getElementById("alertFeed");
+  if (!alerts || !alerts.length) { el.innerHTML = `<div class="empty">No alerts yet.</div>`; return; }
+  el.innerHTML = alerts.slice(0, 8).map(a => {
+    const t = new Date(a.at);
+    const clock = t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return `<div class="alert">
+      <div class="when">${clock}</div>
+      <div class="amsg">${a.message}<span class="p"> · ${a.price}</span></div>
+    </div>`;
+  }).join("");
+}
+
+function journalSection(title, rows) {
+  if (!rows || !rows.length) return "";
+  const body = rows.map((r) => `<tr>
+      <td class="hint">${r.label}</td>
+      <td>${r.n}</td>
+      <td class="hint">${r.winrate == null ? "—" : r.winrate + "%"}</td>
+      <td style="color:${r.expectancy > 0 ? "#7ff0cf" : r.expectancy < 0 ? "#ff9a9a" : "#9fb3c8"}">${r.expectancy > 0 ? "+" : ""}${r.expectancy}R</td>
+    </tr>`).join("");
+  return `<tr><td colspan="4" style="padding-top:12px;font-size:10.5px;letter-spacing:1.6px;text-transform:uppercase;color:#5d728a">${title}</td></tr>` + body;
+}
+
+async function loadExec() {
+  const statusEl = document.getElementById("exStatus");
+  if (!statusEl) return;
+  try {
+    const d = await api("/api/exec");
+    const cfg = d.config || {};
+    document.getElementById("exOn").checked = Boolean(cfg.enabled);
+    document.getElementById("exMode").value = cfg.mode === "bridge" ? "bridge" : "paper";
+    document.getElementById("exRisk").value = cfg.riskPct;
+    document.getElementById("exDayLoss").value = cfg.maxDailyLossPct;
+    document.getElementById("exMax").value = cfg.maxPositions;
+    document.getElementById("exBal").value = cfg.accountBalance;
+    document.getElementById("exUrl").value = cfg.bridgeUrl || "";
+    document.getElementById("exSecret").placeholder = d.bridgeHint ? `saved ${d.bridgeHint}` : "not set";
+    if (document.activeElement !== document.getElementById("exUrl")) {
+      document.getElementById("exUrl").value = cfg.bridgeUrl || "";
+    }
+
+    const tone = d.killSwitch ? "#ff9a9a" : d.enabled ? "#7ff0cf" : "#9fb3c8";
+    statusEl.innerHTML = `
+      <div style="color:${tone};font-weight:600;margin-bottom:6px">
+        ${d.killSwitch ? "STOPPED — " + (d.killReason || "by hand") : d.enabled ? `running in ${d.mode} mode` : "switched off"}
+      </div>
+      <div>Equity <strong>${d.equity == null ? "—" : "$" + d.equity.toFixed(2)}</strong> ·
+        today <strong style="color:${d.dayRealized < 0 ? "#ff9a9a" : "#7ff0cf"}">${d.dayRealized > 0 ? "+" : ""}$${d.dayRealized.toFixed(2)}</strong>
+        (${d.dayRealizedPct}%) · ${d.openCount} open · ${d.closedCount} closed</div>
+      <div style="margin-top:4px">Risk ${d.riskPct}% per trade · daily limit ${d.maxDailyLossPct}% · broker ${d.broker}
+        · bridge ${d.bridgeConfigured ? "configured" : "not configured"}</div>
+      ${d.lastError ? `<div style="color:#ff9a9a;margin-top:6px">last error: ${d.lastError}</div>` : ""}`;
+
+    const open = d.open || [];
+    document.getElementById("exOpen").innerHTML = open.length
+      ? `<div class="sub">Open positions</div>` + open.map(p => `<div class="hint" style="padding:4px 0">
+          <strong>${p.symbol}</strong> ${p.side} ${p.lots} lots @ ${p.entry} · stop ${p.stop} · target ${p.target}
+          ${p.floating != null ? `· now ${p.floating > 0 ? "+" : ""}$${p.floating.toFixed(2)}` : ""}
+        </div>`).join("")
+      : "";
+
+    const closed = d.closed || [];
+    document.getElementById("exClosed").innerHTML = closed.length
+      ? `<div class="sub">Last closed</div>` + closed.slice(0, 8).map(p => `<div class="hint" style="padding:4px 0">
+          <strong>${p.symbol}</strong> ${p.side} ${p.lots} lots — ${p.outcome} ${p.pnl > 0 ? "+" : ""}$${p.pnl.toFixed ? p.pnl.toFixed(2) : p.pnl}
+        </div>`).join("")
+      : "";
+  } catch (err) {
+    statusEl.textContent = "Could not load: " + err.message;
+  }
+}
+
+async function loadJournal() {
+  const body = document.getElementById("journalBody");
+  const totals = document.getElementById("journalTotals");
+  const fails = document.getElementById("journalFailures");
+  if (!body) return;
+  try {
+    const d = await api("/api/journal");
+    const parts = [];
+    parts.push(`<strong>${d.logged}</strong> logged (${d.sent} sent, ${d.held} held back)`);
+    if (d.closed) {
+      parts.push(`<strong>${d.closed}</strong> closed · <strong>${d.winrate}%</strong> won · <strong>${d.expectancy > 0 ? "+" : ""}${d.expectancy}R</strong> each`);
+    } else {
+      parts.push("nothing has closed yet");
+    }
+    totals.innerHTML = parts.join(" · ");
+
+    const rows = [
+      journalSection("Daily bias", d.byDailyBiasAgreement),
+      journalSection("1h trend", d.byHtfAgreement),
+      journalSection("Zone freshness", d.byZoneFreshness),
+      journalSection("Session", d.bySession),
+      journalSection("Confluence checks passed", d.byConfluence),
+      journalSection("Market condition", d.byCondition),
+      journalSection("Market", d.byMarket),
+    ].join("");
+    body.innerHTML = rows || `<tr><td colspan="4" class="hint">Nothing has closed yet, so there is nothing to score. Alerts are logged the moment they are sent — the scoring starts when the first one resolves.</td></tr>`;
+
+    fails.innerHTML = (d.failureReasons && d.failureReasons.length)
+      ? `Why the losing ones failed: ${d.failureReasons.map((f) => `${f.reason.replace(/_/g, " ")} ×${f.n}`).join(", ")}.`
+      : "";
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="4" class="hint">Could not load: ${err.message}</td></tr>`;
+  }
+}
+
+async function loadBrain() {
+  const body = document.getElementById("brainBody");
+  if (!body) return;
+  try {
+    const d = await api("/api/brain");
+    const rows = d.conditions || [];
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="5" class="hint">Nothing tested yet — press “Test now” on a market, or let the app work through them in the background.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows.slice().sort((a, b) => a.symbol.localeCompare(b.symbol)).map((r) => {
+      const c = r.champion;
+      const verdict = c
+        ? `<span style="color:#7ff0cf;font-weight:600">proven</span>`
+        : `<span style="color:#ffd889;font-weight:600">none</span>`;
+      const strategy = c ? `${c.name}${c.outsideUsualCondition ? ` <span class="hint">(outside its usual condition)</span>` : ""}` : "—";
+      const evidence = c
+        ? `${c.n} trades · ${c.expectancy > 0 ? "+" : ""}${c.expectancy}R each · ${c.winrate}% won · t=${c.tStat} · ${c.goodFolds}/3 blocks`
+        : "no rule cleared the bar here";
+      return `<tr>
+        <td style="font-weight:600">${r.symbol}</td>
+        <td class="hint">${r.condition}${r.efficiency != null ? ` <span style="color:#5d728a">(er ${r.efficiency})</span>` : ""}</td>
+        <td class="${c ? "" : "hint"}">${strategy}</td>
+        <td class="hint" style="font-size:12px">${evidence}</td>
+        <td>${verdict}</td>
+      </tr>`;
+    }).join("");
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="5" class="hint">Could not load: ${err.message}</td></tr>`;
+  }
+}
+
+document.getElementById("brainRun").addEventListener("click", async () => {
+  const msg = document.getElementById("brainMsg");
+  const symbol = document.getElementById("brainSym").value;
+  msg.textContent = `Testing ${symbol} on a year of hourly candles — this takes a moment…`;
+  try {
+    const res = await fetch("/api/brain/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol })
+    });
+    const d = await res.json();
+    loadHeadToHead();
+    loadZoneComparison();
+    msg.textContent = d.ok
+      ? `${symbol}: currently ${d.condition}. ${Object.values(d.champions || {}).some(Boolean) ? "At least one condition has a proven strategy." : "No strategy is proven in any condition here."}`
+      : (d.error || "Failed.");
+    loadBrain();
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+function setHealth(id, state, detail) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = "hitem " + state;
+  const em = el.querySelector("em");
+  if (em) em.textContent = detail ? " " + detail : "";
+  el.title = detail || "";
+}
+
+function renderHealth(data) {
+  // feed: fresh ticks must be arriving
+  const feed = data.feed || {};
+  const stale = feed.stale || [];
+  if (!feed.checked) setHealth("h-feed", "warn", "no data");
+  else if (stale.length) setHealth("h-feed", "bad", `${stale.length} stale`);
+  else if (data.marketOpen === false) setHealth("h-feed", "warn", "market closed");
+  else setHealth("h-feed", "ok", "live");
+
+  // discord: configured, and no delivery errors in the last cycle
+  const dc = (data.provider && data.provider.discord) || {};
+  const errs = data.discordErrors || [];
+  if (errs.length) setHealth("h-discord", "bad", "send failed");
+  else if (!dc.configured) setHealth("h-discord", "warn", "not set up");
+  else if (dc.channels && (!dc.channels.alerts?.configured || !dc.channels.news?.configured || !dc.channels.recap?.configured))
+    setHealth("h-discord", "warn", "some channels missing");
+  else setHealth("h-discord", "ok", "connected");
+
+  // watcher: how long since the server last completed a check
+  const at = data.checkedAt ? new Date(data.checkedAt).getTime() : null;
+  if (!at) setHealth("h-watcher", "bad", "unknown");
+  else {
+    const age = Math.round((Date.now() - at) / 1000);
+    if (age < 45) setHealth("h-watcher", "ok", `${age}s ago`);
+    else if (age < 180) setHealth("h-watcher", "warn", `${Math.round(age / 60)}m ago`);
+    else setHealth("h-watcher", "bad", `${Math.round(age / 60)}m behind`);
+  }
+}
+
+function renderMarketClock(data) {
+  const pill = document.getElementById("marketPill");
+  const note = document.getElementById("marketNote");
+  const open = data.marketOpen !== false;
+  const held = data.alertsHeldByHours || [];
+
+  if (pill) {
+    pill.textContent = open ? "market open" : "market closed";
+    pill.className = open ? "pill live" : "pill warn";
+  }
+  const stale = (data.feed && data.feed.stale) || [];
+  if (stale.length) {
+    note.style.display = "";
+    note.innerHTML = `<span style="color:var(--bad);font-weight:600">Feed stale</span>` +
+      `<span style="flex:1">${stale.map((s) => `${s.symbol} (${s.ageMinutes} min)`).join(", ")} — these prices have stopped updating, so setups on them cannot be seen. You have been warned in Discord.</span>`;
+    return;
+  }
+
+  if (!note) return;
+
+  if (open && !held.length) {
+    note.style.display = "none";
+    return;
+  }
+
+  const reason = held.length ? held[0].reason : "the market is closed for the weekend";
+  const symbolList = [...new Set(held.map((h) => h.symbol))].slice(0, 4).join(", ");
+  note.style.display = "";
+  note.innerHTML = `<span style="color:var(--warn);font-weight:600">Alerts paused</span>` +
+    `<span style="flex:1">${reason}${symbolList ? " — held: " + symbolList : ""}. Zones are still being tracked, so nothing is lost.</span>`;
+}
+
+function renderNewsBanner(data) {
+  const el = document.getElementById("newsBanner");
+  if (data.newsRisk && data.newsRiskEvents && data.newsRiskEvents.length) {
+    const e = data.newsRiskEvents[0];
+    el.className = "banner risk";
+    el.innerHTML = `⚠️ News risk: <strong>${e.title}</strong> (${e.country}, ${e.impact}) in ${e.minutesUntil} min. Consider standing aside.`;
+  } else {
+    el.className = "banner calm";
+    el.textContent = "No high-impact USD events in the next 30 minutes.";
+  }
+}
+
+async function refreshWatch() {
+  try {
+    const data = await api("/api/watch");
+    document.getElementById("statusPill").textContent = "updated " + new Date().toLocaleTimeString();
+    (data.quotes || []).forEach(q => { if (q.price != null) lastPrices[q.symbol] = q.price; });
+    const srcLabel = [...new Set((data.quotes || []).map(q => q.source))].join(" + ") || "demo";
+    document.getElementById("providerPill").textContent = srcLabel;
+    renderQuotes(data.quotes, data.nearest || {});
+    renderSignals(data.signals || [], data.signalStats);
+    updateZoneHint();
+    const ph = document.getElementById("pollHint");
+    if (ph) {
+      const parts = [];
+      parts.push(`${(data.autoZoneCount || 0)} auto zones, ${(data.manualZoneCount || 0)} manual`);
+      if (data.provider && data.provider.budget) {
+        parts.push(`Twelve Data ${data.provider.budget.used}/${data.provider.budget.limit} today`);
+      }
+      if (data.discordErrors && data.discordErrors.length) parts.push(`Discord: ${data.discordErrors[0]}`);
+      ph.textContent = parts.join(" · ");
+    }
+    // Results, spoken once each. The app reports newly closed signals here, so
+    // the same trade is never announced twice.
+    const resolved = data.resolvedSignals || [];
+    window._zwSeenResults = window._zwSeenResults || [];
+    for (const r of resolved.slice(0, 2)) {
+      const key = `${r.symbol}|${r.closedAt || r.at || ""}|${r.outcome}`;
+      if (window._zwSeenResults.includes(key)) continue;
+      window._zwSeenResults.push(key);
+      if (window._zwSeenResults.length > 50) window._zwSeenResults.shift();
+      speak(`${r.symbol} closed ${r.outcome}, ${r.rMultiple} R`);
+    }
+    checkWatcherFreshness(data);
+    checkExecWarnings();
+    renderZoneStates(data.zones || []);
+    if (!window._zwFirstLoadDone) {
+      window._zwFirstLoadDone = true;
+      // After the first paint, so a briefing never delays the screen.
+      setTimeout(() => { maybeBrief(); }, 1200);
+    }
+    renderAlerts(data.alerts || []);
+    renderNewsBanner(data);
+    renderMarketClock(data);
+    renderHealth(data);
+    if (data.fired && data.fired.length) {
+      beep(data.fired.length > 1 ? 3 : 2);
+      data.fired.slice(0, 2).forEach((f) => speak(spokenAlert(f)));
+      try {
+        if (Notification.permission === "granted") {
+          data.fired.forEach(f => new Notification("Zone alert", { body: f.message }));
+        }
+      } catch {}
+    }
+  } catch (err) {
+    document.getElementById("statusPill").textContent = "error: " + err.message;
+    setHealth("h-feed", "bad", "unreachable");
+    setHealth("h-watcher", "bad", "unreachable");
+  }
+}
+
+function setWatching(on) {
+  const btn = document.getElementById("toggleBtn");
+  const hint = document.getElementById("pollHint");
+  if (on) {
+    if (timer) clearInterval(timer);
+    timer = setInterval(refreshWatch, pollMs);
+    refreshWatch();
+    btn.textContent = "Resume updates";
+    hint.textContent = `The server watches every 10s on its own. This page refreshes every ${pollMs/1000}s.`;
+    document.getElementById("statusPill").className = "pill live";
+  } else {
+    if (timer) clearInterval(timer);
+    timer = null;
+    btn.textContent = "Pause updates";
+    hint.textContent = "Stopped.";
+    document.getElementById("statusPill").className = "pill";
+  }
+}
+
+document.getElementById("toggleBtn").addEventListener("click", () => {
+  const running = Boolean(timer);
+  if (!running) {
+    try { if (Notification && Notification.permission === "default") Notification.requestPermission(); } catch {}
+  }
+  setWatching(!running);
+});
+
+/* ---------- zones ---------- */
+async function loadLevels() {
+  const host = document.getElementById("levelsBox");
+  if (!host) return;
+  try {
+    const data = await api("/api/levels");
+    const maps = data.levels || {};
+    const symbols = Object.keys(maps);
+    if (!symbols.length) {
+      host.className = "empty";
+      host.textContent = "No level data yet.";
+      return;
+    }
+    host.className = "";
+    host.innerHTML = symbols
+      .map((sym) => {
+        const m = maps[sym];
+        const profile = m.profile
+          ? `POC <strong>${m.profile.poc}</strong> · value area ${m.profile.val} – ${m.profile.vah}`
+          : "no volume data (FX spot) — structure only";
+        const tops = (m.levels || [])
+          .slice(0, 5)
+          .map((l) => `${l.price} <span class="hint">(${l.score})</span>`)
+          .join(" · ");
+        return (
+          `<div style="margin-top:12px;font-size:13px"><strong>${sym}</strong>` +
+          `<div class="hint">${profile}</div>` +
+          `<div class="hint">Strongest levels: ${tops || "—"}</div></div>`
+        );
+      })
+      .join("");
+  } catch (err) {
+    host.className = "empty";
+    host.textContent = "Could not load levels: " + err.message;
+  }
+}
+
+async function loadZones() {
+  try {
+    const data = await api("/api/zones");
+    const el = document.getElementById("zonesTable");
+    if (!data.zones.length) {
+      el.className = "empty";
+      el.textContent = "No hand-drawn zones. The automatic zones below are doing the watching — add one on the right if you want a specific level.";
+      loadLevels();
+      return;
+    }
+    el.className = "";
+    const rows = data.zones.map(z => `<tr>
+      <td><span class="t-${z.type}">${z.type}</span>${z.source === "auto" ? ' <span class="badge b-near" style="font-size:9px">AUTO</span>' : ''}</td>
+      <td>${z.symbol}</td>
+      <td class="mono">${z.low}–${z.high}</td>
+      <td class="mono">${z.alertDistance ?? "auto"}</td>
+      <td>${z.label}</td>
+      <td>${scaleWarning(z)}</td>
+      <td>${z.active === false ? stateBadge("inactive") : stateBadge("far")}</td>
+      <td>
+        <button class="ghost tiny" data-toggle="${z.id}">${z.active === false ? "Enable" : "Disable"}</button>
+        <button class="ghost tiny" data-del="${z.id}">Delete</button>
+      </td>
+    </tr>`).join("");
+    el.innerHTML = `<table>
+      <thead><tr><th>Type</th><th>Symbol</th><th>Zone</th><th>Alert dist.</th><th>Label</th><th>Check</th><th>Status</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+
+    el.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", async () => {
+      if (!confirm("Delete this zone?")) return;
+      await fetch("/api/zones/" + b.dataset.del, { method: "DELETE" });
+      loadZones();
+    }));
+    el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", async () => {
+      const all = await api("/api/zones");
+      const z = all.zones.find(x => x.id === b.dataset.toggle);
+      await fetch("/api/zones/" + z.id, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: z.active === false })
+      });
+      loadZones();
+    }));
+  } catch (err) {
+    document.getElementById("zonesTable").textContent = "Error: " + err.message;
+  }
+  loadLevels();
+}
+
+document.getElementById("addZone").addEventListener("click", async () => {
+  const msg = document.getElementById("zoneMsg");
+  const body = {
+    symbol: document.getElementById("zSymbol").value,
+    type: document.getElementById("zType").value,
+    low: Number(document.getElementById("zLow").value),
+    high: Number(document.getElementById("zHigh").value),
+    alertDistance: document.getElementById("zDist").value ? Number(document.getElementById("zDist").value) : undefined,
+    label: document.getElementById("zLabel").value,
+    notes: document.getElementById("zNotes").value
+  };
+  try {
+    await api("/api/zones", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    msg.textContent = "Zone added.";
+    ["zLow","zHigh","zDist","zLabel","zNotes"].forEach(id => document.getElementById(id).value = "");
+    loadZones();
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+});
+
+/* ---------- news ---------- */
+async function loadNews() {
+  const cal = document.getElementById("calendar");
+  const heads = document.getElementById("headlines");
+  try {
+    const data = await api("/api/news");
+    const onlyHigh = document.getElementById("onlyHigh").checked;
+    const events = (data.upcoming || []).filter(e => !onlyHigh || e.impact === "high");
+    document.getElementById("newsMeta").textContent =
+      (data.calendarError ? "calendar issue: " + data.calendarError + " · " : "") +
+      "checked " + new Date(data.checkedAt).toLocaleTimeString();
+
+    if (!events.length) {
+      cal.className = "empty";
+      cal.textContent = "No upcoming events matched.";
+    } else {
+      cal.className = "";
+      cal.innerHTML = `<table>
+        <thead><tr><th>Time</th><th>Currency</th><th>Impact</th><th>Event</th><th>Forecast</th><th>Previous</th></tr></thead>
+        <tbody>${events.map(e => {
+          const soon = e.minutesUntil <= 60 && e.impact === "high";
+          return `<tr${soon ? ' style="background:rgba(255,200,87,.07)"' : ""}>
+            <td class="mono">${new Date(e.date).toLocaleString([], {weekday:"short", hour:"2-digit", minute:"2-digit"})}</td>
+            <td>${e.country}</td>
+            <td>${e.impact === "high" ? '<span class="badge b-inside">high</span>' : e.impact}</td>
+            <td>${e.title}</td>
+            <td class="mono">${e.forecast || "—"}</td>
+            <td class="mono">${e.previous || "—"}</td>
+          </tr>`;
+        }).join("")}</tbody></table>`;
+    }
+
+    const h = data.headlines || [];
+    heads.className = h.length ? "" : "empty";
+    heads.innerHTML = h.length
+      ? h.map(x => `<div class="alert">
+          <div><a href="${x.link}" target="_blank" rel="noopener">${x.title}</a></div>
+          <div class="when">${x.source}${x.published ? " · " + new Date(x.published).toLocaleString() : ""}</div>
+        </div>`).join("")
+      : (data.headlinesError ? "Could not load headlines: " + data.headlinesError : "No headlines.");
+  } catch (err) {
+    cal.textContent = "Error: " + err.message;
+    heads.textContent = "Error: " + err.message;
+  }
+}
+document.getElementById("refreshNews").addEventListener("click", loadNews);
+document.getElementById("onlyHigh").addEventListener("change", loadNews);
+
+/* ---------- charts ---------- */
+function tvUrl(symbol) {
+  return "https://s.tradingview.com/widgetembed/?symbol=" + encodeURIComponent(symbol) +
+    "&interval=15&hidesidetoolbar=1&symboledit=1&saveimage=0&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&hideideas=1";
+}
+document.getElementById("chartsBtn").addEventListener("click", (e) => {
+  const box = document.getElementById("charts");
+  if (box.style.display === "none") {
+    box.style.display = "";
+    if (!box.dataset.loaded) {
+      box.innerHTML = instruments.map(i => `<iframe src="${tvUrl(i.tradingView)}" loading="lazy" title="${i.label}"></iframe>`).join("");
+      box.dataset.loaded = "1";
+    }
+    e.target.textContent = "Hide charts";
+  } else {
+    box.style.display = "none";
+    e.target.textContent = "Show charts";
+  }
+});
+
+/* ---------- risk ---------- */
+function calcRisk() {
+  const bal = Number(document.getElementById("rBal").value) || 0;
+  const pct = Number(document.getElementById("rPct").value) || 0;
+  const stop = Number(document.getElementById("rStop").value) || 0;
+  const val = Number(document.getElementById("rVal").value) || 0;
+  const risk = bal * (pct / 100);
+  document.getElementById("rRisk").textContent = "$" + risk.toFixed(2);
+  const lots = (stop > 0 && val > 0) ? risk / (stop * val) : 0;
+  document.getElementById("rLots").textContent = lots.toFixed(2) + " lots";
+}
+["rBal","rPct","rStop","rVal"].forEach(id =>
+  document.getElementById(id).addEventListener("input", calcRisk));
+
+/* ---------- journal ---------- */
+document.getElementById("loadExample").addEventListener("click", async () => {
+  try {
+    const d = await api("/api/read-example");
+    document.getElementById("jsonInput").value = JSON.stringify(d.data, null, 2);
+  } catch (e) { document.getElementById("journalMsg").textContent = e.message; }
+});
+document.getElementById("loadLog").addEventListener("click", async () => {
+  try {
+    const d = await api("/api/read-log");
+    document.getElementById("jsonInput").value = JSON.stringify(d.data, null, 2);
+  } catch (e) { document.getElementById("journalMsg").textContent = e.message; }
+});
+document.getElementById("analyzeBtn").addEventListener("click", async () => {
+  const out = document.getElementById("journalOut");
+  const text = document.getElementById("jsonInput").value.trim();
+  if (!text) { out.textContent = "Load or paste a log first."; return; }
+  out.textContent = "Running…";
+  try {
+    const d = await api("/api/analyze-json", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonText: text })
+    });
+    out.textContent = d.text;
+  } catch (e) { out.textContent = "Error: " + e.message; }
+});
+document.getElementById("saveLogBtn").addEventListener("click", async () => {
+  const msg = document.getElementById("journalMsg");
+  const text = document.getElementById("jsonInput").value.trim();
+  try { JSON.parse(text); } catch { msg.textContent = "Not valid JSON"; return; }
+  try {
+    await api("/api/save-log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonText: text })
+    });
+    msg.textContent = "Saved.";
+  } catch (e) { msg.textContent = e.message; }
+});
+
+/* ---------- settings ---------- */
+function paintProvider(p) {
+  if (!p) return;
+  const srcs = (p.instruments || []).map(i => `${i.symbol}:${i.provider}`).join(" · ");
+  document.getElementById("setProvider").textContent = srcs || p.provider;
+  document.getElementById("setKeyState").textContent = p.hasKey ? "key saved " + (p.keyHint || "") : "no key saved";
+  if (srcs) document.getElementById("providerPill").textContent = srcs;
+  if (p.discord) paintDiscord(p.discord);
+  paintTrading(p.trading);
+  paintMarkets(p);
+  const az = document.getElementById("autoZonesBox");
+  if (az) az.checked = p.autoZones !== false;
+  const sb = document.getElementById("signalBox");
+  if (sb) sb.checked = p.signalAlerts !== false;
+  const ssb = document.getElementById("sessionBox");
+  if (ssb) ssb.checked = p.sessionAlerts !== false;
+  const ab = document.getElementById("approachBox");
+  if (ab) ab.checked = p.approachAlerts !== false;
+  const ib = document.getElementById("ivbBox");
+  if (ib) ib.checked = p.ivbAlerts !== false;
+  const bg = document.getElementById("brainGateBox");
+  if (bg) bg.checked = p.brainGate !== false;
+  const ob = document.getElementById("openOnlyBox");
+  if (ob) ob.checked = p.alertOnlyWhenOpen !== false;
+  if (p.instruments) {
+    instruments = p.instruments;
+    renderInstruments();
+    const g = p.instruments.find(i => i.symbol === "XAUUSD");
+    if (g && g.valuePerPointPerLot && !document.getElementById("rVal").dataset.userSet) {
+      document.getElementById("rVal").value = g.valuePerPointPerLot;
+      calcRisk();
+    }
+  }
+}
+
+async function loadLab() {
+  const host = document.getElementById("labList");
+  if (!host) return;
+  try {
+    const res = await fetch("/api/lab");
+    const data = await res.json();
+    const health = await (await fetch("/api/health")).json();
+    const override = (health.unprovenMarkets || []).join(", ");
+    const box = document.getElementById("unprovenMarkets");
+    if (box && document.activeElement !== box) box.value = override;
+    const entries = Object.values(data.results || {});
+    if (!entries.length) {
+      host.innerHTML = '<div class="hint">No tests yet — the first runs within the hour, or press the button below.</div>';
+      return;
+    }
+    host.innerHTML = entries
+      .sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)))
+      .map((x) => {
+        const colour = x.tradable ? "#3ba55d" : "#d83c3e";
+        const label = x.tradable ? "EDGE" : "NO EDGE";
+        return (
+          `<div style="margin-top:10px;font-size:13px">` +
+          `<strong>${x.symbol}</strong> — <span style="color:${colour};font-weight:600">${label}</span>` +
+          `<div class="hint">${x.verdict}</div></div>`
+        );
+      })
+      .join("");
+  } catch {
+    /* leave whatever is on screen */
+  }
+}
+
+function paintMarkets(p) {
+  const host = document.getElementById("marketToggles");
+  if (!host || !p || !p.instruments) return;
+
+  const enabled = p.markets || {};
+  host.innerHTML = p.instruments
+    .map(
+      (i) =>
+        `<label class="row" style="margin-top:8px;text-transform:none;letter-spacing:0;font-size:13px">` +
+        `<input type="checkbox" data-symbol="${i.symbol}" ${enabled[i.symbol] === false ? "" : "checked"} style="width:auto;margin-right:8px" />` +
+        `${i.label}</label>`
+    )
+    .join("");
+
+  const q = p.quietHours || {};
+  const qb = document.getElementById("quietBox");
+  if (qb) qb.checked = Boolean(q.enabled);
+  const qf = document.getElementById("quietFrom");
+  if (qf && document.activeElement !== qf) qf.value = q.from == null ? 22 : q.from;
+  const qt = document.getElementById("quietTo");
+  if (qt && document.activeElement !== qt) qt.value = q.to == null ? 7 : q.to;
+}
+
+function paintTrading(t) {
+  if (!t) return;
+  const set = (id, value) => {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el) el.value = value == null ? "" : value;
+  };
+  set("acctSize", t.accountSize || "");
+  set("riskPct", t.riskPercent || "");
+  set("blackoutMin", t.blackoutMinutes || 15);
+  set("maxLosses", t.dailyMaxLosses);
+  set("maxLossR", t.dailyMaxLossR);
+  set("minConf", t.minConfluence);
+  const bb = document.getElementById("blackoutBox");
+  if (bb) bb.checked = t.newsBlackout !== false;
+  const mb = document.getElementById("mtfBox");
+  if (mb) mb.checked = t.mtfFilter !== false;
+}
+
+function paintDiscord(d) {
+  const el = document.getElementById("discState");
+  if (!el) return;
+  el.textContent = d.configured ? "connected " + (d.hint || "") : "not connected";
+  el.className = "pill" + (d.configured ? " live" : "");
+  const box = document.getElementById("hookNews");
+  if (box) box.checked = d.news !== false;
+
+  if (d.channels) {
+    const map = { chAlerts: "alerts", chNews: "news", chRecap: "recap" };
+    for (const [id, key] of Object.entries(map)) {
+      const input = document.getElementById(id);
+      if (!input) continue;
+      const c = d.channels[key] || {};
+      input.placeholder = c.dedicated ? "saved " + (c.hint || "") : "uses default";
+    }
+  }
+}
+
+async function saveDiscord(patch, msgEl, okText) {
+  try {
+    const d = await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    paintProvider(d.provider);
+    if (msgEl) msgEl.textContent = okText || "Saved.";
+    return d;
+  } catch (err) {
+    if (msgEl) msgEl.textContent = err.message;
+  }
+}
+
+document.getElementById("saveHook").addEventListener("click", async () => {
+  const msg = document.getElementById("hookMsg");
+  const url = document.getElementById("hookInput").value.trim();
+  if (!url) { msg.textContent = "Paste the webhook URL first."; return; }
+  const d = await saveDiscord({ discordWebhook: url }, msg, "Saved. Now press Send test alert.");
+  if (d) document.getElementById("hookInput").value = "";
+});
+
+document.getElementById("saveChannels").addEventListener("click", async () => {
+  const msg = document.getElementById("chanMsg");
+  const read = (id) => (document.getElementById(id).value || "").trim();
+  const alerts = read("chAlerts");
+  const newsCh = read("chNews");
+  const recapCh = read("chRecap");
+  const patch = {};
+  if (alerts) patch.alerts = alerts;
+  if (newsCh) patch.news = newsCh;
+  if (recapCh) patch.recap = recapCh;
+  if (!Object.keys(patch).length) {
+    msg.textContent = "Paste at least one webhook URL first.";
+    return;
+  }
+  const d = await saveDiscord({ discordChannels: patch }, msg, "Saved. Each alert type now goes to its own channel.");
+  if (d) {
+    for (const id of ["chAlerts", "chNews", "chRecap"]) document.getElementById(id).value = "";
+  }
+});
+
+document.getElementById("clearChannels").addEventListener("click", async () => {
+  const msg = document.getElementById("chanMsg");
+  if (!confirm("Send every alert type to the default webhook again?")) return;
+  await saveDiscord(
+    { discordChannels: { alerts: "", news: "", recap: "" } },
+    msg,
+    "All alerts use the default webhook now."
+  );
+});
+
+document.getElementById("clearHook").addEventListener("click", async () => {
+  const msg = document.getElementById("hookMsg");
+  if (!confirm("Remove the Discord webhook? Alerts will stop going to Discord.")) return;
+  await saveDiscord({ discordWebhook: "" }, msg, "Removed.");
+});
+
+document.getElementById("testHook").addEventListener("click", async () => {
+  const msg = document.getElementById("hookMsg");
+  msg.textContent = "Sending…";
+  try {
+    await api("/api/discord/test", { method: "POST" });
+    msg.textContent = "Test sent — check your Discord channel.";
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+});
+
+document.getElementById("autoZonesBox").addEventListener("change", (e) => {
+  saveDiscord({ autoZones: e.target.checked }, document.getElementById("pollHint"), e.target.checked ? "Auto zones on." : "Auto zones off.");
+});
+
+document.getElementById("signalBox").addEventListener("change", (e) => {
+  saveDiscord({ signalAlerts: e.target.checked }, document.getElementById("pollHint"), e.target.checked ? "Signal alerts on." : "Signal alerts off.");
+});
+
+document.getElementById("sendRecap").addEventListener("click", async () => {
+  const btn = document.getElementById("sendRecap");
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    const res = await fetch("/api/recap/send", { method: "POST" });
+    const data = await res.json();
+    btn.textContent = data.ok ? "Recap sent to Discord" : "Failed: " + (data.error || "unknown");
+  } catch (err) {
+    btn.textContent = "Failed: " + err.message;
+  }
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = "Send weekly recap now";
+  }, 4000);
+});
+
+document.getElementById("saveTrading").addEventListener("click", async () => {
+  const msg = document.getElementById("tradingMsg");
+  const num = (id) => {
+    const v = document.getElementById(id).value;
+    return v === "" ? undefined : Number(v);
+  };
+  const patch = {
+    accountSize: num("acctSize"),
+    riskPercent: num("riskPct"),
+    blackoutMinutes: num("blackoutMin"),
+    dailyMaxLosses: num("maxLosses"),
+    dailyMaxLossR: num("maxLossR"),
+    minConfluence: num("minConf"),
+    newsBlackout: document.getElementById("blackoutBox").checked,
+    mtfFilter: document.getElementById("mtfBox").checked,
+  };
+  msg.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trading: patch }),
+    });
+    const data = await res.json();
+    msg.textContent = data.ok ? "Saved." : data.error || "Could not save.";
+    if (data.ok && data.provider) paintProvider(data.provider);
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+document.getElementById("saveUnproven").addEventListener("click", async () => {
+  const msg = document.getElementById("labMsg");
+  const list = document.getElementById("unprovenMarkets").value
+    .split(",")
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  msg.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unprovenMarkets: list }),
+    });
+    const data = await res.json();
+    msg.textContent = data.ok ? `Override saved: ${list.join(", ") || "none"}` : data.error;
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+document.getElementById("runLab").addEventListener("click", async () => {
+  const msg = document.getElementById("labMsg");
+  msg.textContent = "Testing… this takes a few seconds.";
+  try {
+    const lab = await (await fetch("/api/lab")).json();
+    const inst = await (await fetch("/api/health")).json();
+    const markets = (inst.instruments || []).map((i) => i.symbol);
+    const fresh = markets.find((s) => !(lab.results || {})[s]);
+    const target = fresh || markets[0];
+    const res = await fetch("/api/lab/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol: target }),
+    });
+    const data = await res.json();
+    msg.textContent = data.ok ? `${target}: ${data.result.verdict}` : data.error || "Failed";
+    loadLab();
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+document.getElementById("saveMarkets").addEventListener("click", async () => {
+  const msg = document.getElementById("marketsMsg");
+  const markets = {};
+  document.querySelectorAll("#marketToggles input[data-symbol]").forEach((cb) => {
+    markets[cb.dataset.symbol] = cb.checked;
+  });
+  const quietHours = {
+    enabled: document.getElementById("quietBox").checked,
+    from: Number(document.getElementById("quietFrom").value || 22),
+    to: Number(document.getElementById("quietTo").value || 7),
+  };
+  msg.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ markets, quietHours }),
+    });
+    const data = await res.json();
+    msg.textContent = data.ok ? "Saved." : data.error || "Could not save.";
+    if (data.ok && data.provider) paintProvider(data.provider);
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+document.getElementById("approachBox").addEventListener("change", (e) => {
+  saveDiscord({ approachAlerts: e.target.checked }, document.getElementById("pollHint"), e.target.checked ? "Early heads-ups on." : "Early heads-ups off.");
+});
+
+document.getElementById("ivbBox").addEventListener("change", (e) => {
+  saveDiscord({ ivbAlerts: e.target.checked }, document.getElementById("pollHint"), e.target.checked ? "IVB alerts on." : "IVB alerts off.");
+});
+
+document.getElementById("sessionBox").addEventListener("change", (e) => {
+  saveDiscord({ sessionAlerts: e.target.checked }, document.getElementById("pollHint"), e.target.checked ? "Session alerts on." : "Session alerts off.");
+});
+
+document.getElementById("openOnlyBox").addEventListener("change", (e) => {
+  saveDiscord({ alertOnlyWhenOpen: e.target.checked }, document.getElementById("pollHint"),
+    e.target.checked ? "Alerts will only be sent while the market is open." : "Alerting 24/7, even when the market is shut.");
+});
+
+document.getElementById("brainGateBox").addEventListener("change", async (e) => {
+  const res = await fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ brainGate: e.target.checked })
+  });
+  const d = await res.json();
+  const hint = document.getElementById("pollHint");
+  if (hint) hint.textContent = d.ok
+    ? (e.target.checked ? "Proven-rule gate on. Expect fewer, stricter alerts." : "Gate off — every setup will alert again.")
+    : (d.error || "Could not save.");
+});
+
+document.getElementById("hookNews").addEventListener("change", (e) => {
+  saveDiscord({ discordNews: e.target.checked }, document.getElementById("hookMsg"),
+    e.target.checked ? "News warnings on." : "News warnings off.");
+});
+
+function renderInstruments() {
+  const el = document.getElementById("instRows");
+  if (!el) return;
+  if (!instruments.length) { el.className = "empty"; el.textContent = "No instruments."; return; }
+  el.className = "";
+  const opts = (sel) => ["auto", "yahoo", "twelvedata", "demo"]
+    .map(p => `<option value="${p}"${sel === p ? " selected" : ""}>${p}</option>`).join("");
+  el.innerHTML = `<table><thead><tr><th>Instrument</th><th>Source</th><th>Symbol</th><th>Live</th></tr></thead><tbody>` +
+    instruments.map(i => `<tr>
+      <td>${i.label}</td>
+      <td><select data-prov="${i.symbol}">${opts(i.providerSetting || "auto")}</select></td>
+      <td><input data-sym="${i.symbol}" value="${i.providerSymbol || ""}" spellcheck="false" /></td>
+      <td class="mono">${i.provider === "demo" ? "demo" : (lastPrices[i.symbol] ?? "—")}</td>
+    </tr>`).join("") + `</tbody></table>`;
+}
+
+document.getElementById("saveInstruments").addEventListener("click", async () => {
+  const msg = document.getElementById("instMsg");
+  const symbols = {};
+  const providers = {};
+  document.querySelectorAll("[data-sym]").forEach(inp => { symbols[inp.dataset.sym] = inp.value; });
+  document.querySelectorAll("[data-prov]").forEach(sel => {
+    if (sel.value !== "auto") providers[sel.dataset.prov] = sel.value;
+  });
+  try {
+    const d = await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbols, providers })
+    });
+    paintProvider(d.provider);
+    msg.textContent = "Saved. Press Test connection.";
+    refreshWatch();
+  } catch (err) { msg.textContent = err.message; }
+});
+
+async function loadSettings() {
+  try {
+    const d = await api("/api/settings");
+    paintProvider(d.provider);
+    document.getElementById("keyInput").value = "";
+    const pingHint = document.getElementById("pingHint");
+    if (pingHint) pingHint.textContent = d.provider.statusPingConfigured ? `saved: ${d.provider.statusPingHint}` : "not set";
+    const pingUrl = document.getElementById("pingUrl");
+    if (pingUrl) pingUrl.value = "";
+    const corrEnabled = document.getElementById("corrEnabled");
+    if (corrEnabled) corrEnabled.checked = d.provider.correlationEnabled !== false;
+    const corr = document.getElementById("corrGroups");
+    if (corr && !corr.dataset.dirty) {
+      corr.value = (d.provider.correlationGroups || []).map(g => g.join(", ")).join("\n");
+    }
+    paintCorrState();
+  } catch (err) {
+    document.getElementById("keyMsg").textContent = err.message;
+  }
+}
+
+document.getElementById("corrGroups").addEventListener("input", (e) => {
+  e.target.dataset.dirty = "1";
+});
+
+function paintCorrState() {
+  const on = document.getElementById("corrEnabled").checked;
+  const box = document.getElementById("corrGroups");
+  const save = document.getElementById("saveCorr");
+  const reset = document.getElementById("resetCorr");
+  box.disabled = !on;
+  save.disabled = !on;
+  reset.disabled = !on;
+  box.style.opacity = on ? "1" : ".45";
+}
+
+document.getElementById("corrEnabled").addEventListener("change", async (e) => {
+  const msg = document.getElementById("corrMsg");
+  const on = e.target.checked;
+  paintCorrState();
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ correlationEnabled: on })
+    });
+    const d = await res.json();
+    msg.textContent = !d.ok
+      ? (d.error || "Could not save.")
+      : on
+        ? "On. One alert per group, and alerts name the linked markets."
+        : "Off. Every market now alerts on its own, even when they move together.";
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+function parseGroups(text) {
+  return text.split("\n")
+    .map(line => line.split(/[,\s]+/).map(x => x.trim().toUpperCase()).filter(Boolean))
+    .filter(g => g.length >= 2);
+}
+
+async function saveCorr(groups, msg) {
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ correlationGroups: groups })
+    });
+    const d = await res.json();
+    if (!d.ok) { msg.textContent = d.error || "Could not save."; return; }
+    msg.textContent = d.ignored && d.ignored.length
+      ? `Saved, but ignored ${d.ignored.length === 1 ? "this market" : "these markets"} you do not watch: ${d.ignored.join(", ")}.`
+      : "Saved. One alert per group from now on.";
+    const corr = document.getElementById("corrGroups");
+    corr.dataset.dirty = "";
+    loadSettings();
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+}
+
+document.getElementById("savePing").addEventListener("click", async () => {
+  const msg = document.getElementById("pingMsg");
+  const url = document.getElementById("pingUrl").value.trim();
+  msg.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ statusPingUrl: url })
+    });
+    const d = await res.json();
+    if (!d.ok) { msg.textContent = d.error || "Could not save."; return; }
+    msg.textContent = url ? "Saved. The app will ping it about once a minute." : "Cleared. No uptime pings will be sent.";
+    document.getElementById("pingUrl").value = "";
+    loadSettings();
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+document.getElementById("testPing").addEventListener("click", async () => {
+  const msg = document.getElementById("pingMsg");
+  msg.textContent = "Sending…";
+  try {
+    const res = await fetch("/api/status-ping/test", { method: "POST" });
+    const d = await res.json();
+    msg.textContent = d.ok
+      ? `Delivered — the service answered ${d.status}.`
+      : `Failed: ${d.error || ("HTTP " + d.status)}`;
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+document.getElementById("saveCorr").addEventListener("click", () => {
+  const msg = document.getElementById("corrMsg");
+  const groups = parseGroups(document.getElementById("corrGroups").value);
+  if (!groups.length) { msg.textContent = "Each line needs at least two markets."; return; }
+  saveCorr(groups, msg);
+});
+
+document.getElementById("resetCorr").addEventListener("click", () => {
+  saveCorr(null, document.getElementById("corrMsg"));
+});
+
+function renderTestResults(results) {
+  const el = document.getElementById("testResults");
+  el.className = "";
+  el.innerHTML = `<table><thead><tr><th>Instrument</th><th>Symbol used</th><th>Result</th><th>Price</th></tr></thead><tbody>` +
+    results.map(r => `<tr>
+      <td>${r.label}</td>
+      <td class="mono">${r.providerSymbol}</td>
+      <td>${r.ok ? '<span class="badge b-near">working</span>' : '<span class="badge b-inside">failed</span>'}</td>
+      <td class="mono">${r.ok ? r.price : (r.error || "—")}</td>
+    </tr>`).join("") + `</tbody></table>`;
+}
+
+document.getElementById("saveKey").addEventListener("click", async () => {
+  const msg = document.getElementById("keyMsg");
+  const key = document.getElementById("keyInput").value.trim();
+  if (!key) { msg.textContent = "Paste a key first."; return; }
+  try {
+    const d = await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ twelveDataKey: key })
+    });
+    document.getElementById("keyInput").value = "";
+    paintProvider(d.provider);
+    msg.textContent = "Saved. Now press Test connection.";
+    refreshWatch();
+  } catch (err) { msg.textContent = err.message; }
+});
+
+document.getElementById("testKey").addEventListener("click", async () => {
+  const msg = document.getElementById("keyMsg");
+  const el = document.getElementById("testResults");
+  msg.textContent = "Testing…";
+  el.className = "empty";
+  el.textContent = "Testing…";
+  try {
+    const d = await api("/api/settings/test", { method: "POST" });
+    paintProvider(d.provider);
+    renderTestResults(d.results || []);
+    const good = (d.results || []).filter(r => r.ok).length;
+    msg.textContent = `${good} of ${(d.results || []).length} instruments working`;
+    refreshWatch();
+  } catch (err) {
+    el.textContent = "Test failed: " + err.message;
+    msg.textContent = "Test failed";
+  }
+});
+
+document.getElementById("clearKey").addEventListener("click", async () => {
+  const msg = document.getElementById("keyMsg");
+  if (!confirm("Remove the saved key and go back to demo prices?")) return;
+  try {
+    const d = await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ twelveDataKey: "" })
+    });
+    paintProvider(d.provider);
+    document.getElementById("testResults").className = "empty";
+    document.getElementById("testResults").textContent = "Not tested yet.";
+    msg.textContent = "Key removed. Back to demo prices.";
+    refreshWatch();
+  } catch (err) { msg.textContent = err.message; }
+});
+
+/* ---------- init ---------- */
+(async () => {
+  try {
+    const info = await api("/api/instruments");
+    instruments = info.instruments || [];
+    document.getElementById("providerPill").textContent =
+      info.provider === "demo" ? "demo data" : info.provider + (info.hasKey ? " · live" : " · no key");
+  } catch {}
+  refreshWatch();
+  document.getElementById("zSymbol").addEventListener("change", updateZoneHint);
+  calcRisk();
+})();
+
+/* ---------- assistant ---------- */
+
+function paintAiConfig(s) {
+  const base = document.getElementById("aiBase");
+  const model = document.getElementById("aiModel");
+  if (base && document.activeElement !== base) base.value = s.baseUrl || "";
+  if (model && document.activeElement !== model) model.value = s.model || "";
+}
+
+async function loadAiStatus() {
+  const el = document.getElementById("aiStatus");
+  if (!el) return;
+  try {
+    const s = await api("/api/ai/status");
+    paintAiConfig(s);
+    el.textContent = s.enabled
+      ? `Ready · ${s.model} · key ${s.keyHint} (${s.source}) · ${s.knowledgeChunks} knowledge chunks indexed`
+      : "No key yet. Paste a free key below and press Save.";
+  } catch (err) {
+    el.textContent = "Status unavailable: " + err.message;
+  }
+}
+
+document.getElementById("aiSave").addEventListener("click", async () => {
+  const msg = document.getElementById("aiMsg");
+  const key = document.getElementById("aiKey").value.trim();
+  const baseUrl = document.getElementById("aiBase").value.trim();
+  const model = document.getElementById("aiModel").value.trim();
+  if (!key) {
+    msg.textContent = "Paste a key first.";
+    return;
+  }
+  msg.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/ai/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: key, baseUrl, model }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      document.getElementById("aiKey").value = "";
+      msg.textContent = `Saved. Key ${data.keyHint} stored on the server. Now press Test connection.`;
+      paintAiConfig(data);
+      const el = document.getElementById("aiStatus");
+      if (el) el.textContent = `Ready · ${data.model} · key ${data.keyHint} (${data.source}) · ${data.knowledgeChunks} knowledge chunks indexed`;
+    } else {
+      msg.textContent = data.error || "Could not save.";
+    }
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+document.getElementById("aiTest").addEventListener("click", async () => {
+  const msg = document.getElementById("aiMsg");
+  msg.textContent = "Testing…";
+  try {
+    const res = await fetch("/api/ai/test", { method: "POST" });
+    const data = await res.json();
+    msg.textContent = data.ok
+      ? `Works. ${data.model} replied “${String(data.reply).slice(0, 40)}”.`
+      : "Failed: " + data.error;
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+document.getElementById("aiClear").addEventListener("click", async () => {
+  const msg = document.getElementById("aiMsg");
+  try {
+    const res = await fetch("/api/ai/clear", { method: "POST" });
+    const data = await res.json();
+    msg.textContent = data.ok ? "Key removed." : data.error;
+    loadAiStatus();
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+async function askAi(question) {
+  const out = document.getElementById("aiAnswer");
+  out.textContent = "Thinking…";
+  try {
+    const res = await fetch("/api/ai/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    const data = await res.json();
+    out.textContent = data.ok ? data.answer : "Error: " + data.error;
+    // With the voice on, an answer is also heard — a spoken back-and-forth
+    // rather than a screen you have to look at.
+    if (data.ok && voiceOn) speak(data.answer, { interrupt: true });
+  } catch (err) {
+    out.textContent = "Error: " + err.message;
+  }
+}
+
+document.getElementById("aiSpeak").addEventListener("click", () => {
+  const answer = document.getElementById("aiAnswer");
+  const text = (answer && answer.textContent || "").trim();
+  if (!text) {
+    alert("Ask something first.");
+    return;
+  }
+  if (!voiceSupported()) {
+    alert("This browser has no speech engine.");
+    return;
+  }
+  const wasOn = voiceOn;
+  if (!wasOn) {
+    voiceOn = true;
+    updateVoiceBtn();
+  }
+  speak(text.slice(0, 600), { interrupt: true });
+  if (!wasOn) {
+    // Do not silently leave the voice switched on because of one press.
+    setTimeout(() => { voiceOn = false; updateVoiceBtn(); }, 500);
+  }
+});
+
+/* ---------- microphone ----------
+ * Speech-to-text through the browser's own recogniser, feeding the assistant
+ * that already exists. Chrome, Edge and Safari have it; Firefox does not.
+ */
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let micRecognition = null;
+let micListening = false;
+
+function micHint(text, bad) {
+  const el = document.getElementById("aiMicHint");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = bad ? "#ff9a9a" : "#9fb3c8";
+}
+
+function resetMicButton() {
+  micListening = false;
+  const btn = document.getElementById("aiMic");
+  if (btn) {
+    btn.textContent = "🎤 Speak";
+    btn.style.color = "";
+  }
+}
+
+if (!SpeechRec) {
+  const btn = document.getElementById("aiMic");
+  if (btn) {
+    btn.disabled = true;
+    btn.title = "This browser has no speech recognition. Chrome, Edge and Safari do.";
+    btn.style.opacity = 0.45;
+  }
+  micHint("Speech input needs Chrome, Edge or Safari. Typing works everywhere.", true);
+} else {
+  micHint("Tap Speak and ask a question. Microphone access will be requested once.");
+}
+
+document.getElementById("aiMic").addEventListener("click", () => {
+  if (!SpeechRec) return;
+
+  if (micListening && micRecognition) {
+    micRecognition.stop();
+    return;
+  }
+
+  const btn = document.getElementById("aiMic");
+  try {
+    micRecognition = new SpeechRec();
+    micRecognition.lang = (navigator.language || "en-US");
+    micRecognition.interimResults = true;
+    micRecognition.continuous = false;
+    micRecognition.maxAlternatives = 1;
+
+    micRecognition.onstart = () => {
+      micListening = true;
+      if (btn) {
+        btn.textContent = "■ Listening";
+        btn.style.color = "#7ff0cf";
+      }
+      micHint("Listening… speak normally, then pause.");
+    };
+
+    micRecognition.onresult = (event) => {
+      let interim = "";
+      let final = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const chunk = event.results[i][0].transcript;
+        if (event.results[i].isFinal) final += chunk;
+        else interim += chunk;
+      }
+      const field = document.getElementById("aiQuestion");
+      if (interim && field) field.value = interim;
+      if (final) {
+        if (field) field.value = final.trim();
+        micHint("Heard: " + final.trim());
+        micRecognition.stop();
+        if (final.trim()) askAi(final.trim());
+      }
+    };
+
+    micRecognition.onerror = (event) => {
+      const map = {
+        "not-allowed": "Microphone is blocked. Allow it for this site in your browser settings.",
+        "service-not-allowed": "The browser blocked speech recognition for this page.",
+        "no-speech": "I didn't catch anything. Tap Speak and try again.",
+        audio_capture: "No microphone was found.",
+        network: "The speech service could not be reached. Check the connection.",
+      };
+      micHint(map[event.error] || "Speech error: " + event.error, true);
+      resetMicButton();
+    };
+
+    micRecognition.onend = () => {
+      resetMicButton();
+    };
+
+    micRecognition.start();
+  } catch (err) {
+    micHint("Could not start listening: " + err.message, true);
+    resetMicButton();
+  }
+});
+
+document.getElementById("aiAsk").addEventListener("click", () => {
+  const q = document.getElementById("aiQuestion").value.trim();
+  if (q) askAi(q);
+});
+
+document.querySelectorAll("[data-agent]").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const out = document.getElementById("aiAnswer");
+    out.textContent = "Running agent…";
+    try {
+      const res = await fetch("/api/ai/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent: btn.dataset.agent }),
+      });
+      const data = await res.json();
+      out.textContent = data.ok ? `${data.title}\n\n${data.answer}` : "Error: " + data.error;
+    } catch (err) {
+      out.textContent = "Error: " + err.message;
+    }
+  });
+});
+
+async function loadDeliveries() {
+  const el = document.getElementById("deliveryLog");
+  if (!el) return;
+  try {
+    const data = await api("/api/delivery");
+    const rows = data.deliveries || [];
+    if (!rows.length) {
+      el.className = "empty";
+      el.textContent = "Nothing sent yet since the last restart.";
+      return;
+    }
+    el.className = "";
+    el.innerHTML = rows
+      .map(
+        (d) =>
+          `<div style="font-size:12px;margin-top:6px">${String(d.at).slice(11, 19)} · ` +
+          `<strong>${d.channel}</strong> · ${d.ok ? "ok" : "FAIL"} ${d.status || ""} ` +
+          `<span class="hint">${d.error || d.kind || ""}</span></div>`
+      )
+      .join("");
+  } catch (err) {
+    el.className = "empty";
+    el.textContent = "Could not load: " + err.message;
+  }
+}
+
+loadAiStatus();
+loadDeliveries();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  });
+}
+</script>
+</body>
+</html>

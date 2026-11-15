@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Zone Watch app icon">
+  <title>Zone Watch app icon</title>
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#1d3a58"/>
+      <stop offset="0.45" stop-color="#122a43"/>
+      <stop offset="1" stop-color="#0a1a2b"/>
+    </linearGradient>
+    <radialGradient id="plateLight" cx="0.32" cy="0.14" r="0.75">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.03"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#7ff4e6"/>
+      <stop offset="0.5" stop-color="#35dccc"/>
+      <stop offset="1" stop-color="#14a9a6"/>
+    </linearGradient>
+    <linearGradient id="lid" x1="0.15" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#2b4f74"/>
+      <stop offset="0.42" stop-color="#16304b"/>
+      <stop offset="1" stop-color="#081c2e"/>
+    </linearGradient>
+    <linearGradient id="lidB" x1="0.15" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#26476a"/>
+      <stop offset="0.4" stop-color="#132b45"/>
+      <stop offset="1" stop-color="#0a1c2e"/>
+    </linearGradient>
+    <radialGradient id="lens" cx="0.42" cy="0.36" r="0.75">
+      <stop offset="0" stop-color="#123b57"/>
+      <stop offset="0.7" stop-color="#0a2337"/>
+      <stop offset="1" stop-color="#061722"/>
+    </radialGradient>
+    <radialGradient id="glass" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="9" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="innerShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feOffset in="SourceAlpha" dx="0" dy="10" result="off"/>
+      <feGaussianBlur in="off" stdDeviation="12" result="blur"/>
+      <feComposite in="blur" in2="SourceAlpha" operator="out" result="ring"/>
+      <feFlood flood-color="#000000" flood-opacity="0.45"/>
+      <feComposite in2="ring" operator="in"/>
+    </filter>
+    <clipPath id="plateClip">
+      <rect x="0" y="0" width="1024" height="1024" rx="226"/>
+    </clipPath>
+    <clipPath id="lensClip">
+      <circle cx="512" cy="512" r="150"/>
+    </clipPath>
+    <filter id="eyeShadow" x="-20%" y="-25%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+
+  <!-- glossy rounded plate -->
+  <rect x="0" y="0" width="1024" height="1024" rx="226" fill="url(#plate)"/>
+  <g clip-path="url(#plateClip)">
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#plateLight)"/>
+    <ellipse cx="470" cy="120" rx="560" ry="330" fill="url(#glass)"/>
+    <rect x="0" y="0" width="1024" height="1024" rx="226" fill="none" stroke="#ffffff" stroke-opacity="0.22" stroke-width="5"/>
+  </g>
+
+  <g clip-path="url(#plateClip)" filter="url(#softGlow)">
+    <!-- target rings -->
+    <g fill="none" stroke="url(#cyan)" stroke-linecap="butt">
+      <circle cx="512" cy="512" r="452" stroke-width="15" opacity="0.32"/>
+      <circle cx="512" cy="512" r="408" stroke-width="24" opacity="0.85"/>
+      <circle cx="512" cy="512" r="352" stroke-width="22" opacity="0.72"/>
+      <circle cx="512" cy="512" r="300" stroke-width="20" opacity="0.62"/>
+      <circle cx="512" cy="512" r="250" stroke-width="18" opacity="0.52"/>
+      <circle cx="512" cy="512" r="204" stroke-width="16" opacity="0.42"/>
+      <circle cx="512" cy="512" r="164" stroke-width="12" opacity="0.3"/>
+    </g>
+    <!-- fine crosshair grid -->
+    <g stroke="#8ff7ea" stroke-opacity="0.2" stroke-width="3">
+      <line x1="512" y1="40" x2="512" y2="984"/>
+      <line x1="40" y1="512" x2="984" y2="512"/>
+    </g>
+  </g>
+
+  <!-- the eye: a heavy almond lid with its own shadow -->
+  <g filter="url(#eyeShadow)">
+    <path d="M150 512 Q512 238 874 512 Q512 786 150 512 Z
+             M258 512 Q512 340 766 512 Q512 684 258 512 Z"
+          fill="#0b1e30" fill-rule="evenodd"/>
+  </g>
+  <g>
+    <path d="M150 512 Q512 238 874 512 Q512 786 150 512 Z
+             M258 512 Q512 340 766 512 Q512 684 258 512 Z"
+          fill="url(#lidB)" fill-rule="evenodd"/>
+    <path d="M150 512 Q512 238 874 512 Q512 786 150 512 Z
+             M258 512 Q512 340 766 512 Q512 684 258 512 Z"
+          fill="url(#lid)" fill-rule="evenodd" opacity="0.7"/>
+    <path d="M196 498 Q512 296 828 498" fill="none" stroke="#b9e2ff" stroke-opacity="0.4" stroke-width="12" stroke-linecap="round"/>
+    <path d="M214 540 Q512 730 810 540" fill="none" stroke="#b9e2ff" stroke-opacity="0.16" stroke-width="12" stroke-linecap="round"/>
+    <path d="M150 512 Q512 786 874 512" fill="none" stroke="#000000" stroke-opacity="0.25" stroke-width="10"/>
+  </g>
+
+  <!-- lens with rings behind the candles -->
+  <circle cx="512" cy="512" r="150" fill="url(#lens)"/>
+  <g clip-path="url(#lensClip)" fill="none" stroke="url(#cyan)">
+    <circle cx="512" cy="512" r="144" stroke-width="7" opacity="0.7"/>
+    <circle cx="512" cy="512" r="120" stroke-width="6" opacity="0.55"/>
+    <circle cx="512" cy="512" r="96" stroke-width="5" opacity="0.42"/>
+    <circle cx="512" cy="512" r="72" stroke-width="5" opacity="0.3"/>
+    <circle cx="512" cy="512" r="48" stroke-width="5" opacity="0.22"/>
+  </g>
+  <circle cx="512" cy="512" r="150" fill="none" stroke="url(#cyan)" stroke-width="10"/>
+  <ellipse cx="462" cy="440" rx="74" ry="44" fill="#ffffff" opacity="0.14" transform="rotate(-24 462 440)"/>
+
+  <!-- candles -->
+  <g stroke-linecap="round">
+    <g stroke="#4ff0e0" stroke-width="7" opacity="0.95">
+      <line x1="456" y1="456" x2="456" y2="552"/>
+      <line x1="496" y1="434" x2="496" y2="534"/>
+      <line x1="536" y1="456" x2="536" y2="562"/>
+      <line x1="572" y1="442" x2="572" y2="524"/>
+    </g>
+    <g fill="#4ff0e0">
+      <rect x="447" y="488" width="18" height="40" rx="3"/>
+      <rect x="487" y="462" width="18" height="34" rx="3"/>
+      <rect x="527" y="492" width="18" height="44" rx="3"/>
+      <rect x="563" y="470" width="18" height="30" rx="3"/>
+    </g>
+  </g>
+
+  <!-- top glass highlight -->
+  <path d="M120 250 Q512 96 904 250 L904 150 Q512 0 120 150 Z" fill="#ffffff" opacity="0.07"/>
+</svg>
