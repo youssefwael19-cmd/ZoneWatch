@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Runtime state the app writes next to its code. On Fly these paths are
+# symlinked onto the volume (see the Dockerfile), so they hold live settings,
+# positions and credentials and must never be committed.
+settings.json
+zones.json
+alerts.json
+signals.json
+recap.json
+heartbeat.json
+state.json
+lab.json
+learning.json
+health.json
+brain.json
+journal.json
+executor.json
+digest.json
+paperreview.json
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Logs and OS clutter
+*.log
+.DS_Store
+Thumbs.db
