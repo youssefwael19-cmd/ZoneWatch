@@ -1,0 +1,27 @@
+# Keep the build context small, and keep the machine that builds the image from
+# baking its own creds, runtime state and platform-specific node_modules into it.
+.git
+node_modules
+*.log
+.env
+.env.*
+.DS_Store
+
+# Runtime state lives on the Fly volume, never in the image. Without this a
+# local settings.json holding the broker token would be copied in by `COPY . .`
+# and stay in the layer history even after the symlink replaces the file.
+settings.json
+zones.json
+alerts.json
+signals.json
+recap.json
+heartbeat.json
+state.json
+lab.json
+learning.json
+health.json
+brain.json
+journal.json
+executor.json
+digest.json
+paperreview.json
