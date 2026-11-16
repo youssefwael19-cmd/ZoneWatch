@@ -28,6 +28,19 @@ function weeklyOpen(now = new Date()) {
   }
 }
 
+/**
+ * When the current trading week opened (ms), i.e. the most recent Sunday
+ * 22:00 UTC. Lets the feed watchdog treat the weekend's silence as expected
+ * rather than as minutes of a dead feed.
+ */
+function weeklyOpenedAt(now = new Date()) {
+  const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const sinceSunday = now.getUTCDay(); // 0 = Sunday
+  const sunday = dayStart - sinceSunday * 86400000;
+  const at = sunday + 22 * 60 * 60000;
+  return at <= now.getTime() ? at : at - 7 * 86400000;
+}
+
 function ageMinutes(lastMarketUpdate, now = Date.now()) {
   if (!lastMarketUpdate) return null;
   const t = new Date(lastMarketUpdate).getTime();
@@ -55,4 +68,4 @@ function check({ lastMarketUpdate, now = Date.now(), maxStaleMinutes = MAX_STALE
   return { allowed: true, reason: null, ageMinutes: age };
 }
 
-module.exports = { check, weeklyOpen, ageMinutes, MAX_STALE_MINUTES };
+module.exports = { check, weeklyOpen, weeklyOpenedAt, ageMinutes, MAX_STALE_MINUTES };

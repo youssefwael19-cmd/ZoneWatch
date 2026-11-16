@@ -103,6 +103,43 @@ function getSessionStates(now = new Date()) {
   }));
 }
 
+/**
+ * Instruments that have their own exchange hours instead of the 24/5 week.
+ * Anything absent here (gold, the FX pairs) is treated as an FX-style market.
+ */
+const INSTRUMENT_SESSIONS = { NASDAQ: "NASDAQ" };
+
+function instrumentSession(symbol) {
+  return INSTRUMENT_SESSIONS[symbol] || null;
+}
+
+/**
+ * Is this instrument's own market trading right now?
+ *
+ * NASDAQ's cash session ends in the afternoon while FX and gold keep going,
+ * so the weekly clock alone must not decide whether its feed is late.
+ */
+function instrumentMarketOpen(symbol, now = new Date()) {
+  const name = instrumentSession(symbol);
+  if (!name) return marketState(now);
+  const def = sessionDefs(now).find((d) => d.name === name);
+  return def ? isOpen(def, now) : marketState(now);
+}
+
+/**
+ * When the current session for this instrument opened (ms), or null when its
+ * market is shut. Used to reset feed-age counts at the open: a price frozen
+ * overnight is not "silent for seventeen hours" a minute after the bell.
+ */
+function sessionOpenedAt(symbol, now = new Date()) {
+  const name = instrumentSession(symbol);
+  if (!name) return null;
+  const def = sessionDefs(now).find((d) => d.name === name);
+  if (!def || !isOpen(def, now)) return null;
+  const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return dayStart + def.open * 60000;
+}
+
 function sessionKey(name, type, now) {
   // key per day+event so each open/close fires once
   const y = now.getUTCFullYear();
@@ -214,4 +251,7 @@ module.exports = {
   marketState,
   sessionDefs,
   isOpen,
+  instrumentSession,
+  instrumentMarketOpen,
+  sessionOpenedAt,
 };
