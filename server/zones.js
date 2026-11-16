@@ -14,6 +14,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeJson: atomicWriteJson } = require("./atomicWrite");
 const crypto = require("crypto");
 
 const ZONES_PATH = path.join(__dirname, "..", "zones.json");
@@ -31,7 +32,7 @@ function readJson(file, fallback) {
 }
 
 function writeJson(file, value) {
-  fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf-8");
+  atomicWriteJson(file, value, 2);
 }
 
 function loadZones() {

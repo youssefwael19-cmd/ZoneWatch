@@ -8,6 +8,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeJson } = require("./atomicWrite");
 
 const FILE = path.join(__dirname, "..", "state.json");
 
@@ -24,7 +25,7 @@ function load() {
 
 function save(state) {
   try {
-    fs.writeFileSync(FILE, JSON.stringify(state), "utf-8");
+    writeJson(FILE, state, 0);
   } catch {}
 }
 

@@ -22,6 +22,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeJson } = require("./atomicWrite");
 
 const candlesMod = require("./candles");
 const regime = require("./regime");
@@ -80,7 +81,7 @@ function readBrain() {
 
 function writeBrain(brain) {
   try {
-    fs.writeFileSync(FILE, JSON.stringify(brain, null, 2), "utf-8");
+    writeJson(FILE, brain, 2);
   } catch (err) {
     state.error = err.message;
   }

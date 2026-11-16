@@ -33,6 +33,8 @@ const executor = require("./executor");
 const tvMod = require("./tradingview");
 const costsMod = require("./costs");
 const ctraderBroker = require("./brokers/ctrader");
+const { writeJson } = require("./atomicWrite");
+const auth = require("./auth");
 const digestMod = require("./digest");
 const paperReviewMod = require("./paperreview");
 const ivbSent = new Set();
@@ -52,6 +54,105 @@ const APPROACH_COOLDOWN_MS = 30 * 60 * 1000;
 
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
+
+/* ------------------------------------------------------------------ *
+ * Access
+ *
+ * One password, one session cookie. Everything below this middleware needs it
+ * except the two pages that hand it out, the TradingView webhook (which carries
+ * its own token) and the health probe.
+ * ------------------------------------------------------------------ */
+
+app.get("/api/auth/status", (req, res) => {
+  const record = settings.getAuth();
+  res.json({ ok: true, configured: Boolean(record), signedIn: auth.isSignedIn(req, record) });
+});
+
+app.post("/api/auth/setup", (req, res) => {
+  if (settings.getAuth()) {
+    res.status(400).json({ ok: false, error: "a password is already set" });
+    return;
+  }
+  const password = String((req.body && req.body.password) || "");
+  if (password.length < auth.MIN_PASSWORD) {
+    res.status(400).json({ ok: false, error: `use at least ${auth.MIN_PASSWORD} characters` });
+    return;
+  }
+  const record = settings.setAuth(auth.createAuth(password));
+  res.setHeader("set-cookie", auth.sessionCookie(req, record));
+  res.json({ ok: true });
+});
+
+app.post("/api/auth/login", (req, res) => {
+  if (!auth.allowAttempt(req)) {
+    res.status(429).json({ ok: false, error: "too many attempts; wait a few minutes" });
+    return;
+  }
+  const record = settings.getAuth();
+  const password = String((req.body && req.body.password) || "");
+  if (!auth.verifyPassword(password, record)) {
+    auth.noteFailure(req);
+    res.status(401).json({ ok: false, error: "that password is not right" });
+    return;
+  }
+  auth.noteSuccess(req);
+  res.setHeader("set-cookie", auth.sessionCookie(req, record));
+  res.json({ ok: true });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  res.setHeader("set-cookie", auth.clearCookie(req));
+  res.json({ ok: true });
+});
+
+app.get("/login", (req, res) => {
+  if (auth.isSignedIn(req, settings.getAuth())) {
+    res.redirect("/");
+    return;
+  }
+  res.type("html").send(auth.page({ mode: settings.getAuth() ? "login" : "setup" }));
+});
+
+app.get("/setup", (req, res) => {
+  if (settings.getAuth()) {
+    res.redirect("/login");
+    return;
+  }
+  res.type("html").send(auth.page({ mode: "setup" }));
+});
+
+const PUBLIC_PATHS = new Set([
+  "/login",
+  "/setup",
+  "/healthz",
+  "/api/auth/status",
+  "/api/auth/setup",
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/tv/webhook",
+]);
+
+app.use((req, res, next) => {
+  if (PUBLIC_PATHS.has(req.path)) return next();
+  const record = settings.getAuth();
+  if (!record) {
+    // Nothing is protected until a password exists, so send the browser to the
+    // one page that creates it rather than failing every request.
+    if (req.path.startsWith("/api/")) {
+      res.status(401).json({ ok: false, error: "set a dashboard password at /setup first" });
+      return;
+    }
+    res.redirect("/setup");
+    return;
+  }
+  if (auth.isSignedIn(req, record)) return next();
+  if (req.path.startsWith("/api/")) {
+    res.status(401).json({ ok: false, error: "sign in first" });
+    return;
+  }
+  res.redirect("/login");
+});
+
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 function fullInfo() {
@@ -186,7 +287,7 @@ function readHeartbeat() {
 
 function writeHeartbeat() {
   try {
-    fs.writeFileSync(HEARTBEAT_FILE, JSON.stringify({ at: Date.now(), iso: new Date().toISOString() }), "utf-8");
+    writeJson(HEARTBEAT_FILE, { at: Date.now(), iso: new Date().toISOString() }, 0);
   } catch {}
 }
 
@@ -1916,7 +2017,7 @@ app.post("/api/save-log", (req, res) => {
   const jsonText = req.body.jsonText;
   if (!jsonText) return res.status(400).json({ ok: false, error: "No JSON text provided" });
   try {
-    fs.writeFileSync(path.join(WORKSPACE, "trades.json"), jsonText, "utf-8");
+    writeJson(path.join(WORKSPACE, "trades.json"), JSON.parse(jsonText), 2);
     res.json({ ok: true, message: "Saved trades.json" });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });

@@ -8,6 +8,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeJson, realTarget } = require("./atomicWrite");
 
 const FILE = path.join(__dirname, "..", "settings.json");
 
@@ -22,33 +23,37 @@ function read() {
   }
 }
 
-/**
- * Where the bytes really live. On Fly this file is a symlink onto the volume, so
- * writing through the link is fine but *renaming* onto it would replace the link
- * with a regular file and quietly stop persisting credentials across deploys.
- */
-function realTarget(file) {
+function write(obj) {
+  // This file holds the broker credentials, so it is written through the shared
+  // atomic writer and keeps its 0600 permissions.
+  writeJson(FILE, obj, 2);
   try {
-    return fs.realpathSync(file);
-  } catch {
-    try {
-      return path.resolve(path.dirname(file), fs.readlinkSync(file));
-    } catch {
-      return file;
-    }
-  }
+    fs.chmodSync(realTarget(FILE), 0o600);
+  } catch {}
 }
 
-function write(obj) {
-  const target = realTarget(FILE);
-  // Write beside the file and rename: this file holds the broker credentials,
-  // and a machine stopped mid-write used to leave a truncated settings.json.
-  const tmp = `${target}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), "utf-8");
-  try {
-    fs.chmodSync(tmp, 0o600);
-  } catch {}
-  fs.renameSync(tmp, target);
+/**
+ * The dashboard password. Stored as a scrypt hash plus the cookie-signing
+ * secret; the password itself is never written anywhere.
+ */
+function getAuth() {
+  const stored = read();
+  const auth = stored.auth;
+  if (!auth || typeof auth !== "object" || !auth.hash || !auth.salt) return null;
+  return auth;
+}
+
+function setAuth(auth) {
+  const stored = read();
+  stored.auth = auth;
+  write(stored);
+  return auth;
+}
+
+function clearAuth() {
+  const stored = read();
+  delete stored.auth;
+  write(stored);
 }
 
 function getKey() {
@@ -679,6 +684,9 @@ module.exports = {
   getTvHint,
   getDirectHint,
   setBrainGate,
+  getAuth,
+  setAuth,
+  clearAuth,
   getKey,
   setKey,
   clearKey,

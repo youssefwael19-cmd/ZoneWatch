@@ -28,6 +28,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeJson } = require("./atomicWrite");
 const settings = require("./settings");
 const costsMod = require("./costs");
 const market = require("./market");
@@ -82,7 +83,7 @@ function fresh() {
 
 function writeState(state) {
   try {
-    fs.writeFileSync(FILE, JSON.stringify(state, null, 1), "utf-8");
+    writeJson(FILE, state, 1);
   } catch (err) {
     state.lastError = `could not save executor state: ${err.message}`;
   }

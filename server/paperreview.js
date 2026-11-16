@@ -14,6 +14,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeJson } = require("./atomicWrite");
 
 const FILE = path.join(__dirname, "..", "paperreview.json");
 const MIN_TRADES_TO_REVIEW = 5;
@@ -32,7 +33,7 @@ function readState() {
 
 function writeState(state) {
   try {
-    fs.writeFileSync(FILE, JSON.stringify(state, null, 2), "utf-8");
+    writeJson(FILE, state, 2);
   } catch {}
 }
 

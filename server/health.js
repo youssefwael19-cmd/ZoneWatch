@@ -17,6 +17,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeJson } = require("./atomicWrite");
 
 const FILE = path.join(__dirname, "..", "health.json");
 const REALERT_MS = 30 * 60 * 1000;
@@ -35,7 +36,7 @@ function load() {
 
 function save(state) {
   try {
-    fs.writeFileSync(FILE, JSON.stringify(state, null, 2), "utf-8");
+    writeJson(FILE, state, 2);
   } catch {}
 }
 

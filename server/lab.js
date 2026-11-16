@@ -18,6 +18,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeJson } = require("./atomicWrite");
 
 const candlesMod = require("./candles");
 const autozones = require("./autozones");
@@ -61,7 +62,7 @@ function readLab() {
 
 function writeLab(lab) {
   try {
-    fs.writeFileSync(LAB_FILE, JSON.stringify(lab, null, 2), "utf-8");
+    writeJson(LAB_FILE, lab, 2);
   } catch (err) {
     state.error = err.message;
   }

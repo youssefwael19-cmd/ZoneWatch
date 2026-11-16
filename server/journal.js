@@ -19,6 +19,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeJson } = require("./atomicWrite");
 
 const FILE = path.join(__dirname, "..", "journal.json");
 const MAX_ENTRIES = 3000;
@@ -37,7 +38,7 @@ function readJournal() {
 function writeJournal(journal) {
   try {
     const entries = journal.entries.slice(-MAX_ENTRIES);
-    fs.writeFileSync(FILE, JSON.stringify({ entries }, null, 1), "utf-8");
+    writeJson(FILE, { entries }, 1);
   } catch {
     // A failed journal write must never stop an alert from going out.
   }

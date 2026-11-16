@@ -12,6 +12,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeJson } = require("./atomicWrite");
 
 const FILE = path.join(__dirname, "..", "signals.json");
 const MAX_HISTORY = 200;
@@ -37,7 +38,7 @@ function save(state) {
     history: state.history.slice(-MAX_HISTORY),
   };
   try {
-    fs.writeFileSync(FILE, JSON.stringify(trimmed, null, 2), "utf-8");
+    writeJson(FILE, trimmed, 2);
   } catch {}
 }
 

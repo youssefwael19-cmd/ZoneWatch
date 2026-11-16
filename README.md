@@ -443,6 +443,26 @@ off lets any alert through and is labelled *gate bypassed* in the status panel.
 Caveat worth stating plainly: an alert is only as good as the strategy behind
 it, and TradingView's own alert tester sends a real order.
 
+## The dashboard password
+
+The dashboard can start auto-trading, switch it to a live broker and fire the
+kill switch, so it is not open to whoever finds the URL. The first time it is
+opened it asks you to choose a password (at least 8 characters); after that the
+browser keeps a signed, httpOnly session cookie for 60 days, so the phone signs
+in once and stays signed in. The password is stored as a scrypt hash, never as
+text, and the cookie is signed with a secret generated on the server, so a forged
+cookie is refused.
+
+What stays public: the sign-in pages themselves, `/healthz`, and
+`/api/tv/webhook`, which carries its own token and cannot work behind a cookie.
+Everything else — every zone, signal, setting and trading endpoint — answers
+`401` without the session.
+
+To reset a forgotten password, remove the `auth` object from `settings.json` on
+the server (`fly ssh console` → edit `/app/data/settings.json`) and reload: the
+app offers the setup page again. Signing out is `POST /api/auth/logout`; the
+login page also explains this.
+
 ## Running it 24/5
 
 The server watches and posts to Discord whether or not a browser is open — but
