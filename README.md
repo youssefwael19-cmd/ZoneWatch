@@ -463,6 +463,33 @@ the server (`fly ssh console` → edit `/app/data/settings.json`) and reload: th
 app offers the setup page again. Signing out is `POST /api/auth/logout`; the
 login page also explains this.
 
+### When the host keeps stopping it
+
+Fly's trial plan stops a machine **five minutes after it starts**. The log says so
+outright (`Trial machine stopping. To run for longer than 5m0s, add a credit
+card`), and nothing in the app can prevent it: `auto_stop_machines = false` stops
+Fly parking an idle machine, it does not lift the trial limit. A machine that
+keeps being stopped never accumulates zone-touch counts or signal history, so
+signals look rarer than they are.
+
+Two honest fixes, in order of effort:
+
+1. **Add a payment method** at <https://fly.io/trial>. A `shared-cpu-1x` with 1GB
+   and a 1GB volume is a few dollars a month and the machine then runs
+   continuously.
+2. **Run it anywhere with Docker.** `deploy/docker-compose.yml` builds this
+   Dockerfile, keeps `/app/data` on a named volume (so the settings, credentials
+   and dashboard password survive), restarts unless stopped, and health-checks
+   `/healthz`:
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml up -d
+   ```
+
+   Then point the phone at `http://<host>:8080`. Use a host that does not idle
+   containers out — a free tier that sleeps on inactivity has the same problem as
+   the trial, just with a longer timer.
+
 ## Running it 24/5
 
 The server watches and posts to Discord whether or not a browser is open — but
