@@ -1002,7 +1002,14 @@
 
 <script>
 const api = async (p, opts) => {
-  const res = await fetch(p, opts);
+  // Without this header express.json() leaves req.body empty and every POST
+  // looks like "you sent nothing" — which is exactly how a pasted API key
+  // turned into "paste the key first".
+  const options = opts ? { ...opts } : {};
+  if (options.body !== undefined && options.body !== null) {
+    options.headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  }
+  const res = await fetch(p, options);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
   return data;
