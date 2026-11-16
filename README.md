@@ -336,6 +336,8 @@ no extra dependency. Choose **cTrader** in the Direct broker list and fill in:
   (the app does not host the callback); you only need the code once.
 - **refresh token** — exchange the one-time code at
   `https://openapi.ctrader.com/apps/token` (`grant_type=authorization_code`).
+  Ask for `scope=trading` on the consent URL, not `accounts`: the latter is
+  view-only and a token carrying it cannot place an order.
   Access tokens expire after about 30 days, so store the refresh token and the
   adapter renews the access token by itself; that is what keeps it running
   unattended.

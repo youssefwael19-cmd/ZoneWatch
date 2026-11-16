@@ -55,7 +55,8 @@ function consentUrl({ clientId, redirectUri }) {
   const query = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
-    scope: "accounts",
+    // "accounts" is view-only; trading operations need "trading".
+    scope: "trading",
     product: "web",
   });
   return `${CONSENT_URL}?${query.toString()}`;
