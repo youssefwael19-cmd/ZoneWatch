@@ -12,7 +12,26 @@ running terminal. This bridge is the smallest thing that closes that gap.
 - Python 3.9+ from python.org
 - In MT5: Tools → Options → Expert Advisors → **Allow algorithmic trading**
 
-## Setup
+## The one-command path (recommended)
+
+On a Windows VPS — so nothing has to stay on at home, and the app keeps trading
+while your laptop is shut — or on a PC you leave running, open PowerShell as
+Administrator in this folder and run:
+
+```powershell
+.\setup-windows.ps1 -Login 12345678 -Password 'mt5-password' -Server Exness-MT5Trial8 -EnableAutoLogon
+```
+
+That is the whole setup: Python, the MetaTrader5 package, the Exness terminal,
+the bridge and its config, a startup task that restarts it if it dies, the
+firewall rule, and the URL and secret to paste into the app. Add `-Live` only
+when you mean to trade real money, and expect the first run to take a few
+minutes while the installers download.
+
+The manual steps below are what that script does, kept for reference and for the
+case where something has to be done by hand.
+
+## Setup by hand
 
 ```bat
 pip install MetaTrader5
@@ -37,12 +56,24 @@ Then in Zone Watch → Risk → **Auto-trading**:
 | Bridge secret | the same `ZW_BRIDGE_TOKEN` |
 
 Press **Test bridge**. It should answer with the account balance, currency and
-`demo: true`.
+`demo: true`. **Read Exness account** then pulls the live balance, equity and
+the broker's own open positions into the panel, and the app re-reads them every
+five minutes while bridge mode is on so position sizing uses the real equity.
+
+**Read live spreads** uses `GET /spreads?symbols=XAUUSDm,USTECm,...` and returns,
+per broker symbol, the current spread in points and in price units. The app uses
+that number for the cost of every order and for the break-even table, because
+only the broker knows its spread has widened for the news. The reading is treated
+as stale after 15 minutes and the app falls back to its own table.
 
 ## Letting the app reach the bridge
 
-If Zone Watch is on Fly (the internet) and the bridge is on your PC at home, the
-app cannot see a local address. Options, simplest first:
+On a VPS with a public IP there is nothing to do: the script opens the port and
+prints `http://<vps-ip>:8787` for the Bridge URL. Keep the secret long — it is the
+only thing guarding the account, so don't reuse it and don't paste it in chat.
+
+If the bridge is on a PC at home instead, the app cannot see a local address.
+Options, simplest first:
 
 1. **Cloudflare Tunnel** — `cloudflared tunnel --url http://localhost:8787` gives
    you an HTTPS URL with no port forwarding. Paste that into Bridge URL.

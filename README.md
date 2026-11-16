@@ -237,6 +237,198 @@ At 1:2 you need 33.4% just to break even, so 41% is positive on paper — but th
 sample is small enough that the true figure could plausibly sit anywhere from
 roughly 33% to 49%. Treat it as promising, not proven, and do not size up on it.
 
+## Auto-trading
+
+Off by default, and paper mode until you change it. Signals the app would post
+can be placed as orders, with three limits that can only ever refuse a trade:
+0.5% of equity risked per trade (sized from the real stop distance), a hard
+daily loss cap, and one position per market. The kill switch survives restarts.
+
+Every order is charged the broker's cut: half the spread on entry, the other
+half plus commission and swap on exit. Spreads come from the broker itself once
+the bridge is connected — "Read live spreads" pulls the account's current spread
+for each market, and it is refreshed with the account every few minutes. Until
+then a table is used (gold 0.30, Nasdaq 1.5 points, majors about 1.2 pips), and
+`costs.spreads` overrides either. Commission and swap are set in the panel.
+Paper results are net of costs, and the status line answers the only question
+that matters for a small edge: whether today's winners still paid for every
+trade taken, broker included.
+
+The break-even panel turns that into a decision per market. Because spread and
+risk both scale with lot size, the two cancel: cost in R is just the spread over
+the stop distance. So the table shows what share of your risk the spread eats,
+the win rate needed to finish ahead at the app's 1:2 target, and the expectancy
+at a 41.1% win rate — measured stops come from your own closed signals, then the
+signals on the board, and an assumed stop is labelled as one.
+
+### Exness, through the MT5 bridge
+
+Exness accounts are MetaTrader 4/5 accounts, and MetaTrader has no public REST
+API, so the broker is reached through the small service in `bridge/` that runs
+next to a logged-in MT5 terminal. See `bridge/README.md` for setup.
+
+### Running 24/5 without your PC
+
+Two machines are involved, and only one of them has to be yours. The app runs on
+Fly with `auto_stop_machines = false`, so it is already always on and polling.
+The bridge is the part that needs Windows, because the MetaTrader5 Python
+package only talks to a terminal on the same Windows machine.
+
+So the bridge goes on a **cheap Windows VPS** — a few dollars a month, stays up
+whether your laptop is open or not, and gives the app a fixed address. Setup is
+one command in PowerShell (as Administrator) inside the bridge folder:
+
+```powershell
+.\setup-windows.ps1 -Login 12345678 -Password 'mt5-password' -Server Exness-MT5Trial8 -EnableAutoLogon
+```
+
+It installs Python and the MetaTrader5 package, installs the Exness terminal,
+copies the bridge, writes its config with a generated secret, locks that file to
+your user, registers a startup task that restarts the bridge if it dies, opens
+the firewall port, then prints the Bridge URL and secret to paste into the app.
+`-EnableAutoLogon` makes the VPS sign itself in after a reboot; without it the
+task starts at your next sign-in.
+
+Practise on the demo exactly like that. When you mean it, add `-Live`, which is
+the only thing that lets the bridge touch a real account.
+
+Once the bridge is configured, **Risk → Auto-trading → Read Exness account**
+pulls the real login, server, currency, balance, equity and the broker's own
+open positions. The account is re-read every five minutes while bridge mode is
+on, and position sizing uses that equity rather than the typed-in balance. A
+reading older than fifteen minutes is ignored, so a dead bridge cannot quietly
+size trades off a stale number.
+
+The broker's positions are shown for comparison only. The app keeps its own
+ledger of what it opened: two owners of one position is how a daily loss cap
+stops meaning anything.
+
+### Direct broker API — no machine of yours
+
+A broker with a real HTTP API removes the machine entirely: the app places the
+order from Fly, the broker holds the stop and the target, and nothing has to stay
+switched on. Set **Mode → Direct broker API**, fill in the account ID and token,
+save, then press **Test broker API** and **Read account**.
+
+OANDA v20 is the implementation in `server/brokers/oanda.js`:
+
+- **Practice and live are different hosts**, so a practice token cannot reach a
+  live account. The token is stored server-side and never sent back to the page.
+- **Sizes are units, not lots.** Gold is 100 oz per lot, FX 100,000 units, the
+  index 1 unit per lot. A size below the broker's minimum is **refused with a
+  reason**, never rounded up, because rounding up would multiply the risk the
+  limit exists to cap.
+- **The broker owns the exits.** Stops and targets are attached to the order, so
+  they work even if this process dies. The app stops managing exits itself and
+  instead reconciles: when the broker no longer holds a position, the app settles
+  it at the current price, marks whether it won or lost, charges the exit cost,
+  and notes that the broker closed it.
+- **Equity, balance and spreads come from the broker** and feed sizing, the cost
+  model and the break-even table, the same way the bridge readings do.
+
+**cTrader** (Pepperstone, IC Markets, and most other cTrader brokers) is the
+second implementation, in `server/brokers/ctrader.js`. It speaks the Open API
+over a WebSocket on port 5036 using JSON, so there is no protobuf toolchain and
+no extra dependency. Choose **cTrader** in the Direct broker list and fill in:
+
+- **client ID** and **client secret** — from an application you register at
+  <https://openapi.ctrader.com>. Set its redirect URL to anything you control
+  (the app does not host the callback); you only need the code once.
+- **refresh token** — exchange the one-time code at
+  `https://openapi.ctrader.com/apps/token` (`grant_type=authorization_code`).
+  Access tokens expire after about 30 days, so store the refresh token and the
+  adapter renews the access token by itself; that is what keeps it running
+  unattended.
+- **account ID** — the numeric `ctidTraderAccountId`, not the login shown in the
+  platform. The adapter lists your accounts and picks the configured one.
+
+The whole OAuth setup is one guided command, and you only copy one thing — the
+code cTrader puts on your redirect URL:
+
+```bash
+node scripts/ctrader-auth.js --client-id <id> --client-secret <secret> \
+  --redirect-uri <the app's redirect URL>
+```
+
+It prints the consent URL, takes the redirect URL or the bare code back (paste
+it, or pipe it: `echo "<code>" | node scripts/ctrader-auth.js …`), exchanges it,
+then finds your `ctidTraderAccountId` over the trading socket — the token
+endpoint never returns it — by trying the demo host and then the live one,
+writes the client ID, secret, refresh token, account and environment into
+`settings.json`, and finally reads the account back to prove the connection,
+showing the broker, login, balance and equity. If discovery cannot reach cTrader
+it still saves the tokens and tells you to enter the account id in the panel.
+
+`--account <id>` and `--environment practice|live` skip discovery when you
+already know them, `--print-only` writes nothing, and the client ID, secret and
+redirect URL can also come from `CTRADER_CLIENT_ID`, `CTRADER_CLIENT_SECRET` and
+`CTRADER_REDIRECT_URI`. It is a one-time step: the app renews the access token
+itself from then on.
+
+Practice and live are separate hosts (`demo.` and `live.`), so a demo token
+cannot reach a live account. cTrader allows one trading connection per account:
+stop the desktop platform's connection, or the order requests will be refused.
+Sizes are converted to the broker's own volume units using the symbol metadata
+it reports, and a size below the minimum volume is refused rather than rounded
+up.
+
+Adding another broker is a new file in `server/brokers/` plus one line in its
+registry — the executor does not know which one is configured. Worth knowing
+before choosing: OANDA's v20 API is not offered to its Global Markets division,
+and Exness publishes its API only for Vietnam and Thailand, which is why cTrader
+exists here as well.
+
+### On the phone
+
+The dashboard is the phone client; there is no separate app to install from a
+store. Open the Fly URL in Safari or Chrome and use **Add to Home Screen**. It
+runs standalone (its own icon, no browser chrome), remembers nothing locally
+because the server owns all the state, and every screen works — watch, zones,
+news, risk, auto-trading, the assistant and its microphone (which needs the
+HTTPS address Fly already gives you).
+
+Wide tables scroll sideways inside their panel rather than pushing the page, and
+form fields use a 16px font so iOS doesn't zoom in when you tap one. The
+auto-trading panel is the important one on a phone: it is where you can see an
+open position, hit the kill switch, and read whether today's winners paid the
+broker.
+
+### TradingView alerts
+
+TradingView has **no public API for placing orders** — its REST API is a
+broker-integration product, and its support pages say there is no data or
+execution API for individual traders. What it does have is an alert that POSTs
+to a URL you own, so that is the integration: TradingView decides, Zone Watch
+receives, the executor places.
+
+1. Risk → Auto-trading → tick **TradingView alerts**, set a **webhook secret**,
+   save. The panel shows the URL to paste into the alert.
+2. In TradingView, create an alert with *Webhook URL* set to
+   `https://your-host/api/tv/webhook?token=<your secret>`.
+3. Send either JSON in the alert message:
+
+```json
+{"symbol":"XAUUSD","action":"buy","entry":4010,"stop":3990,"target":4050}
+```
+
+   or one line, which is easier to write by hand:
+
+```
+BUY XAUUSD entry=4010 stop=3990 target=4050
+```
+
+Symbols are normalised, so `OANDA:XAUUSD`, `^NDX`, `NAS100` and the Exness
+`XAUUSDm`/`EURUSDm` forms all resolve to the right market. A malformed alert is
+rejected with the reason (`400`), a bad token gets `401`, and a refused order
+gets `422` with the executor's reason.
+
+**Require the brain gate** is on by default: an alert is only placed if the
+brain has a proven rule for that market in its current condition. Turning it
+off lets any alert through and is labelled *gate bypassed* in the status panel.
+
+Caveat worth stating plainly: an alert is only as good as the strategy behind
+it, and TradingView's own alert tester sends a real order.
+
 ## Running it 24/5
 
 The server watches and posts to Discord whether or not a browser is open — but
