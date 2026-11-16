@@ -33,7 +33,9 @@ Safety properties, on purpose:
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 try:
     import MetaTrader5 as mt5
@@ -98,6 +100,35 @@ def open_positions():
         }
         for p in positions
     ]
+
+def spreads_for(symbols):
+    """Current spread per broker symbol, in price units and in points.
+
+    This is the number the account is actually being charged right now, which is
+    why the app prefers it to its own spread table: gold spread triples around a
+    news release and the table would never know.
+    """
+    out = {}
+    for raw in symbols[:50]:
+        name = raw.strip()
+        if not name:
+            continue
+        if not mt5.symbol_select(name, True):
+            out[name] = {"error": "not available on this account"}
+            continue
+        info = mt5.symbol_info(name)
+        if info is None:
+            out[name] = {"error": "no symbol info"}
+            continue
+        out[name] = {
+            "spread": round(info.spread * info.point, info.digits),
+            "points": info.spread,
+            "point": info.point,
+            "digits": info.digits,
+            "contractSize": getattr(info, "trade_contract_size", None),
+        }
+    return out
+
 
 def place_order(body):
     symbol = str(body.get("symbol", "")).strip()
@@ -198,6 +229,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/positions"):
             self._json(200, {"ok": True, "positions": open_positions()})
+            return
+        if self.path.startswith("/spreads"):
+            params = parse_qs(urlparse(self.path).query)
+            names = [n for n in (params.get("symbols", [""])[0]).split(",") if n.strip()]
+            if not names:
+                self._json(400, {"ok": False, "error": "symbols query parameter required"})
+                return
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "spreads": spreads_for(names),
+                },
+            )
             return
         self._json(404, {"ok": False, "error": "unknown path"})
 
