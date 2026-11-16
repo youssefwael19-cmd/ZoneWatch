@@ -246,6 +246,19 @@
     .panel{padding:14px}
     .proxrow{grid-template-columns:58px 48px 1fr; font-size:12px}
     .proxrow .badge{display:none}
+    /* Phones: wide tables scroll inside their panel instead of stretching the
+       page sideways, and 16px inputs stop iOS zooming when one is focused. */
+    input,select,textarea{font-size:16px}
+    table{display:block; width:100%; overflow-x:auto; white-space:nowrap}
+    th,td{padding:8px 7px}
+    /* The spread column is the least useful one on a phone (cost already
+       contains it), so hiding it keeps the decision columns on screen. */
+    #beTable table{white-space:normal}
+    #beTable .be-spread,#beTable .be-stop{display:none}
+    #beTable th:first-child,#beTable td:first-child,#beTable td:nth-child(4){white-space:nowrap}
+    #beTable th,#beTable td{font-size:11px;padding:7px 4px}
+    nav button{min-height:38px}
+    .panel{overflow-wrap:anywhere}
   }
 </style>
 </head>
@@ -432,7 +445,8 @@
       <h2>Auto-trading · Exness via MetaTrader 5</h2>
       <p class="hint" style="margin:-6px 0 12px">
         Places the app's own signals as orders. It starts on a <strong>demo</strong>: paper mode needs nothing but a balance figure,
-        and bridge mode talks to MetaTrader 5 through the small service in <code>bridge/</code>. It will only ever trade a market the
+        bridge mode talks to MetaTrader 5 through the small service in <code>bridge/</code>, and direct mode calls a broker's own API
+        (OANDA) from the cloud so no machine has to stay on. It will only ever trade a market the
         brain gate has approved, never more than one position at a time per market, and it stops for the day once the loss limit is hit.
       </p>
 
@@ -443,11 +457,18 @@
         <div><label>Mode</label><select id="exMode">
           <option value="paper">Paper (nothing leaves the app)</option>
           <option value="bridge">Bridge (MetaTrader 5)</option>
+          <option value="direct">Direct broker API (OANDA)</option>
         </select></div>
         <div><label>Risk per trade (%)</label><input id="exRisk" type="number" step="0.1" min="0.01" max="3" /></div>
         <div><label>Daily loss limit (%)</label><input id="exDayLoss" type="number" step="0.1" min="0.5" max="10" /></div>
         <div><label>Max open positions</label><input id="exMax" type="number" step="1" min="1" max="5" /></div>
         <div><label>Account balance (paper)</label><input id="exBal" type="number" step="any" min="1" /></div>
+        <div><label>Commission per lot (round turn)</label><input id="exComm" type="number" step="0.1" min="0" placeholder="0 on standard accounts" /></div>
+        <div><label>Swap per lot per night</label><input id="exSwap" type="number" step="0.01" placeholder="0 unless you hold overnight" /></div>
+      </div>
+      <div class="hint" style="margin-top:4px">
+        Spread is modelled per market (gold 0.30, Nasdaq 1.5 points, majors ~1.2 pips) and charged on entry and exit, so paper results are net of the
+        broker rather than flattered by free trading.
       </div>
 
       <div class="fields" style="margin-top:12px">
@@ -455,9 +476,50 @@
         <div><label>Bridge secret</label><input id="exSecret" placeholder="unchanged" autocomplete="off" /></div>
       </div>
 
+      <div class="fields" style="margin-top:12px">
+        <div><label>Direct broker</label><select id="dirProvider">
+          <option value="ctrader">cTrader (Pepperstone, IC Markets, …)</option>
+          <option value="oanda">OANDA (v20 REST)</option>
+        </select></div>
+        <div><label>Environment</label><select id="dirEnv">
+          <option value="practice">Practice (demo)</option>
+          <option value="live">Live</option>
+        </select></div>
+        <div><label>Account ID</label><input id="dirAccount" placeholder="cTrader account id, or OANDA 101-…" autocomplete="off" /></div>
+        <div><label>API token</label><input id="dirToken" type="password" placeholder="unchanged" autocomplete="off" /></div>
+        <div><label>cTrader client ID</label><input id="dirClientId" placeholder="from openapi.ctrader.com" autocomplete="off" /></div>
+        <div><label>cTrader client secret</label><input id="dirClientSecret" type="password" placeholder="unchanged" autocomplete="off" /></div>
+        <div><label>cTrader refresh token</label><input id="dirRefresh" type="password" placeholder="unchanged" autocomplete="off" /></div>
+      </div>
+      <div class="hint" style="margin-top:4px">
+        No terminal and no VPS: the app places the order over the broker's own API and the broker holds the stop and target.
+        cTrader needs a registered application (client ID + secret) and an account that has approved it — the access token lasts
+        about a month, so supply a refresh token and the app renews it by itself. Practice and live are separate hosts. A size
+        below the broker's minimum volume is refused rather than rounded up, because rounding up would multiply the risk.
+      </div>
+
+      <div class="fields" style="margin-top:12px">
+        <div><label>TradingView alerts</label><label style="display:flex;gap:8px;align-items:center;height:34px">
+          <input id="tvOn" type="checkbox" style="width:auto" /> <span class="hint">accept orders from alerts</span>
+        </label></div>
+        <div><label>Webhook secret</label><input id="tvSecret" placeholder="unchanged" autocomplete="off" /></div>
+        <div style="grid-column:1/-1"><label style="display:flex;gap:8px;align-items:center">
+          <input id="tvGate" type="checkbox" style="width:auto" />
+          <span class="hint">require the brain gate for TradingView alerts (recommended — an alert carries no measured rule)</span>
+        </label></div>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        TradingView cannot place orders — it can only POST an alert to a URL you own. Point the alert's webhook at
+        <code id="tvUrl">/api/tv/webhook?token=…</code>, and make the message either JSON
+        <code>{"symbol":"XAUUSD","action":"buy","entry":4010,"stop":3990,"target":4050}</code>
+        or one line: <code>BUY XAUUSD entry=4010 stop=3990 target=4050</code>.
+      </div>
+
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
         <button id="exSave">Save</button>
         <button id="exTestBridge" class="quiet">Test bridge</button>
+        <button id="exTestBroker" class="quiet">Test broker API</button>
+        <button id="exAccount" class="quiet">Read account</button>
         <button id="exKill" class="quiet">Stop everything</button>
         <button id="exRevive" class="quiet">Clear stop</button>
         <span id="exMsg" class="hint" style="align-self:center"></span>
@@ -466,6 +528,17 @@
       <div class="panel" style="margin-top:12px;background:var(--panel2)">
         <div class="sub">Status</div>
         <div id="exStatus" class="hint">Loading…</div>
+      </div>
+      <div id="exAccountBox" style="margin-top:12px"></div>
+
+      <div class="panel" style="margin-top:12px;background:var(--panel2)">
+        <div class="sub">Break-even after broker costs</div>
+        <div class="hint" id="beNote" style="margin-bottom:8px">Loading…</div>
+        <div id="beTable"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
+          <button id="exSpreads" class="quiet">Read live spreads</button>
+          <span id="spreadMsg" class="hint"></span>
+        </div>
       </div>
       <div id="exOpen" style="margin-top:12px"></div>
       <div id="exClosed" style="margin-top:12px"></div>
@@ -869,7 +942,7 @@
         <button class="btn ghost" data-agent="coach">Coach</button>
       </div>
       <div id="aiMicHint" class="hint" style="margin-top:8px"></div>
-      <div id="aiAnswer" class="hint" style="margin-top:12px;white-space:pre-wrap"></div>
+      <div id="aiAnswer" class="hint" style="margin-top:12px"></div>
 
       <h2 style="margin-top:20px">Connection</h2>
       <div class="fields">
@@ -964,12 +1037,38 @@ document.addEventListener("click", async (event) => {
         maxPositions: Number(document.getElementById("exMax").value),
         accountBalance: Number(document.getElementById("exBal").value),
         bridgeUrl: document.getElementById("exUrl").value,
+        costs: {
+          commissionPerLot: Number(document.getElementById("exComm").value || 0),
+          swapPerLotPerNight: Number(document.getElementById("exSwap").value || 0),
+        },
+        tv: {
+          enabled: document.getElementById("tvOn").checked,
+          requireGate: document.getElementById("tvGate").checked,
+        },
+        direct: {
+          provider: document.getElementById("dirProvider").value,
+          environment: document.getElementById("dirEnv").value,
+          accountId: document.getElementById("dirAccount").value,
+          clientId: document.getElementById("dirClientId").value,
+        },
       };
       const secret = document.getElementById("exSecret").value.trim();
       if (secret) payload.bridgeSecret = secret;
+      const tvSecret = document.getElementById("tvSecret").value.trim();
+      if (tvSecret) payload.tv.secret = tvSecret;
+      const dirToken = document.getElementById("dirToken").value.trim();
+      if (dirToken) payload.direct.token = dirToken;
+      const dirClientSecret = document.getElementById("dirClientSecret").value.trim();
+      if (dirClientSecret) payload.direct.clientSecret = dirClientSecret;
+      const dirRefresh = document.getElementById("dirRefresh").value.trim();
+      if (dirRefresh) payload.direct.refreshToken = dirRefresh;
       const d = await api("/api/exec/config", { method: "POST", body: JSON.stringify(payload) });
       if (d.ok) {
         document.getElementById("exSecret").value = "";
+        document.getElementById("tvSecret").value = "";
+        document.getElementById("dirToken").value = "";
+        document.getElementById("dirClientSecret").value = "";
+        document.getElementById("dirRefresh").value = "";
         say("saved");
         loadExec();
       } else say(d.error || "could not save", true);
@@ -979,6 +1078,34 @@ document.addEventListener("click", async (event) => {
       const d = await api("/api/exec/test-bridge", { method: "POST", body: "{}" });
       if (d.ok) say(`bridge alive · ${d.bridge.login} on ${d.bridge.server} · ${d.bridge.demo ? "demo" : "LIVE"} · balance ${d.bridge.balance} ${d.bridge.currency}`);
       else say(d.error || "bridge refused", true);
+    }
+    if (id === "exTestBroker") {
+      say("asking the broker…");
+      const d = await api("/api/exec/test-broker", { method: "POST", body: "{}" });
+      if (d.ok) {
+        say(`broker alive · ${d.broker.login} on ${d.broker.server} · ${d.broker.demo ? "demo" : "LIVE"} · balance ${d.broker.balance} ${d.broker.currency} · ${d.broker.positions} position(s)`);
+      } else say(d.error || "broker refused", true);
+    }
+    if (id === "exSpreads") {
+      const out = document.getElementById("spreadMsg");
+      if (out) out.textContent = "reading spreads…";
+      const d = await api("/api/exec/spreads", { method: "POST", body: "{}" });
+      if (out) {
+        out.textContent = d.ok
+          ? `read ${Object.keys(d.spreads || {}).length} spreads from the broker`
+          : d.error || "could not read spreads";
+        out.style.color = d.ok ? "#7ff0cf" : "#ff9a9a";
+      }
+      loadExec();
+      return;
+    }
+    if (id === "exAccount") {
+      say("reading the account…");
+      const d = await api("/api/exec/account", { method: "POST", body: "{}" });
+      if (d.ok) {
+        say(`account ${d.account.login} · ${d.account.currency} ${d.account.balance} · ${d.account.demo ? "demo" : "LIVE"}`);
+      } else say(d.error || "could not read the account", true);
+      loadExec();
     }
     if (id === "exKill") {
       await api("/api/exec/kill", { method: "POST", body: JSON.stringify({ reason: "stopped from the dashboard" }) });
@@ -1664,6 +1791,51 @@ function journalSection(title, rows) {
   return `<tr><td colspan="4" style="padding-top:12px;font-size:10.5px;letter-spacing:1.6px;text-transform:uppercase;color:#5d728a">${title}</td></tr>` + body;
 }
 
+async function loadBreakEven(attempt = 0) {
+  const table = document.getElementById("beTable");
+  const note = document.getElementById("beNote");
+  if (!table || !note) return;
+  try {
+    const d = await api("/api/costs/breakeven");
+    if (!d.ok) {
+      // A proxy can answer this with a one-off 503 on a cold load; one retry
+      // costs nothing and saves showing an error for something that recovered.
+      if (attempt === 0) return void setTimeout(() => loadBreakEven(1), 1200);
+      note.textContent = d.error || "Could not load the break-even table.";
+      table.innerHTML = "";
+      return;
+    }
+    const source = d.spreadSource === "broker" ? "live broker spreads" : "modelled spreads";
+    note.textContent = `${source} · cost is in R, so lot size cancels out · target 1:${d.targetR} · a full stop assumed on losers`;
+    const head = `<tr class="hint">
+      <th style="text-align:left;padding:4px 6px">Market</th>
+      <th class="be-stop" style="text-align:right;padding:4px 6px">Stop</th>
+      <th class="be-spread" style="text-align:right;padding:4px 6px">Spread</th>
+      <th style="text-align:right;padding:4px 6px">Cost</th>
+      <th style="text-align:right;padding:4px 6px">Needs win rate</th>
+      <th style="text-align:right;padding:4px 6px">R/trade @ ${(d.referenceWinRate * 100).toFixed(1)}%</th>
+    </tr>`;
+    const rows = (d.rows || []).map((r) => {
+      const positive = r.expectancy != null && r.expectancy > 0;
+      return `<tr style="border-top:1px solid rgba(255,255,255,.06)">
+        <td style="padding:5px 6px">${r.symbol}</td>
+        <td class="be-stop" style="padding:5px 6px;text-align:right" title="${r.stopSource}">${r.stopDistance != null ? r.stopDistance : "—"}</td>
+        <td class="be-spread" style="padding:5px 6px;text-align:right" title="${r.spreadSource}">${r.spreadUnits != null ? r.spreadUnits : "—"}</td>
+        <td style="padding:5px 6px;text-align:right">${r.costR != null ? (r.costR * 100).toFixed(2) + "% R" : "—"}</td>
+        <td style="padding:5px 6px;text-align:right">${r.breakEvenWinRate != null ? r.breakEvenWinRate + "%" : "—"}</td>
+        <td style="padding:5px 6px;text-align:right;color:${positive ? "#7ff0cf" : "#ff9a9a"}">${
+          r.expectancy != null ? (positive ? "+" : "") + r.expectancy + "R" : "—"
+        }</td>
+      </tr>`;
+    }).join("");
+    table.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">${head}${rows}</table>`;
+  } catch (err) {
+    if (attempt === 0) return void setTimeout(() => loadBreakEven(1), 1200);
+    note.textContent = "Could not load: " + (err && err.message ? err.message : String(err));
+    table.innerHTML = "";
+  }
+}
+
 async function loadExec() {
   const statusEl = document.getElementById("exStatus");
   if (!statusEl) return;
@@ -1671,13 +1843,30 @@ async function loadExec() {
     const d = await api("/api/exec");
     const cfg = d.config || {};
     document.getElementById("exOn").checked = Boolean(cfg.enabled);
-    document.getElementById("exMode").value = cfg.mode === "bridge" ? "bridge" : "paper";
+    document.getElementById("exMode").value = ["bridge", "direct"].includes(cfg.mode) ? cfg.mode : "paper";
     document.getElementById("exRisk").value = cfg.riskPct;
     document.getElementById("exDayLoss").value = cfg.maxDailyLossPct;
     document.getElementById("exMax").value = cfg.maxPositions;
     document.getElementById("exBal").value = cfg.accountBalance;
+    document.getElementById("exComm").value = (cfg.costs && cfg.costs.commissionPerLot) || 0;
+    document.getElementById("exSwap").value = (cfg.costs && cfg.costs.swapPerLotPerNight) || 0;
     document.getElementById("exUrl").value = cfg.bridgeUrl || "";
     document.getElementById("exSecret").placeholder = d.bridgeHint ? `saved ${d.bridgeHint}` : "not set";
+    document.getElementById("tvOn").checked = Boolean(cfg.tv && cfg.tv.enabled);
+    document.getElementById("tvGate").checked = !(cfg.tv && cfg.tv.requireGate === false);
+    document.getElementById("tvSecret").placeholder = d.tvHint ? `saved ${d.tvHint}` : "not set";
+    const dirCfg = cfg.direct || {};
+    document.getElementById("dirProvider").value = dirCfg.provider || "oanda";
+    document.getElementById("dirEnv").value = dirCfg.environment === "live" ? "live" : "practice";
+    if (document.activeElement !== document.getElementById("dirAccount")) {
+      document.getElementById("dirAccount").value = dirCfg.accountId || "";
+    }
+    document.getElementById("dirToken").placeholder = d.directHint ? `saved ${d.directHint}` : "not set";
+    document.getElementById("dirClientId").value = dirCfg.clientId || "";
+    document.getElementById("dirClientSecret").placeholder = d.directHint ? `saved ${d.directHint}` : "not set";
+    document.getElementById("dirRefresh").placeholder = d.directHint ? `saved ${d.directHint}` : "not set";
+    const tvUrl = document.getElementById("tvUrl");
+    if (tvUrl) tvUrl.textContent = `${location.origin}/api/tv/webhook?token=<your secret>`;
     if (document.activeElement !== document.getElementById("exUrl")) {
       document.getElementById("exUrl").value = cfg.bridgeUrl || "";
     }
@@ -1688,11 +1877,41 @@ async function loadExec() {
         ${d.killSwitch ? "STOPPED — " + (d.killReason || "by hand") : d.enabled ? `running in ${d.mode} mode` : "switched off"}
       </div>
       <div>Equity <strong>${d.equity == null ? "—" : "$" + d.equity.toFixed(2)}</strong> ·
-        today <strong style="color:${d.dayRealized < 0 ? "#ff9a9a" : "#7ff0cf"}">${d.dayRealized > 0 ? "+" : ""}$${d.dayRealized.toFixed(2)}</strong>
+        closed today <strong style="color:${d.dayRealized < 0 ? "#ff9a9a" : "#7ff0cf"}">${d.dayRealized > 0 ? "+" : ""}$${d.dayRealized.toFixed(2)}</strong>
         (${d.dayRealizedPct}%) · ${d.openCount} open · ${d.closedCount} closed</div>
+      ${(() => {
+        const c = d.costs || {};
+        const cash = (n) => `${n < 0 ? "−" : ""}$${Math.abs(Number(n) || 0).toFixed(2)}`;
+        if (!c.trades) {
+          return `<div class="hint" style="margin-top:6px">No closed trade today yet, so there is nothing to net against broker costs. Costs are charged to each order as it opens, so they will show here as soon as one closes.</div>`;
+        }
+        return `<div style="margin-top:6px">Broker costs today: gross <strong>${cash(c.gross)}</strong> · paid <strong>${cash(-Math.abs(c.cost))}</strong> · net
+          <strong style="color:${c.net < 0 ? "#ff9a9a" : "#7ff0cf"}">${cash(c.net)}</strong></div>
+          <div class="hint" style="margin-top:2px">
+            ${c.wins} winner${c.wins === 1 ? "" : "s"} averaging ${cash(c.avgWinGross)} gross (${cash(c.avgWinNet)} after their own costs) ·
+            ${cash(-Math.abs(c.avgCost))} cost per trade · winners ${c.winnersCoverEverything ? "cover" : "<strong>do not</strong> cover"} every trade taken today.
+          </div>`;
+      })()}
+      ${d.enabled && !d.openCount && !d.closedCount ? `<div class="hint" style="margin-top:4px">No order has been placed yet. Paper trading only fills signals that clear the lab and brain gates, and open positions show under Equity until they close.</div>` : ""}
       <div style="margin-top:4px">Risk ${d.riskPct}% per trade · daily limit ${d.maxDailyLossPct}% · broker ${d.broker}
-        · bridge ${d.bridgeConfigured ? "configured" : "not configured"}</div>
+        ${d.mode === "direct"
+          ? `· API ${d.direct && d.direct.configured ? "configured" : "not configured"} ${d.direct && d.direct.accountId ? "(" + d.direct.accountId + ")" : ""}`
+          : `· bridge ${d.bridgeConfigured ? "configured" : "not configured"}`}
+        · account ${d.accountSource === "exness-mt5" ? "read from Exness" : d.account ? "read from the broker" : "app figure"}
+        · TradingView alerts ${d.tv && d.tv.enabled ? "on" : "off"}${d.tv && d.tv.enabled && d.tv.requireGate === false ? " (gate bypassed)" : ""}</div>
       ${d.lastError ? `<div style="color:#ff9a9a;margin-top:6px">last error: ${d.lastError}</div>` : ""}`;
+
+    const acct = d.account;
+    const acctBox = document.getElementById("exAccountBox");
+    if (acctBox) {
+      acctBox.innerHTML = acct
+        ? `<div class="sub">${acct.server && acct.server.startsWith("OANDA") ? "OANDA account" : "Exness account"}${acct.demo ? " · demo" : " · LIVE"}</div>
+           <div class="hint" style="padding:4px 0">
+             ${acct.login} on ${acct.server} · ${acct.currency} · balance ${acct.balance} · equity ${acct.equity}
+             · ${(acct.positions || []).length} broker position(s) · read ${String(acct.syncedAt).slice(11, 19)} UTC
+           </div>`
+        : `<div class="hint">No broker account read yet. Fill in the bridge URL and secret (or the broker API account and token), then press “Read account”.</div>`;
+    }
 
     const open = d.open || [];
     document.getElementById("exOpen").innerHTML = open.length
@@ -1711,6 +1930,7 @@ async function loadExec() {
   } catch (err) {
     statusEl.textContent = "Could not load: " + err.message;
   }
+  loadBreakEven();
 }
 
 async function loadJournal() {
@@ -2818,7 +3038,7 @@ async function loadAiStatus() {
     const s = await api("/api/ai/status");
     paintAiConfig(s);
     el.textContent = s.enabled
-      ? `Ready · ${s.model} · key ${s.keyHint} (${s.source}) · ${s.knowledgeChunks} knowledge chunks indexed`
+      ? `Ready · ${s.model} · key ${s.keyHint} (${s.source}) · ${s.knowledgeChunks} knowledge chunks · ${(s.tools || []).length} tools`
       : "No key yet. Paste a free key below and press Save.";
   } catch (err) {
     el.textContent = "Status unavailable: " + err.message;
@@ -2847,7 +3067,7 @@ document.getElementById("aiSave").addEventListener("click", async () => {
       msg.textContent = `Saved. Key ${data.keyHint} stored on the server. Now press Test connection.`;
       paintAiConfig(data);
       const el = document.getElementById("aiStatus");
-      if (el) el.textContent = `Ready · ${data.model} · key ${data.keyHint} (${data.source}) · ${data.knowledgeChunks} knowledge chunks indexed`;
+      if (el) el.textContent = `Ready · ${data.model} · key ${data.keyHint} (${data.source}) · ${data.knowledgeChunks} knowledge chunks · ${(data.tools || []).length} tools`;
     } else {
       msg.textContent = data.error || "Could not save.";
     }
@@ -2892,10 +3112,34 @@ async function askAi(question) {
       body: JSON.stringify({ question }),
     });
     const data = await res.json();
-    out.textContent = data.ok ? data.answer : "Error: " + data.error;
+    if (!data.ok) {
+      out.textContent = "Error: " + data.error;
+      return;
+    }
+    // The model plans first, then answers. Show both: the reasoning is what
+    // makes the answer checkable instead of something to simply trust.
+    out.textContent = "";
+    if (data.thinking) {
+      const think = document.createElement("div");
+      think.className = "hint";
+      think.style.cssText = "opacity:.7;margin-bottom:10px;white-space:pre-wrap;border-left:2px solid rgba(255,255,255,.12);padding-left:10px";
+      think.textContent = data.thinking;
+      out.appendChild(think);
+    }
+    const body = document.createElement("div");
+    body.style.whiteSpace = "pre-wrap";
+    body.textContent = data.answer;
+    out.appendChild(body);
+    if (data.tools && data.tools.length) {
+      const looked = document.createElement("div");
+      looked.className = "hint";
+      looked.style.cssText = "opacity:.6;margin-top:8px;font-size:12px";
+      looked.textContent = "Looked up: " + [...new Set(data.tools)].join(", ");
+      out.appendChild(looked);
+    }
     // With the voice on, an answer is also heard — a spoken back-and-forth
     // rather than a screen you have to look at.
-    if (data.ok && voiceOn) speak(data.answer, { interrupt: true });
+    if (voiceOn) speak(data.answer, { interrupt: true });
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }
@@ -2996,10 +3240,11 @@ document.getElementById("aiMic").addEventListener("click", () => {
       const field = document.getElementById("aiQuestion");
       if (interim && field) field.value = interim;
       if (final) {
-        if (field) field.value = final.trim();
-        micHint("Heard: " + final.trim());
+        const said = final.trim();
+        if (field) field.value = "";
+        micHint("Heard: " + said);
         micRecognition.stop();
-        if (final.trim()) askAi(final.trim());
+        if (said) askAi(said);
       }
     };
 
@@ -3027,8 +3272,14 @@ document.getElementById("aiMic").addEventListener("click", () => {
 });
 
 document.getElementById("aiAsk").addEventListener("click", () => {
-  const q = document.getElementById("aiQuestion").value.trim();
-  if (q) askAi(q);
+  const field = document.getElementById("aiQuestion");
+  const q = field.value.trim();
+  if (!q) return;
+  // Clear the box as soon as the question is sent, and keep the caret there so
+  // the next one can be typed straight away.
+  field.value = "";
+  field.focus();
+  askAi(q);
 });
 
 document.querySelectorAll("[data-agent]").forEach((btn) => {

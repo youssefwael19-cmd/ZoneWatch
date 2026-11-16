@@ -29,6 +29,8 @@ const healthMod = require("./health");
 const brainMod = require("./brain");
 const journal = require("./journal");
 const executor = require("./executor");
+const tvMod = require("./tradingview");
+const costsMod = require("./costs");
 const digestMod = require("./digest");
 const paperReviewMod = require("./paperreview");
 const ivbSent = new Set();
@@ -577,12 +579,91 @@ async function buildSnapshot() {
   marketOpenState.value = marketResult.open;
   sessionEvents.push(...marketResult.events);
 
+  // Gate evaluation is independent of Discord. Auto-trading must work with no
+  // webhook configured (and during quiet hours), and the dashboard needs to
+  // show what the gates held back whether or not anything was delivered.
+  //
+  // Nothing is sent or traded while the market is shut: weekend, daily rollover
+  // gap, or a price feed that has stopped ticking. Tracking continues either way.
+  const onlyWhenOpen = settings.getAlertOnlyWhenOpen();
+  const tickBySymbol = new Map((quotes || []).map((q) => [q.symbol, q.lastMarketUpdate]));
+  const heldByHours = [];
+  const hoursBlocked = (symbol) => {
+    if (!onlyWhenOpen) return false;
+    const gate = marketclock.check({ lastMarketUpdate: tickBySymbol.get(symbol) });
+    if (gate.allowed) return false;
+    heldByHours.push({ symbol, reason: gate.reason });
+    return true;
+  };
+
+  // The brain gate: a trade prompt only goes out if some strategy has been
+  // measured to make money in this market, in the condition it is in now.
+  // Blocked prompts are recorded rather than dropped silently.
+  const brainGateOn = settings.getBrainGate();
+  const gateCandleSymbols = new Map(market.instrumentList().map((i) => [i.symbol, i.candleSymbol]));
+  const brainHeld = [];
+  // Returns the gate verdict, so callers can also journal the condition that
+  // was in force when the decision was made.
+  const brainVerdict = async (symbol, setup, side) => {
+    if (!brainGateOn) return { blocked: false, condition: null, reason: "gate off" };
+    let verdict;
+    try {
+      verdict = await brainMod.gate(symbol, gateCandleSymbols.get(symbol));
+    } catch (err) {
+      // If the brain cannot answer, do not let that become an alert or an order.
+      const reason = `brain gate failed (${err.message})`;
+      learning.noteSuppressed({ symbol, side, confidence: setup }, { reason });
+      return { blocked: true, condition: null, reason };
+    }
+    if (verdict.allowed) return { blocked: false, condition: verdict.condition, verdict };
+    brainHeld.push({ symbol, condition: verdict.condition, reason: verdict.reason });
+    learning.noteSuppressed({ symbol, side, confidence: setup }, { reason: verdict.reason });
+    return { blocked: true, condition: verdict.condition, reason: verdict.reason };
+  };
+
+  // Is the price actually moving? A running app with a frozen feed looks
+  // perfectly healthy and alerts nobody, which is the worst kind of failure.
+  feedwatch.recordMoves({ quotes, lastPrice: lastPriceBySymbol, movedAt: lastMoveAt });
+  const feed = feedwatch.evaluate({ quotes, movedAt: lastMoveAt });
+
+  // Which of this cycle's signals survived every gate? Evaluated once, so the
+  // Discord message and the order can never disagree about what was approved.
+  const approvedSignals = [];
+  for (const signal of newSignals) {
+    if (hoursBlocked(signal.symbol)) continue;
+    if (correlatedRecently(signal.symbol)) continue;
+
+    // The learner can mute one specific setup (market + direction + type)
+    // after it has lost money on enough closed trades to be sure.
+    const verdict = learning.verdictFor(signal);
+    if (!verdict.allowed) {
+      learning.noteSuppressed(signal, verdict);
+      continue;
+    }
+
+    // Proven-rule gate. This is the strict one: it can silence the app
+    // completely, which is the point — an unproven setup is not news.
+    const gateVerdict = await brainVerdict(signal.symbol, signal.confidence || "signal", signal.side);
+    if (gateVerdict.blocked) {
+      // Still written down: a held signal is evidence about the filter too.
+      journal.record(signal, {
+        status: "held",
+        heldReason: gateVerdict.reason,
+        regime: gateVerdict.condition,
+        newsNear: Boolean(blackout && blackout.active),
+      });
+      continue;
+    }
+
+    approvedSignals.push({ signal, gate: gateVerdict });
+  }
+
   // Discord delivery
   const discordErrors = [];
-  let hoursHeldSnapshot = [];
-  let brainHeldSnapshot = [];
-  let feedSnapshotStale = [];
-  let feedSnapshotChecked = 0;
+  let hoursHeldSnapshot = heldByHours.slice(0, 25);
+  let brainHeldSnapshot = brainHeld.slice(0, 25);
+  let feedSnapshotStale = feed.stale;
+  let feedSnapshotChecked = feed.checked;
   if (discord.configured()) {
     const quiet = settings.getQuietHours();
     const utcHour = new Date().getUTCHours();
@@ -595,52 +676,6 @@ async function buildSnapshot() {
     const alertsReady = discord.channelConfigured("alerts") && !quietNow;
     const newsReady = discord.channelConfigured("news") && !quietNow;
     const recapReady = discord.channelConfigured("recap") && !quietNow;
-
-    // Nothing is sent while the market is shut: weekend, daily rollover gap,
-    // or a price feed that has stopped ticking. Tracking continues either way.
-    const onlyWhenOpen = settings.getAlertOnlyWhenOpen();
-    const tickBySymbol = new Map((quotes || []).map((q) => [q.symbol, q.lastMarketUpdate]));
-    const heldByHours = [];
-    const hoursBlocked = (symbol) => {
-      if (!onlyWhenOpen) return false;
-      const gate = marketclock.check({ lastMarketUpdate: tickBySymbol.get(symbol) });
-      if (gate.allowed) return false;
-      heldByHours.push({ symbol, reason: gate.reason });
-      return true;
-    };
-
-    // The brain gate: a trade prompt only goes out if some strategy has been
-    // measured to make money in this market, in the condition it is in now.
-    // Blocked prompts are recorded rather than dropped silently.
-    const brainGateOn = settings.getBrainGate();
-    const candleBySymbol = new Map(market.instrumentList().map((i) => [i.symbol, i.candleSymbol]));
-    const brainHeld = [];
-    // Returns the gate verdict, so callers can also journal the condition that
-    // was in force when the decision was made.
-    const brainVerdict = async (symbol, setup, side) => {
-      if (!brainGateOn) return { blocked: false, condition: null, reason: "gate off" };
-      let verdict;
-      try {
-        verdict = await brainMod.gate(symbol, candleBySymbol.get(symbol));
-      } catch (err) {
-        // If the brain cannot answer, do not let that become an alert.
-        const reason = `brain gate failed (${err.message})`;
-        learning.noteSuppressed({ symbol, side, confidence: setup }, { reason });
-        return { blocked: true, condition: null, reason };
-      }
-      if (verdict.allowed) return { blocked: false, condition: verdict.condition, verdict };
-      brainHeld.push({ symbol, condition: verdict.condition, reason: verdict.reason });
-      learning.noteSuppressed({ symbol, side, confidence: setup }, { reason: verdict.reason });
-      return { blocked: true, condition: verdict.condition, reason: verdict.reason };
-    };
-
-    // Is the price actually moving? A running app with a frozen feed looks
-    // perfectly healthy and alerts nobody, which is the worst kind of failure.
-    feedwatch.recordMoves({ quotes, lastPrice: lastPriceBySymbol, movedAt: lastMoveAt });
-    const feed = feedwatch.evaluate({ quotes, movedAt: lastMoveAt });
-
-    // Feed state is evaluated here; the health monitor below decides whether
-    // anything gets said about it, so you never get two messages for one fault.
 
     let sent = 0;
     for (const alert of alertsReady ? fired : []) {
@@ -714,77 +749,20 @@ async function buildSnapshot() {
     }
 
     if (alertsReady && settings.getSignalAlerts()) {
-      for (const signal of newSignals) {
-        if (hoursBlocked(signal.symbol)) continue;
-        if (correlatedRecently(signal.symbol)) continue;
-
-        // The learner can mute one specific setup (market + direction + type)
-        // after it has lost money on enough closed trades to be sure.
-        const verdict = learning.verdictFor(signal);
-        if (!verdict.allowed) {
-          learning.noteSuppressed(signal, verdict);
-          continue;
-        }
-
-        // Proven-rule gate. This is the strict one: it can silence the app
-        // completely, which is the point — an unproven setup is not news.
-        const gateVerdict = await brainVerdict(signal.symbol, signal.confidence || "signal", signal.side);
-        if (gateVerdict.blocked) {
-          // Still written down: a held signal is evidence about the filter too.
-          journal.record(signal, {
-            status: "held",
-            heldReason: gateVerdict.reason,
-            regime: gateVerdict.condition,
-            newsNear: Boolean(blackout && blackout.active),
-          });
-          continue;
-        }
-
+      for (const { signal, gate } of approvedSignals) {
         try {
           await discord.sendSignal({ ...signal, linked: linkedMarketsFor(signal.symbol) });
           lastAlertAt.set(signal.symbol, Date.now());
           journal.record(signal, {
             status: "sent",
-            regime: gateVerdict.condition,
+            regime: gate.condition,
             newsNear: Boolean(blackout && blackout.active),
           });
-
-          // Auto-trading, if it has been switched on. It re-checks the gate
-          // itself, so a signal cannot reach the broker on a technicality.
-          try {
-            const placed = await executor.place(
-              {
-                ...signal,
-                gate: {
-                  blocked: false,
-                  condition: gateVerdict.condition,
-                  verdict: (gateVerdict.verdict && gateVerdict.verdict.champion) || null,
-                },
-              },
-              priceBySymbol
-            );
-            if (placed.ok) {
-              console.log(
-                `executor: ${placed.mode} ${signal.symbol} ${signal.side} ${placed.order.lots} lots (risk ${placed.order.riskPct}%)`
-              );
-            } else {
-              console.log(`executor: skipped ${signal.symbol} — ${placed.reason}`);
-            }
-          } catch (err) {
-            lastAlertAt.set(signal.symbol, Date.now());
-            console.error("executor:", err.message);
-          }
         } catch (err) {
           discordErrors.push(err.message);
         }
       }
     }
-
-    // Remember what the clock held back, for the dashboard.
-    hoursHeldSnapshot = heldByHours.slice(0, 25);
-    brainHeldSnapshot = brainHeld.slice(0, 25);
-    feedSnapshotStale = feed.stale;
-    feedSnapshotChecked = feed.checked;
 
     if (newsReady && settings.getDiscordNews() && newsRiskEvents.length) {
       const fresh = newsRiskEvents.filter((e) => {
@@ -799,17 +777,6 @@ async function buildSnapshot() {
           discordErrors.push(err.message);
         }
       }
-    }
-
-    if (tracked.resolved && tracked.resolved.length) journal.resolve(tracked.resolved);
-
-    try {
-      const executed = executor.mark(priceBySymbol);
-      for (const done of executed.closed) {
-        console.log(`executor: ${done.symbol} ${done.side} closed ${done.outcome} ${done.pnl}`);
-      }
-    } catch (err) {
-      console.error("executor mark:", err.message);
     }
 
     for (const result of alertsReady ? tracked.resolved : []) {
@@ -907,6 +874,57 @@ async function buildSnapshot() {
     }
   }
 
+  // Delivery is over. Bookkeeping and orders are the app's own work, so they
+  // run whether or not Discord is configured, and whether or not a message got
+  // through: an alert the webhook rejected must not silently cancel a trade.
+  if (tracked.resolved && tracked.resolved.length) journal.resolve(tracked.resolved);
+
+  try {
+    // A direct broker closes the trade itself, so ask it before assuming the
+    // position is still there. Paper and bridge resolve their own stops.
+    if (settings.getExecConfig().mode === "direct") {
+      const reconciled = await executor.reconcile(priceBySymbol);
+      for (const done of reconciled.closed) {
+        console.log(`executor: ${done.symbol} ${done.side} closed at broker ${done.outcome} ${done.pnl}`);
+      }
+    }
+    const executed = executor.mark(priceBySymbol);
+    for (const done of executed.closed) {
+      console.log(`executor: ${done.symbol} ${done.side} closed ${done.outcome} ${done.pnl}`);
+    }
+  } catch (err) {
+    console.error("executor mark:", err.message);
+  }
+
+  // Auto-trading. The executor re-checks the brain gate itself, so a signal
+  // reaching it by any path still cannot bypass "is there a proven rule now".
+  if (settings.getExecConfig().enabled) {
+    for (const { signal, gate } of approvedSignals) {
+      try {
+        const placed = await executor.place(
+          {
+            ...signal,
+            gate: {
+              blocked: false,
+              condition: gate.condition,
+              verdict: (gate.verdict && gate.verdict.champion) || null,
+            },
+          },
+          priceBySymbol
+        );
+        if (placed.ok) {
+          console.log(
+            `executor: ${placed.mode} ${signal.symbol} ${signal.side} ${placed.order.lots} lots (risk ${placed.order.riskPct}%)`
+          );
+        } else {
+          console.log(`executor: skipped ${signal.symbol} — ${placed.reason}`);
+        }
+      } catch (err) {
+        console.error("executor:", err.message);
+      }
+    }
+  }
+
   snapshot = {
     ok: true,
     checkedAt: new Date().toISOString(),
@@ -956,6 +974,8 @@ function runWatchCycle() {
     // The app keeps testing itself in the background, one market at a time.
     labMod.maybeRun(market.instrumentList()).catch(() => {});
     brainMod.maybeRun(market.instrumentList()).catch(() => {});
+    // And keeps the Exness balance fresh, if the bridge is set up.
+    executor.maybeSyncAccount().catch(() => {});
   });
   return inFlight;
 }
@@ -1017,7 +1037,19 @@ function condense(snap) {
     })),
     guard: snap.guard,
     blackout: snap.blackout,
+    marketOpen: snap.marketOpen,
+    feed: snap.feed,
     labGate: labMod.summary().gate,
+    brainGate: settings.getBrainGate(),
+    alertOnlyWhenOpen: settings.getAlertOnlyWhenOpen(),
+    unprovenMarkets: settings.getUnprovenMarkets(),
+    // Why a market is or is not prompting right now: the proven rule for its
+    // current condition, or null when the brain has nothing for it.
+    brain: (brainMod.summary().conditions || []).map((c) => ({
+      symbol: c.symbol,
+      condition: c.condition,
+      proven: c.champion ? c.champion.name : null,
+    })),
     quietHours: settings.getQuietHours(),
     signalStats: snap.signalStats,
   };
@@ -1041,6 +1073,7 @@ app.post("/api/ai/config", (req, res) => {
 
 app.post("/api/ai/clear", (_req, res) => {
   settings.clearAiConfig();
+  aiMod.resetConversation();
   res.json({ ok: true, ...aiMod.status() });
 });
 
@@ -1058,8 +1091,8 @@ app.post("/api/ai/ask", async (req, res) => {
     const question = String((req.body && req.body.question) || "").trim();
     if (!question) return res.status(400).json({ ok: false, error: "Ask a question first" });
     const snap = await getSnapshot();
-    const answer = await aiMod.ask(question, condense(snap));
-    res.json({ ok: true, answer });
+    const result = await aiMod.ask(question, condense(snap));
+    res.json({ ok: true, ...result });
   } catch (err) {
     res.status(err.status || 500).json({ ok: false, error: err.message });
   }
@@ -1099,19 +1132,32 @@ const priceMapNow = () => {
   return map;
 };
 
+/** Never hand a secret back to the browser, even on the same-origin UI. */
+function publicExecConfig(config) {
+  return {
+    ...config,
+    bridgeSecret: "",
+    tv: { ...(config.tv || {}), secret: "" },
+    // Broker credentials are the account. They go in, they never come back out.
+    direct: { ...(config.direct || {}), token: "", clientSecret: "", refreshToken: "" },
+  };
+}
+
 app.get("/api/exec", (_req, res) => {
   res.json({
     ok: true,
     ...executor.status(priceMapNow()),
     bridgeHint: settings.getExecHint(),
-    config: settings.getExecConfig(),
+    tvHint: settings.getTvHint(),
+    directHint: settings.getDirectHint(),
+    config: publicExecConfig(settings.getExecConfig()),
   });
 });
 
 app.post("/api/exec/config", (req, res) => {
   const body = req.body || {};
   const config = settings.setExecConfig(body);
-  res.json({ ok: true, config, hint: settings.getExecHint() });
+  res.json({ ok: true, config: publicExecConfig(config), hint: settings.getExecHint() });
 });
 
 app.post("/api/exec/kill", (req, res) => {
@@ -1128,6 +1174,138 @@ app.post("/api/exec/test-bridge", async (_req, res) => {
     res.json(await executor.testBridge());
   } catch (err) {
     res.json({ ok: false, error: err.message });
+  }
+});
+
+/** Read the real Exness account through the bridge (read-only). */
+/** Does the direct broker answer, and for which account? */
+app.post("/api/exec/test-broker", async (_req, res) => {
+  try {
+    res.json(await executor.testBroker());
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/api/exec/account", async (_req, res) => {
+  try {
+    res.json(await executor.syncAccount());
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
+/** Read the account's live spread per market from the bridge. */
+app.post("/api/exec/spreads", async (_req, res) => {
+  try {
+    res.json(await executor.syncSpreads());
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * Break-even after broker costs, per market.
+ *
+ * The stop distance is measured from the app's own closed signals where there
+ * are any, then from the signals on the board right now, and only then from an
+ * assumption — and the answer says which, because a break-even computed from a
+ * guessed stop is a guess too.
+ */
+app.get("/api/costs/breakeven", (_req, res) => {
+  try {
+    const config = settings.getExecConfig();
+    const spreadState = executor.status(priceMapNow());
+    const history = tracker.load().history || [];
+    const boardSignals = (snapshot && snapshot.signals) || [];
+
+    const median = (values) => {
+      const sorted = values.filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b);
+      return sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+    };
+
+    const markets = market.instrumentList().map((inst) => {
+      const closedStops = history
+        .filter((h) => h.symbol === inst.symbol)
+        .map((h) => Math.abs(Number(h.entry) - Number(h.stop)));
+      let stopDistance = median(closedStops);
+      let stopSource = stopDistance ? `median of ${closedStops.filter((v) => Number.isFinite(v) && v > 0).length} closed signal(s)` : null;
+
+      if (!stopDistance) {
+        const liveStops = boardSignals
+          .filter((sig) => sig.symbol === inst.symbol)
+          .map((sig) => Math.abs(Number(sig.entry) - Number(sig.stop)));
+        stopDistance = median(liveStops);
+        if (stopDistance) stopSource = "current signal stops";
+      }
+
+      if (!stopDistance && costsMod.DEFAULT_STOPS[inst.symbol]) {
+        stopDistance = costsMod.DEFAULT_STOPS[inst.symbol];
+        stopSource = "assumed default";
+      }
+
+      return {
+        symbol: inst.symbol,
+        label: inst.label,
+        valuePerUnit: inst.valuePerPointPerLot,
+        stopDistance,
+        stopSource: stopSource || "unknown",
+      };
+    });
+
+    res.json({
+      ok: true,
+      ...costsMod.breakEvenTable({
+        markets,
+        config,
+        live: spreadState.spreads,
+      }),
+      spreadSource: spreadState.spreadSource,
+      spreadReadAt: spreadState.spreads && Object.values(spreadState.spreads)[0]
+        ? Object.values(spreadState.spreads)[0].at
+        : null,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * TradingView alert receiver.
+ *
+ * TradingView has no order API; this is the only direction that exists. The
+ * alert must carry ?token=… (or an x-tv-token header) matching the saved
+ * secret, and TradingView alerts are off unless switched on.
+ */
+app.post("/api/tv/webhook", async (req, res) => {
+  const config = settings.getExecConfig();
+  if (!config.tv || !config.tv.enabled) {
+    return res.status(403).json({
+      ok: false,
+      error: "TradingView alerts are switched off — enable them in Risk → Auto-trading",
+    });
+  }
+  if (!tvMod.verify(req, config)) {
+    return res.status(401).json({ ok: false, error: "bad or missing token" });
+  }
+
+  try {
+    const alert = tvMod.parseAlert(req.body);
+    if (alert.error) return res.status(400).json({ ok: false, error: alert.error });
+
+    const snap =
+      snapshot && Date.now() - snapshotAt < 60000 ? snapshot : await getSnapshot();
+    const prices = new Map(((snap && snap.quotes) || []).map((q) => [q.symbol, q.price]));
+    const result = await tvMod.place(alert, prices);
+
+    res.status(result.ok ? 200 : 422).json({
+      ok: result.ok,
+      reason: result.reason || null,
+      order: result.order || null,
+      alert: { symbol: alert.symbol, side: alert.side },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 

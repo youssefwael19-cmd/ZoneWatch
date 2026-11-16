@@ -33,6 +33,12 @@ const STOPWORDS = new Set(
 );
 
 const store = require("./settings");
+const labMod = require("./lab");
+const brainMod = require("./brain");
+const journalMod = require("./journal");
+const learningMod = require("./learning");
+const tracker = require("./signaltracker");
+const market = require("./market");
 
 /**
  * Configuration resolves in this order: what you saved in the app, then env
@@ -144,7 +150,11 @@ function retrieve(question, limit = 4) {
 
 /* ----------------------------- the model ---------------------------- */
 
-async function complete(messages, { temperature = 0.2, maxTokens = 700 } = {}) {
+/**
+ * One provider round-trip. Returns the assistant message verbatim, including
+ * any tool calls, because the caller decides whether to run them.
+ */
+async function chat(messages, { temperature = 0.2, maxTokens = 700, tools = null } = {}) {
   const key = settings.apiKey();
   if (!key) {
     const err = new Error(
@@ -154,18 +164,24 @@ async function complete(messages, { temperature = 0.2, maxTokens = 700 } = {}) {
     throw err;
   }
 
+  const payload = {
+    model: settings.model(),
+    messages,
+    temperature,
+    max_tokens: maxTokens,
+  };
+  if (tools && tools.length) {
+    payload.tools = tools;
+    payload.tool_choice = "auto";
+  }
+
   const res = await fetch(`${settings.baseUrl()}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${key}`,
     },
-    body: JSON.stringify({
-      model: settings.model(),
-      messages,
-      temperature,
-      max_tokens: maxTokens,
-    }),
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(45000),
   });
 
@@ -177,43 +193,479 @@ async function complete(messages, { temperature = 0.2, maxTokens = 700 } = {}) {
   }
 
   const data = await res.json();
-  const content =
-    data && data.choices && data.choices[0] && data.choices[0].message
-      ? data.choices[0].message.content
-      : "";
-  return String(content || "").trim();
+  const message =
+    (data && data.choices && data.choices[0] && data.choices[0].message) || {};
+  return {
+    content: String(message.content || "").trim(),
+    toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [],
+  };
+}
+
+/** Text-only reply, for the planner and the connection test. */
+async function complete(messages, opts = {}) {
+  return (await chat(messages, opts)).content;
+}
+
+/* ------------------------------ tools ------------------------------ *
+ *
+ * The assistant can look things up instead of being handed a summary and
+ * asked to be clever with it. Every tool reads the app's own files and live
+ * snapshot: no tool invents anything, and a failed tool reports its error
+ * back to the model rather than throwing the whole answer away.
+ */
+
+const MAX_TOOL_ROUNDS = 4;
+const MAX_TOOL_RESULT_CHARS = 4000;
+
+const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "market_state",
+      description:
+        "Live prices, zones, signals and gate flags. Pass a symbol for one market, or nothing for all of them.",
+      parameters: {
+        type: "object",
+        properties: { symbol: { type: "string", description: "e.g. NASDAQ or XAUUSD" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "lab_verdict",
+      description:
+        "The strategy lab's out-of-sample verdict per market: unseen trades, win rate, expectancy, t-stat, and why it passed or failed.",
+      parameters: {
+        type: "object",
+        properties: { symbol: { type: "string" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "brain_status",
+      description:
+        "The brain's per-market reading: current market condition and the proven rule for it, if any.",
+      parameters: {
+        type: "object",
+        properties: { symbol: { type: "string" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "brain_gate",
+      description:
+        "Ask the brain whether signals for one market are allowed right now, with its exact reason. Slow: it re-reads candles.",
+      parameters: {
+        type: "object",
+        properties: { symbol: { type: "string" } },
+        required: ["symbol"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "journal_summary",
+      description:
+        "What the app sent and held back: closed trades, win rate, expectancy, failure reasons and the split by trend/bias/session/condition.",
+      parameters: {
+        type: "object",
+        properties: { symbol: { type: "string" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "learning_summary",
+      description:
+        "The learner's verdicts per market+side+setup, which setups it has muted, and what it held back recently.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "signal_results",
+      description:
+        "Tracked signals: open count, wins, losses, expiries, win rate, total R and the most recent closes.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_notes",
+      description:
+        "Search the project notes (knowledge.md, README) for measured results, thresholds and documented limits.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    },
+  },
+];
+
+const TOOL_NAMES = TOOLS.map((t) => t.function.name);
+
+function pickLab(result) {
+  if (!result) return null;
+  return {
+    testedAt: result.at,
+    tradable: result.tradable === true,
+    verdict: result.verdict,
+    unseenTrades: result.oos ? result.oos.n : null,
+    winrate: result.oos ? result.oos.winrate : null,
+    expectancy: result.oos ? result.oos.expectancy : null,
+    tStat: result.tStat,
+    positiveFolds: result.positiveFolds,
+    required: result.bar,
+  };
+}
+
+const TOOL_IMPLS = {
+  market_state({ symbol } = {}, live) {
+    const state = live || {};
+    if (!symbol) return state;
+    const s = String(symbol).toUpperCase();
+    return {
+      symbol: s,
+      quote: (state.quotes || []).find((q) => q.symbol === s) || null,
+      zones: (state.zones || []).filter((z) => z.symbol === s),
+      signals: (state.signals || []).filter((x) => x.symbol === s),
+      labAllowed: state.labGate ? state.labGate[s] : undefined,
+      brain: (state.brain || []).find((b) => b.symbol === s) || null,
+      marketOpen: state.marketOpen,
+      feed: state.feed,
+    };
+  },
+
+  lab_verdict({ symbol } = {}) {
+    const results = labMod.summary().results || {};
+    if (symbol) {
+      const s = String(symbol).toUpperCase();
+      return { symbol: s, verdict: pickLab(results[s]), tested: Boolean(results[s]) };
+    }
+    return {
+      markets: Object.fromEntries(Object.entries(results).map(([k, v]) => [k, pickLab(v)])),
+      neverTested: Object.keys(results).length === 0 ? "nothing tested yet" : undefined,
+    };
+  },
+
+  brain_status({ symbol } = {}) {
+    const conditions = brainMod.summary().conditions || [];
+    const rows = conditions.map((c) => ({
+      symbol: c.symbol,
+      condition: c.condition,
+      testedAt: c.at,
+      rule: c.champion
+        ? {
+            name: c.champion.name,
+            trades: c.champion.n,
+            expectancy: c.champion.expectancy,
+            winrate: c.champion.winrate,
+            tStat: c.champion.tStat,
+            goodFolds: c.champion.goodFolds,
+          }
+        : null,
+    }));
+    if (!symbol) return { updatedAt: brainMod.summary().updatedAt, markets: rows };
+    const s = String(symbol).toUpperCase();
+    return { symbol: s, reading: rows.find((r) => r.symbol === s) || null };
+  },
+
+  async brain_gate({ symbol } = {}) {
+    const s = String(symbol || "").toUpperCase();
+    const inst = market.instrumentList().find((i) => i.symbol === s);
+    if (!inst) return { error: `Unknown market "${symbol}". Known: ${market.instrumentList().map((i) => i.symbol).join(", ")}` };
+    return brainMod.gate(inst.symbol, inst.candleSymbol);
+  },
+
+  journal_summary({ symbol } = {}) {
+    const j = journalMod.summary();
+    const s = symbol ? String(symbol).toUpperCase() : null;
+    return {
+      ...j,
+      recent: (j.recent || [])
+        .filter((e) => !s || e.symbol === s)
+        .slice(0, 5)
+        .map((e) => ({
+          at: e.at,
+          symbol: e.symbol,
+          side: e.side,
+          setup: e.setup,
+          status: e.status,
+          heldReason: e.heldReason,
+          outcome: e.outcome,
+          features: e.features,
+        })),
+      byMarket: s ? (j.byMarket || []).filter((r) => r.label === s) : j.byMarket,
+    };
+  },
+
+  learning_summary() {
+    const l = learningMod.summary();
+    return {
+      closedTrades: l.closedTrades,
+      totalR: l.totalR,
+      mutedCount: l.mutedCount,
+      muted: l.muted,
+      rows: (l.rows || []).map((r) => ({
+        symbol: r.symbol,
+        side: r.side,
+        setup: r.setup,
+        n: r.n,
+        winrate: r.winrate,
+        expectancy: r.expectancy,
+        tStat: r.tStat,
+        status: r.status,
+        note: r.note,
+      })),
+      suppressed: l.suppressed,
+      thresholds: l.thresholds,
+    };
+  },
+
+  signal_results() {
+    const st = tracker.stats();
+    return {
+      open: st.open,
+      wins: st.wins,
+      losses: st.losses,
+      expired: st.expired,
+      winrate: st.winrate,
+      totalR: st.totalR,
+      recent: (st.recent || []).slice(0, 5).map((h) => ({
+        symbol: h.symbol,
+        side: h.side,
+        outcome: h.outcome,
+        rMultiple: h.rMultiple,
+        closedAt: h.closedAt,
+      })),
+    };
+  },
+
+  search_notes({ query } = {}) {
+    if (!query) return { error: "query is required" };
+    return retrieve(query, 4).map((c) => ({ source: c.source, text: c.text }));
+  },
+};
+
+async function executeTool(name, args, live) {
+  const impl = TOOL_IMPLS[name];
+  if (!impl) return { error: `Unknown tool "${name}". Available: ${TOOL_NAMES.join(", ")}` };
+  try {
+    return await impl(args || {}, live);
+  } catch (err) {
+    return { error: `${name} failed: ${err.message}` };
+  }
+}
+
+/**
+ * The answer loop: let the model call tools until it stops asking for them.
+ *
+ * If the provider rejects tool calls outright (some models behind these base
+ * URLs do), retry once without them rather than failing the question. A tool
+ * that throws comes back as an error the model can read and work around.
+ */
+async function answerWithTools({ messages, live, temperature = 0.3, maxTokens = 1200 }) {
+  const msgs = [...messages];
+  const used = [];
+
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    const lastRound = round === MAX_TOOL_ROUNDS;
+    let reply;
+    try {
+      reply = await chat(msgs, {
+        temperature,
+        maxTokens,
+        tools: lastRound ? null : TOOLS,
+      });
+    } catch (err) {
+      if (err.status === 502 && round === 0) {
+        reply = await chat(msgs, { temperature, maxTokens });
+      } else {
+        throw err;
+      }
+    }
+
+    if (!reply.toolCalls.length) {
+      return { answer: reply.content, toolsUsed: used };
+    }
+
+    msgs.push({ role: "assistant", content: reply.content || "", tool_calls: reply.toolCalls });
+    for (const call of reply.toolCalls) {
+      const fn = call.function || {};
+      let args = {};
+      try {
+        args = JSON.parse(fn.arguments || "{}");
+      } catch {
+        args = {};
+      }
+      const result = await executeTool(fn.name, args, live);
+      used.push(fn.name);
+      msgs.push({
+        role: "tool",
+        tool_call_id: call.id || fn.name,
+        content: JSON.stringify(result).slice(0, MAX_TOOL_RESULT_CHARS),
+      });
+    }
+  }
+
+  return {
+    answer: "I could not finish that within the lookup budget. Ask a narrower question and I will try again.",
+    toolsUsed: used,
+  };
 }
 
 const SYSTEM = [
-  "You are the assistant inside Zone Watch, a personal forex and index monitoring app.",
+  "You are the assistant inside Zone Watch, a personal forex and index monitoring app. You are talking with its owner, who wants a real conversation, not a canned summary.",
   "Rules you must follow:",
-  "- Use the CONTEXT for facts about this app and its measured results. Never invent numbers.",
-  "- If the context does not contain the answer, say so plainly instead of guessing.",
-  "- Be honest about uncertainty. This app's own testing found no reliable edge; do not imply otherwise.",
+  "- Use the CONTEXT and LIVE STATE for every fact and number. Never invent prices, trades or results.",
+  "- The PLAN is your own earlier reasoning, made before you saw the full context. Follow it, and correct it where the CONTEXT shows it was wrong.",
+  "- Answer the question that was actually asked, in the first sentence. Then give the why, with the specific numbers that support it.",
+  "- Length follows the question: one line for a simple lookup, a few short paragraphs for an analysis. No filler, no motivational padding.",
+  "- If the data needed is missing, name exactly what is missing and what would answer it, instead of guessing.",
+  "- If the question is ambiguous in a way that changes the answer, ask one short clarifying question and still give the best partial answer you can.",
+  "- Earlier turns in this conversation are context. Use them for follow-ups and do not repeat what you already said unless asked.",
+  "- Be honest about uncertainty. This app's own testing found no reliable edge; never imply otherwise.",
   "- Never give financial advice or predict prices. Describe what the data shows.",
-  "- Keep answers short and concrete. Plain language, no jargon without explanation.",
+  "- Name the gates and numbers the app actually uses (lab verdicts, brain gate, feed, sessions) when they are what explains the answer.",
+  "- You have tools that read this app's own files and live snapshot. Call one when the answer needs a number the summary above does not contain. Prefer a lookup over a guess, do not call the same tool twice for the same thing, and say plainly if a tool came back empty.",
 ].join("\n");
+
+/**
+ * The reasoning pass. Runs before the answer and is not shown to the model as
+ * prose it must repeat: it is a plan. Two calls instead of one, but a model
+ * that has worked out what is being asked — and what it must not claim — stops
+ * producing the one-line, half-informed answers a single shot gives.
+ */
+const PLANNER = [
+  "You are the reasoning stage of Zone Watch's assistant. You do not talk to the user; you write the plan the answer stage will follow.",
+  "Given the question, the recent conversation, the live app state and retrieved notes, write at most six short lines:",
+  "1. What is actually being asked, resolving pronouns and follow-ups from the conversation.",
+  "2. Which live-state fields or numbers answer it.",
+  "3. Which notes are relevant, or 'none'.",
+  "4. What the state and notes do NOT establish, and what must therefore not be claimed.",
+  "5. The shape of the best answer: direct answer first, then the why, then at most one next step.",
+  "No preamble, no restating the question, no final answer.",
+].join("\n");
+
+/* -------------------------- conversation -------------------------- */
+
+// One owner, one conversation. Kept in memory only: it is a train of thought,
+// not a record, so a restart should not resurrect stale chatter.
+const MAX_TURNS = 8;
+const conversation = [];
+
+function remember(role, content) {
+  if (!content) return;
+  conversation.push({ role, content: String(content).slice(0, 2500) });
+  while (conversation.length > MAX_TURNS) conversation.shift();
+}
+
+function resetConversation() {
+  conversation.length = 0;
+}
+
+function recentConversation() {
+  return conversation.slice(-MAX_TURNS);
+}
 
 function formatContext(chunks) {
   if (!chunks.length) return "(no relevant notes found)";
   return chunks.map((c, i) => `[${i + 1}] ${c.text}`).join("\n\n");
 }
 
-/** Free-form question grounded in the knowledge base and live state. */
-async function ask(question, liveState) {
-  const chunks = retrieve(question, 4);
-  const stateSummary = liveState ? JSON.stringify(liveState).slice(0, 2500) : "{}";
+/** Merge retrieval results for two queries, keeping the best score per chunk. */
+function mergeChunks(a, b, limit) {
+  const best = new Map();
+  for (const chunk of [...a, ...b]) {
+    const seen = best.get(chunk.text);
+    if (!seen || chunk.score > seen.score) best.set(chunk.text, chunk);
+  }
+  return [...best.values()].sort((x, y) => y.score - x.score).slice(0, limit);
+}
 
-  return complete([
-    { role: "system", content: SYSTEM },
-    {
-      role: "user",
-      content:
-        `CONTEXT (project notes):\n${formatContext(chunks)}\n\n` +
-        `LIVE STATE (current app data):\n${stateSummary}\n\n` +
-        `QUESTION: ${question}`,
-    },
-  ]);
+/**
+ * Stage one: think. The plan is returned to the caller so the reasoning is
+ * visible and auditable rather than hidden inside a single opaque reply.
+ */
+async function deliberate(question, stateSummary, context, history = []) {
+  const transcript = history.length
+    ? history.map((m) => `${m.role === "user" ? "Owner" : "You"}: ${m.content}`).join("\n")
+    : "(this is the first question)";
+
+  try {
+    const plan = await complete(
+      [
+        { role: "system", content: PLANNER },
+        {
+          role: "user",
+          content:
+            `CONVERSATION SO FAR:\n${transcript}\n\n` +
+            `QUESTION: ${question}\n\n` +
+            `LIVE STATE (current app data):\n${stateSummary}\n\n` +
+            `RETRIEVED NOTES:\n${context}`,
+        },
+      ],
+      { temperature: 0.1, maxTokens: 320 }
+    );
+    return plan;
+  } catch (err) {
+    // A missing key must still be reported as missing; any other planning
+    // failure should degrade to a direct answer, not a blank screen.
+    if (err.status === 503) throw err;
+    return "";
+  }
+}
+
+/**
+ * Free-form question: deliberate first, retrieve again using what the planning
+ * pass worked out, then answer with the conversation as context.
+ */
+async function ask(question, liveState) {
+  const stateSummary = liveState ? JSON.stringify(liveState).slice(0, 6000) : "{}";
+  const history = recentConversation();
+
+  const firstPass = retrieve(question, 5);
+  const plan = await deliberate(question, stateSummary, formatContext(firstPass), history);
+  const chunks = mergeChunks(firstPass, retrieve(`${question} ${plan}`, 6), 6);
+
+  remember("user", question);
+
+  const { answer, toolsUsed } = await answerWithTools({
+    live: liveState,
+    temperature: 0.3,
+    maxTokens: 1200,
+    messages: [
+      { role: "system", content: SYSTEM },
+      ...history,
+      {
+        role: "user",
+        content:
+          `CONTEXT (project notes):\n${formatContext(chunks)}\n\n` +
+          `LIVE STATE (current app data):\n${stateSummary}\n\n` +
+          (plan ? `PLAN (your own earlier reasoning):\n${plan}\n\n` : "") +
+          `QUESTION: ${question}\n\n` +
+          `Look anything else up with the tools instead of guessing.`,
+      },
+    ],
+  });
+
+  remember("assistant", answer);
+  return {
+    answer,
+    thinking: plan,
+    sources: chunks.map((c) => c.source),
+    tools: toolsUsed,
+  };
 }
 
 /* ------------------------------ agents ------------------------------ */
@@ -246,19 +698,29 @@ async function runAgent(name, liveState) {
 
   const chunks = retrieve(`${agent.title} signals zones risk results evidence`, 4);
   const stateSummary = JSON.stringify(liveState || {}).slice(0, 4000);
+  const plan = await deliberate(agent.instruction, stateSummary, formatContext(chunks));
 
-  const answer = await complete([
-    { role: "system", content: SYSTEM },
-    {
-      role: "user",
-      content:
-        `CONTEXT (project notes and measured results):\n${formatContext(chunks)}\n\n` +
-        `LIVE STATE:\n${stateSummary}\n\n` +
-        `TASK: ${agent.instruction}`,
-    },
-  ]);
+  const target = mergeChunks(chunks, retrieve(`${agent.instruction} ${plan}`, 6), 6);
 
-  return { agent: name, title: agent.title, answer };
+  const { answer, toolsUsed } = await answerWithTools({
+    live: liveState,
+    temperature: 0.3,
+    maxTokens: 900,
+    messages: [
+      { role: "system", content: SYSTEM },
+      {
+        role: "user",
+        content:
+          `CONTEXT (project notes and measured results):\n${formatContext(target)}\n\n` +
+          `LIVE STATE:\n${stateSummary}\n\n` +
+          (plan ? `PLAN (your own earlier reasoning):\n${plan}\n\n` : "") +
+          `TASK: ${agent.instruction}\n\n` +
+          `Look anything else up with the tools instead of guessing.`,
+      },
+    ],
+  });
+
+  return { agent: name, title: agent.title, answer, thinking: plan, tools: toolsUsed };
 }
 
 /** A tiny round-trip so the user can prove the key works before relying on it. */
@@ -283,8 +745,18 @@ function status() {
     source: settings.source(),
     keyHint: key ? "••••" + key.slice(-4) : "",
     knowledgeChunks: index ? index.chunks.length : 0,
+    tools: TOOL_NAMES,
     agents: Object.entries(AGENTS).map(([id, a]) => ({ id, title: a.title })),
   };
 }
 
-module.exports = { ask, runAgent, status, retrieve, buildIndex, testConnection, AGENTS };
+module.exports = {
+  ask,
+  runAgent,
+  status,
+  retrieve,
+  buildIndex,
+  testConnection,
+  resetConversation,
+  AGENTS,
+};
