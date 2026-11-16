@@ -278,6 +278,7 @@
     <button class="ghost tiny" id="toggleBtn">Pause updates</button>
     <button class="ghost" id="soundBtn">🔔 Sound on</button>
     <button class="ghost" id="voiceBtn" title="Read alerts aloud">🗣 Voice off</button>
+    <button class="ghost" id="signOutBtn" title="Clear this device's session">Sign out</button>
   </header>
 
   <nav>
@@ -685,6 +686,19 @@
 
   <!-- SETTINGS -->
   <section id="tab-settings" style="display:none">
+    <div class="panel">
+      <h2>Session</h2>
+      <div class="row" style="margin-bottom:10px">
+        <span class="pill" id="authState">…</span>
+        <span class="hint" id="authExpiry"></span>
+      </div>
+      <div class="row">
+        <button class="ghost" id="signOutPanel">Sign out of this device</button>
+        <span class="hint">The password is checked on the server; nothing is stored in the phone beyond a signed cookie.</span>
+      </div>
+      <div class="hint">Forgot the password? Remove the <span class="mono">auth</span> block from settings.json on the server and reload to set a new one.</div>
+    </div>
+
     <div class="panel">
       <h2>Live prices</h2>
       <div class="row" style="margin-bottom:12px">
@@ -3357,6 +3371,35 @@ async function loadDeliveries() {
 
 loadAiStatus();
 loadDeliveries();
+loadAuth();
+
+async function loadAuth() {
+  try {
+    const d = await api("/api/auth/status");
+    const state = document.getElementById("authState");
+    const expiry = document.getElementById("authExpiry");
+    if (state) {
+      state.textContent = d.signedIn ? "signed in" : "not signed in";
+      state.style.color = d.signedIn ? "#7ff0cf" : "#ff9a9a";
+    }
+    if (expiry) {
+      expiry.textContent = d.signedIn && d.expiresAt
+        ? `this device stays signed in until ${new Date(d.expiresAt).toLocaleDateString()}`
+        : "sign in again to use this device";
+    }
+  } catch {}
+}
+
+document.addEventListener("click", (event) => {
+  const id = event.target && event.target.id;
+  if (id !== "signOutBtn" && id !== "signOutPanel") return;
+  event.preventDefault();
+  api("/api/auth/logout", { method: "POST", body: "{}" })
+    .catch(() => undefined)
+    .then(() => {
+      window.location.href = "/login";
+    });
+});
 
 /* cTrader's consent page sends the browser back here with the verdict. */
 (() => {

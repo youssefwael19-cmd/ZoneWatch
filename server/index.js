@@ -65,7 +65,13 @@ app.use(express.json({ limit: "2mb" }));
 
 app.get("/api/auth/status", (req, res) => {
   const record = settings.getAuth();
-  res.json({ ok: true, configured: Boolean(record), signedIn: auth.isSignedIn(req, record) });
+  const expires = auth.sessionExpiry(req, record);
+  res.json({
+    ok: true,
+    configured: Boolean(record),
+    signedIn: auth.isSignedIn(req, record),
+    expiresAt: expires ? new Date(expires).toISOString() : null,
+  });
 });
 
 app.post("/api/auth/setup", (req, res) => {

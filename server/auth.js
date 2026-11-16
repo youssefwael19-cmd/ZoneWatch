@@ -73,6 +73,16 @@ function isSignedIn(req, record) {
   return expected.length === given.length && crypto.timingSafeEqual(expected, given);
 }
 
+/** When the cookie on this request stops being valid, or null. */
+function sessionExpiry(req, record) {
+  if (!record || !record.secret) return null;
+  const raw = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  if (!raw) return null;
+  const expires = Number(String(raw).split(".")[0]);
+  if (!Number.isFinite(expires) || expires < Date.now()) return null;
+  return expires;
+}
+
 function sessionCookie(req, record) {
   const expires = Date.now() + SESSION_DAYS * 86400000;
   const parts = [
@@ -234,6 +244,7 @@ module.exports = {
   hashPassword,
   verifyPassword,
   isSignedIn,
+  sessionExpiry,
   sessionCookie,
   clearCookie,
   allowAttempt,
