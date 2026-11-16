@@ -814,6 +814,8 @@
       </div>
       <div class="hint">Signals are rule-based confluence, not backtested, and not financial advice.</div>
       <button class="btn ghost" id="sendRecap" style="margin-top:12px">Send weekly recap now</button>
+      <button class="btn ghost" id="sendDailyRecap" style="margin-top:12px">Send daily recap now</button>
+      <div class="hint" id="dailyRecapMsg" style="margin-top:8px"></div>
     </div>
 
     <div class="panel">
@@ -967,12 +969,16 @@
         <div><label>Provider base URL</label><input id="aiBase" placeholder="https://api.groq.com/openai/v1" /></div>
         <div><label>Model</label><input id="aiModel" placeholder="openai/gpt-oss-120b" /></div>
         <div style="grid-column:1/-1"><label>API key</label><input id="aiKey" type="password" autocomplete="off" placeholder="paste your key — stored on the server, never shown again" /></div>
+        <div style="grid-column:1/-1"><label>Internet search key (Exa)</label><input id="webSearchKey" type="password" autocomplete="off" placeholder="optional — lets the assistant search the web, stored on the server" /></div>
       </div>
       <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
         <button class="act" id="aiSave">Save key</button>
         <button class="btn ghost" id="aiTest">Test connection</button>
         <button class="btn ghost" id="aiClear">Remove key</button>
-        <span class="hint" id="aiMsg"></span>
+        <button class="btn ghost" id="webSearchSave">Save search key</button>
+        <button class="btn ghost" id="webSearchTest">Test search</button>
+        <button class="btn ghost" id="webSearchClear">Remove search key</button>
+        <span class="hint" id="webSearchMsg"></span>
       </div>
       <div class="hint">
         Free option: create a key at <strong>console.groq.com</strong> → API Keys. Leave the fields as they are for Groq
@@ -2688,6 +2694,86 @@ document.getElementById("sendRecap").addEventListener("click", async () => {
     btn.textContent = "Send weekly recap now";
   }, 4000);
 });
+
+document.getElementById("sendDailyRecap").addEventListener("click", async () => {
+  const btn = document.getElementById("sendDailyRecap");
+  const msg = document.getElementById("dailyRecapMsg");
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    const res = await fetch("/api/recap/daily/send", { method: "POST" });
+    const data = await res.json();
+    btn.textContent = data.ok ? "Daily recap sent" : "Failed: " + (data.error || "unknown");
+    if (msg) {
+      msg.textContent = data.text || data.error || "";
+      msg.style.color = data.ok ? "#9fb3c8" : "#ff9a9a";
+      msg.style.whiteSpace = "pre-wrap";
+    }
+  } catch (err) {
+    btn.textContent = "Failed: " + err.message;
+  }
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = "Send daily recap now";
+  }, 4000);
+});
+
+const webSearchMsg = (text, bad) => {
+  const el = document.getElementById("webSearchMsg");
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = bad ? "#ff9a9a" : "#7ff0cf";
+};
+
+async function loadWebSearchStatus() {
+  try {
+    const d = await api("/api/websearch/status");
+    webSearchMsg(d.configured ? `search ready (${d.keyHint})` : "search not configured", !d.configured);
+  } catch {}
+}
+
+async function saveWebSearchKey(clear) {
+  const input = document.getElementById("webSearchKey");
+  const key = clear ? "" : (input ? input.value.trim() : "");
+  if (!clear && !key) {
+    webSearchMsg("paste the key first", true);
+    return;
+  }
+  try {
+    const d = await api("/api/websearch/key", {
+      method: "POST",
+      body: JSON.stringify(clear ? { clear: true } : { key }),
+    });
+    if (d.ok) {
+      if (input) input.value = "";
+      webSearchMsg(d.configured ? `saved (${d.keyHint})` : "search key removed", !d.configured === false);
+    } else webSearchMsg(d.error || "could not save", true);
+  } catch (err) {
+    webSearchMsg(err.message, true);
+  }
+}
+
+const webSearchSaveBtn = document.getElementById("webSearchSave");
+if (webSearchSaveBtn) webSearchSaveBtn.addEventListener("click", () => saveWebSearchKey(false));
+const webSearchClearBtn = document.getElementById("webSearchClear");
+if (webSearchClearBtn) webSearchClearBtn.addEventListener("click", () => saveWebSearchKey(true));
+const webSearchTestBtn = document.getElementById("webSearchTest");
+if (webSearchTestBtn) {
+  webSearchTestBtn.addEventListener("click", async () => {
+    webSearchMsg("searching…");
+    try {
+      const d = await api("/api/websearch/test", { method: "POST", body: "{}" });
+      if (d.ok && d.results && d.results.length) {
+        webSearchMsg(`${d.results.length} results · ${d.results[0].title || d.results[0].url}`);
+      } else {
+        webSearchMsg(d.error || "no results", true);
+      }
+    } catch (err) {
+      webSearchMsg(err.message, true);
+    }
+  });
+}
+loadWebSearchStatus();
 
 document.getElementById("saveTrading").addEventListener("click", async () => {
   const msg = document.getElementById("tradingMsg");

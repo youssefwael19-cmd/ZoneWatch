@@ -36,6 +36,29 @@ function write(obj) {
  * The dashboard password. Stored as a scrypt hash plus the cookie-signing
  * secret; the password itself is never written anywhere.
  */
+/**
+ * Exa API key for the assistant's internet search. Server-side only: the browser
+ * never receives more than the last four characters.
+ */
+function getWebSearchKey() {
+  const stored = read();
+  return typeof stored.webSearchKey === "string" ? stored.webSearchKey : "";
+}
+
+function setWebSearchKey(key) {
+  const stored = read();
+  const value = String(key || "").trim();
+  if (value) stored.webSearchKey = value.slice(0, 300);
+  write(stored);
+  return getWebSearchKey();
+}
+
+function clearWebSearchKey() {
+  const stored = read();
+  delete stored.webSearchKey;
+  write(stored);
+}
+
 function getAuth() {
   const stored = read();
   const auth = stored.auth;
@@ -684,6 +707,9 @@ module.exports = {
   getTvHint,
   getDirectHint,
   setBrainGate,
+  getWebSearchKey,
+  setWebSearchKey,
+  clearWebSearchKey,
   getAuth,
   setAuth,
   clearAuth,

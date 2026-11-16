@@ -39,6 +39,13 @@ const journalMod = require("./journal");
 const learningMod = require("./learning");
 const tracker = require("./signaltracker");
 const market = require("./market");
+const zonesStore = require("./zones");
+const executor = require("./executor");
+const discordMod = require("./discord");
+const newsMod = require("./news");
+const marketclock = require("./marketclock");
+const dailyRecap = require("./dailyrecap");
+const websearch = require("./websearch");
 
 /**
  * Configuration resolves in this order: what you saved in the app, then env
@@ -310,6 +317,108 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "zones_state",
+      description:
+        "Every active supply/demand zone with its state (inside, approaching, near, far), distance, touches and source. Filter by symbol or ask for all.",
+      parameters: {
+        type: "object",
+        properties: {
+          symbol: { type: "string" },
+          limit: { type: "integer", description: "maximum rows, default 40" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "alerts_today",
+      description: "Alerts sent and held back today, plus the most recent zone alerts.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "auto_trading_status",
+      description:
+        "The auto-trading executor: on/off, mode, kill switch, equity, today's realised P&L, open and closed counts, and its risk settings. Never contains secrets.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "news_outlook",
+      description: "Upcoming high-impact economic events and whether the news blackout is active.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "market_hours",
+      description: "Whether the market is open, which session is running, and any session events today.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "discord_activity",
+      description: "Discord configuration (masked) and the latest deliveries, including failures.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "app_settings",
+      description:
+        "The app's configuration: enabled markets, trading rules, quiet hours, broker mode and cost settings. Secrets are never included.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "daily_recap_preview",
+      description: "The exact text today's daily Discord recap would contain, without sending it.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "send_discord",
+      description:
+        "Post a message to one of the owner's Discord channels. Only call this when the owner explicitly asks you to send or post something.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel: { type: "string", enum: ["alerts", "news", "recap"] },
+          message: { type: "string" },
+        },
+        required: ["message"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description:
+        "Search the live internet for news, releases or facts the app does not hold. Returns titles, URLs and snippets; cite the URL when you use one.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    },
+  },
 ];
 
 const TOOL_NAMES = TOOLS.map((t) => t.function.name);
@@ -455,6 +564,162 @@ const TOOL_IMPLS = {
     if (!query) return { error: "query is required" };
     return retrieve(query, 4).map((c) => ({ source: c.source, text: c.text }));
   },
+
+  zones_state({ symbol, limit } = {}, live) {
+    const state = live || {};
+    const source = Array.isArray(state.zones) && state.zones.length ? state.zones : zonesStore.loadZones();
+    const wanted = symbol ? String(symbol).toUpperCase() : null;
+    const rows = source
+      .filter((z) => z.active !== false && (!wanted || z.symbol === wanted))
+      .slice(0, Math.min(Math.max(Number(limit) || 40, 1), 80))
+      .map((z) => ({
+        symbol: z.symbol,
+        type: z.type,
+        low: z.low,
+        high: z.high,
+        state: z.state,
+        distance: z.distance,
+        touches: z.touches,
+        strength: z.strength,
+        source: z.source || "manual",
+        label: z.label,
+      }));
+    return { count: rows.length, totalZones: source.length, zones: rows };
+  },
+
+  alerts_today() {
+    const j = journalMod.summary();
+    const alerts = (zonesStore.loadAlerts() || []).slice(-10).map((a) => ({
+      at: a.at,
+      symbol: a.symbol,
+      message: a.message,
+      kind: a.kind || a.state,
+    }));
+    return { sent: j.sent, held: j.held, heldByGate: j.heldByGate, recentAlerts: alerts };
+  },
+
+  auto_trading_status() {
+    const e = executor.status(new Map());
+    const cfg = store.getExecConfig();
+    const direct = cfg.direct || {};
+    return {
+      enabled: e.enabled,
+      mode: e.mode,
+      killSwitch: e.killSwitch,
+      killReason: e.killReason,
+      equity: e.equity,
+      dayRealized: e.dayRealized,
+      dayRealizedPct: e.dayRealizedPct,
+      openCount: e.openCount,
+      closedCount: e.closedCount,
+      riskPct: cfg.riskPct,
+      maxPositions: cfg.maxPositions,
+      maxDailyLossPct: cfg.maxDailyLossPct,
+      broker: direct.provider,
+      environment: direct.environment,
+      accountId: direct.accountId || "",
+      brokerConfigured: e.direct ? Boolean(e.direct.configured) : undefined,
+      bridgeConfigured: e.bridgeConfigured,
+      costs: e.costs || null,
+    };
+  },
+
+  async news_outlook() {
+    try {
+      const summary = await newsMod.getNewsSummary();
+      return {
+        risk: summary.newsRisk,
+        upcoming: (summary.highImpactSoon || []).slice(0, 5),
+        headlines: (summary.headlines || []).slice(0, 6),
+      };
+    } catch (err) {
+      return { error: `news feed unavailable: ${err.message}` };
+    }
+  },
+
+  market_hours(_args, live) {
+    const state = live || {};
+    let clock = null;
+    try {
+      clock = marketclock.check();
+    } catch (err) {
+      clock = { error: err.message };
+    }
+    return {
+      marketOpen: state.marketOpen,
+      sessions: state.sessions,
+      sessionEvents: state.sessionEvents,
+      clock,
+    };
+  },
+
+  discord_activity() {
+    return {
+      status: discordMod.status(),
+      deliveries: (discordMod.getDeliveries() || []).slice(-8),
+    };
+  },
+
+  app_settings() {
+    const cfg = store.getExecConfig();
+    return {
+      markets: store.getEnabledMarkets() || "all",
+      trading: store.getTradingConfig(),
+      quietHours: store.getQuietHours(),
+      autoZones: store.getAutoZones(),
+      signalAlerts: store.getSignalAlerts(),
+      sessionAlerts: store.getSessionAlerts(),
+      approachAlerts: store.getApproachAlerts(),
+      correlation: { enabled: store.getCorrelationEnabled(), groups: store.getCorrelationGroups() },
+      brokers: {
+        mode: cfg.mode,
+        provider: cfg.direct.provider,
+        environment: cfg.direct.environment,
+        bridgeConfigured: Boolean(cfg.bridgeUrl && cfg.bridgeSecret),
+        directConfigured: Boolean(cfg.direct.accountId),
+      },
+      costs: cfg.costs,
+      tradingView: { enabled: cfg.tv.enabled, requireGate: cfg.tv.requireGate },
+      ai: { model: settings.model(), baseUrl: settings.baseUrl(), search: websearch.status() },
+    };
+  },
+
+  daily_recap_preview(_args, live) {
+    const stats = tracker.stats();
+    const proven = (brainMod.summary().conditions || [])
+      .filter((c) => c.champion && c.champion.family)
+      .map((c) => c.symbol);
+    return {
+      text: dailyRecap.fromApp({
+        journal: journalMod.summary(),
+        exec: executor.status(new Map()),
+        history: tracker.load().history,
+        openTrades: stats.open,
+        proven,
+        live: live || {},
+      }),
+    };
+  },
+
+  async send_discord({ channel = "alerts", message } = {}) {
+    const text = String(message || "").trim();
+    if (!text) return { error: "message is required" };
+    if (text.length > 1900) return { error: "Discord caps a message at 2000 characters; shorten it" };
+    const target = ["alerts", "news", "recap"].includes(channel) ? channel : "alerts";
+    if (!discordMod.configured()) return { error: "no Discord webhook is configured" };
+    if (!discordMod.channelConfigured(target)) {
+      return { error: `no webhook is set for the ${target} channel; set one in Settings` };
+    }
+    await discordMod.post({ content: text }, target);
+    return { ok: true, channel: target, characters: text.length };
+  },
+
+  async web_search({ query } = {}) {
+    if (!query) return { error: "query is required" };
+    const found = await websearch.search(query, { numResults: 5 });
+    if (!found.ok) return { error: found.error, configured: websearch.status().configured };
+    return { query: found.query, results: found.results };
+  },
 };
 
 async function executeTool(name, args, live) {
@@ -538,6 +803,8 @@ const SYSTEM = [
   "- Never give financial advice or predict prices. Describe what the data shows.",
   "- Name the gates and numbers the app actually uses (lab verdicts, brain gate, feed, sessions) when they are what explains the answer.",
   "- You have tools that read this app's own files and live snapshot. Call one when the answer needs a number the summary above does not contain. Prefer a lookup over a guess, do not call the same tool twice for the same thing, and say plainly if a tool came back empty.",
+  "- web_search reaches the live internet. Use it for news, releases or anything the app does not hold, and cite the source URL you used. If it is not configured, say that instead of answering from memory as if you had checked.",
+  "- send_discord posts a real message to the owner's Discord. Call it only when the owner explicitly asks you to send or post something, and never as a way to show an answer.",
 ].join("\n");
 
 /**
@@ -746,6 +1013,7 @@ function status() {
     keyHint: key ? "••••" + key.slice(-4) : "",
     knowledgeChunks: index ? index.chunks.length : 0,
     tools: TOOL_NAMES,
+    webSearch: websearch.status(),
     agents: Object.entries(AGENTS).map(([id, a]) => ({ id, title: a.title })),
   };
 }

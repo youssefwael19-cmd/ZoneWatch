@@ -36,6 +36,8 @@ const ctraderBroker = require("./brokers/ctrader");
 const { writeJson } = require("./atomicWrite");
 const auth = require("./auth");
 const digestMod = require("./digest");
+const dailyRecapMod = require("./dailyrecap");
+const websearchMod = require("./websearch");
 const paperReviewMod = require("./paperreview");
 const ivbSent = new Set();
 const HEARTBEAT_FILE = path.join(__dirname, "..", "heartbeat.json");
@@ -896,21 +898,34 @@ async function buildSnapshot() {
       }
     }
 
-    // Daily digest, due from 21:00 UTC, sent only if something happened.
-    if (alertsReady && digestMod.shouldSend(new Date())) {
+    // Daily recap, due from 21:00 UTC: always sent, unlike the old conditional
+    // digest, because "nothing happened and here is why" is the useful answer at
+    // the end of a day. The digest endpoint stays for previewing its content.
+    if (dailyRecapMod.shouldSend(new Date())) {
       try {
-        const j = journal.summary();
-        const e = executor.status(priceBySymbol);
-        const proven = (brainMod.summary().conditions || [])
+        const recapStats = tracker.stats();
+        const recapProven = (brainMod.summary().conditions || [])
           .filter((r) => r.champion && r.champion.family)
           .map((r) => r.symbol);
-        digestMod.markSent();
-        if (digestMod.hasSomethingToReport({ journal: j, exec: e })) {
-          await discord.post({ content: digestMod.buildDigest({ journal: j, exec: e, proven }) }, "alerts");
-        }
+        const recapText = dailyRecapMod.fromApp({
+          journal: journal.summary(),
+          exec: executor.status(priceBySymbol),
+          history: tracker.load().history,
+          openTrades: recapStats.open,
+          proven: recapProven,
+          live: {
+            zones: evaluated,
+            nearest,
+            brokenZones: newlyBroken,
+            quotes,
+            feed: { stale: Boolean(feed && feed.stale && feed.stale.length) },
+          },
+        });
+        dailyRecapMod.markSent();
+        await discord.post({ content: recapText }, "recap");
       } catch (err) {
-        digestMod.markSent();
-        console.error("digest:", err.message);
+        dailyRecapMod.markSent();
+        console.error("daily recap:", err.message);
       }
     }
 
@@ -1797,6 +1812,91 @@ app.post("/api/recap/send", async (_req, res) => {
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
   }
+});
+
+/** What tonight's daily recap says, without sending it. */
+app.get("/api/recap/daily", (req, res) => {
+  const live = snapshot || {};
+  const rec = dailyRecapMod.fromApp({
+    journal: journal.summary(),
+    exec: executor.status(priceMapNow()),
+    history: tracker.load().history,
+    openTrades: tracker.stats().open,
+    proven: (brainMod.summary().conditions || [])
+      .filter((r) => r.champion && r.champion.family)
+      .map((r) => r.symbol),
+    live: {
+      zones: live.zones || [],
+      nearest: live.nearest || {},
+      brokenZones: live.brokenZones || [],
+      quotes: live.quotes || [],
+      feed: live.feed || {},
+    },
+  });
+  res.json({
+    ok: true,
+    text: rec,
+    due: dailyRecapMod.shouldSend(),
+    lastSentDay: dailyRecapMod.readState().lastSentDay,
+    channel: discord.channelConfigured("recap") ? "recap" : "alerts",
+  });
+});
+
+app.post("/api/recap/daily/send", async (req, res) => {
+  try {
+    const rec = dailyRecapMod.fromApp({
+      journal: journal.summary(),
+      exec: executor.status(priceMapNow()),
+      history: tracker.load().history,
+      openTrades: tracker.stats().open,
+      proven: (brainMod.summary().conditions || [])
+        .filter((r) => r.champion && r.champion.family)
+        .map((r) => r.symbol),
+      live: {
+        zones: (snapshot && snapshot.zones) || [],
+        nearest: (snapshot && snapshot.nearest) || {},
+        brokenZones: (snapshot && snapshot.brokenZones) || [],
+        quotes: (snapshot && snapshot.quotes) || [],
+        feed: (snapshot && snapshot.feed) || {},
+      },
+    });
+    if (req.body && req.body.preview) {
+      res.json({ ok: true, sent: false, text: rec });
+      return;
+    }
+    await discord.post({ content: rec }, "recap");
+    dailyRecapMod.markSent();
+    res.json({ ok: true, sent: true, text: rec });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+/* The assistant's internet search key. Server-side only, masked in every reply. */
+app.get("/api/websearch/status", (_req, res) => {
+  res.json({ ok: true, ...websearchMod.status() });
+});
+
+app.post("/api/websearch/key", (req, res) => {
+  const body = req.body || {};
+  if (body.clear) {
+    settings.clearWebSearchKey();
+    res.json({ ok: true, ...websearchMod.status() });
+    return;
+  }
+  const key = String(body.key || "").trim();
+  if (!key) {
+    res.status(400).json({ ok: false, error: "paste the Exa API key first" });
+    return;
+  }
+  settings.setWebSearchKey(key);
+  res.json({ ok: true, ...websearchMod.status() });
+});
+
+app.post("/api/websearch/test", async (req, res) => {
+  const query = String((req.body && req.body.query) || "gold price today").slice(0, 200);
+  const found = await websearchMod.search(query, { numResults: 3 });
+  res.json({ ok: found.ok, query: found.query, results: found.results || [], error: found.error });
 });
 
 app.get("/api/alerts", (_req, res) => {

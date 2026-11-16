@@ -160,6 +160,30 @@ per event and can be switched off with the checkbox.
 Discord cannot host the dashboard itself: the app stays in the browser and
 Discord receives the alerts.
 
+### The daily recap
+
+Once a day, at or after 21:00 UTC, the app posts one recap to the **recap**
+channel (falling back to the default webhook if none is set):
+
+```
+**Zone Watch · daily recap · Mon, 16 Nov 2026 21:00:00 UTC**
+Feed: 10 markets · 36 zones (36 auto) · live.
+Alerts: 12 sent, 3 held by a gate · 2 zones broke.
+Signals: 3 closed today (1W/1L, 1 expired, +1R) · 2 open now.
+Auto-trading (paper): equity $1032.50 · today +$8.40 · 1 open, 12 closed all time.
+Gate: 2 markets cleared (EURUSD, AUDJPY).
+Closest to a zone: GBPUSD 0.0004 away of supply 1.32–1.3214 · XAUUSD inside of demand 3800–3810.
+```
+
+It is sent whether or not anything happened, which is the difference between it
+and the older conditional digest — a quiet day is still a fact worth knowing,
+and silence should mean the app is down, not that it had a dull day. The old
+digest's text is still available at `/api/digest`, and `GET /api/recap/daily`
+returns tonight's recap without sending it. **Send daily recap now** in Discord
+settings posts it immediately; `POST /api/recap/daily/send` with
+`{"preview":true}` builds it without touching Discord. The day it last sent is
+stored in `dailyrecap.json`, so a restart cannot send the same day twice.
+
 ## Automatic zones
 
 The bot can draw its own supply and demand zones from 15-minute candles, so
@@ -236,6 +260,35 @@ inside a zone, stop half a zone width beyond the far edge, target at 2R.
 At 1:2 you need 33.4% just to break even, so 41% is positive on paper — but the
 sample is small enough that the true figure could plausibly sit anywhere from
 roughly 33% to 49%. Treat it as promising, not proven, and do not size up on it.
+
+## The assistant
+
+The assistant answers from the app's own state and can now look things up
+instead of guessing. Its tools are read-only except one, and every one of them
+returns plain data the model must quote rather than invent:
+
+| tool | what it reads |
+|---|---|
+| `market_state`, `zones_state` | live quotes, every zone with its state, distance and touches |
+| `auto_trading_status` | executor mode, kill switch, equity, today's P&L, risk limits (no secrets) |
+| `alerts_today`, `signal_results`, `journal_summary` | alerts sent and held, tracked outcomes, the trade log |
+| `lab_verdict`, `brain_status`, `brain_gate` | out-of-sample verdicts and the per-market gate |
+| `learning_summary`, `search_notes` | what the learner muted, and the project's own notes |
+| `news_outlook`, `market_hours`, `discord_activity` | calendar risk, session state, recent Discord deliveries |
+| `app_settings` | markets, trading rules, quiet hours, broker mode, cost settings |
+| `daily_recap_preview` | tonight's recap text |
+| `send_discord` | **writes** one message to alerts/news/recap, only when you ask it to |
+| `web_search` | the live internet, via Exa |
+
+### Internet search
+
+Set an Exa API key in the assistant panel (**Save search key**) or as
+`EXA_API_KEY` in the environment. The key stays server-side; the API only ever
+reports its last four characters. Exa's free tier covers a few thousand searches
+a month, and the tool is capped at five results per call with 500-character
+excerpts, so a chatty assistant cannot burn the budget in one question. With no
+key the tool tells the model search is unavailable, and the model is instructed
+to say so rather than answer as if it had checked.
 
 ## Auto-trading
 
