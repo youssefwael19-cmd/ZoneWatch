@@ -84,7 +84,13 @@ const SYMBOL_ALIASES = {
  * a connection error into a rejection instead of a 15-second silence.
  */
 function defaultTransport(url) {
-  if (typeof WebSocket !== "function") throw new Error("this Node build has no WebSocket client");
+  if (typeof WebSocket !== "function") {
+    // Node 20 and older ship no WebSocket client, and the failure otherwise looks
+    // like a network problem rather than a runtime that is too old.
+    throw new Error(
+      `this Node build (${process.version}) has no WebSocket client; cTrader needs Node 22 or newer`
+    );
+  }
   const socket = new WebSocket(url);
   let listener = () => {};
   let errorListener = () => {};

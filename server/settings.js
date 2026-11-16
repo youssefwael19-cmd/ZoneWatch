@@ -22,11 +22,33 @@ function read() {
   }
 }
 
-function write(obj) {
-  fs.writeFileSync(FILE, JSON.stringify(obj, null, 2), "utf-8");
+/**
+ * Where the bytes really live. On Fly this file is a symlink onto the volume, so
+ * writing through the link is fine but *renaming* onto it would replace the link
+ * with a regular file and quietly stop persisting credentials across deploys.
+ */
+function realTarget(file) {
   try {
-    fs.chmodSync(FILE, 0o600);
+    return fs.realpathSync(file);
+  } catch {
+    try {
+      return path.resolve(path.dirname(file), fs.readlinkSync(file));
+    } catch {
+      return file;
+    }
+  }
+}
+
+function write(obj) {
+  const target = realTarget(FILE);
+  // Write beside the file and rename: this file holds the broker credentials,
+  // and a machine stopped mid-write used to leave a truncated settings.json.
+  const tmp = `${target}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), "utf-8");
+  try {
+    fs.chmodSync(tmp, 0o600);
   } catch {}
+  fs.renameSync(tmp, target);
 }
 
 function getKey() {

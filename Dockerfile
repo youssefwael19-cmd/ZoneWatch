@@ -1,4 +1,7 @@
-FROM node:20-slim
+# Node 22 is the oldest line still receiving security fixes that also ships a
+# built-in WebSocket client, which server/brokers/ctrader.js needs: Node 20 has
+# no global WebSocket, so direct cTrader mode could never connect there.
+FROM node:22-slim
 
 WORKDIR /app
 
