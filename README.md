@@ -344,7 +344,19 @@ no extra dependency. Choose **cTrader** in the Direct broker list and fill in:
 - **account ID** — the numeric `ctidTraderAccountId`, not the login shown in the
   platform. The adapter lists your accounts and picks the configured one.
 
-The whole OAuth setup is one guided command, and you only copy one thing — the
+**No terminal at all, from the phone.** Put the app's client ID and secret in the
+Direct broker panel, register `<the app URL>/api/exec/ctrader/callback` as a
+redirect URI on the cTrader application, then press **Connect cTrader**. The
+dashboard hands the browser to cTrader's own consent page, cTrader sends the
+one-time code back to that callback, and the server redeems it, asks the trading
+socket which account it belongs to, and writes the client ID, secret, tokens,
+environment and account id into `settings.json` — then returns to the dashboard
+with a one-line result. The client secret never leaves the server, no token is
+ever shown in the URL, and a `state` value ties the callback to a sign-in this
+process started, so a stray callback cannot inject someone else's code.
+
+If you would rather see the exchange happen, or the redirect has to land
+somewhere else, the same flow exists as one guided command; you only copy the
 code cTrader puts on your redirect URL:
 
 ```bash

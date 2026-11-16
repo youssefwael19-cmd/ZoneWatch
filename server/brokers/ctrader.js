@@ -848,6 +848,58 @@ async function refreshTokens(cfg) {
   }
 }
 
+/* ------------------------------------------------------ oauth handshake -- */
+
+const CONSENT_URL = "https://id.ctrader.com/my/settings/openapi/grantingaccess/";
+
+/**
+ * The page the user approves. `scope=trading` is not decoration: with
+ * `accounts` the token can read a balance and never place an order.
+ */
+function consentUrl({ clientId, redirectUri, state }) {
+  const query = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: "trading",
+    product: "web",
+  });
+  if (state) query.set("state", state);
+  return `${CONSENT_URL}?${query.toString()}`;
+}
+
+/**
+ * Redeem the one-time authorisation code. It lives for about sixty seconds and
+ * works once, so this has to be called the moment the browser comes back.
+ */
+async function exchangeCode({ clientId, clientSecret, redirectUri, code }) {
+  const query = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: redirectUri,
+    client_id: clientId,
+    client_secret: clientSecret,
+  });
+  const tokenUrl = process.env.CTRADER_TOKEN_URL || "https://openapi.ctrader.com/apps/token";
+  try {
+    const res = await fetch(`${tokenUrl}?${query.toString()}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.accessToken) {
+      return {
+        ok: false,
+        error: data.error_description || data.error || `the token endpoint returned ${res.status}`,
+      };
+    }
+    return {
+      ok: true,
+      accessToken: data.accessToken,
+      refreshToken: data.refreshToken || "",
+      expiresIn: data.expiresIn,
+    };
+  } catch (err) {
+    return { ok: false, error: `could not reach the token endpoint: ${err.message}` };
+  }
+}
+
 function reset() {
   for (const session of sessions.values()) {
     session.then((state) => {
@@ -870,6 +922,8 @@ module.exports = {
   closeInstrument,
   test,
   refreshTokens,
+  consentUrl,
+  exchangeCode,
   // Exposed for the executor's size check: cTrader answers in its own symbol
   // metadata, so a static units-per-lot table would be a guess. Returning null
   // tells the executor to let the broker judge the size.

@@ -496,6 +496,9 @@
         cTrader needs a registered application (client ID + secret) and an account that has approved it — the access token lasts
         about a month, so supply a refresh token and the app renews it by itself. Practice and live are separate hosts. A size
         below the broker's minimum volume is refused rather than rounded up, because rounding up would multiply the risk.
+        Press <strong>Connect cTrader</strong> to sign in without a terminal: register
+        <code id="ctraderRedirect">/api/exec/ctrader/callback</code> as a redirect URI on the app first, and the
+        account id comes back filled in by itself.
       </div>
 
       <div class="fields" style="margin-top:12px">
@@ -517,6 +520,7 @@
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
         <button id="exSave">Save</button>
+        <button id="exConnect" class="quiet">Connect cTrader</button>
         <button id="exTestBridge" class="quiet">Test bridge</button>
         <button id="exTestBroker" class="quiet">Test broker API</button>
         <button id="exAccount" class="quiet">Read account</button>
@@ -1072,6 +1076,29 @@ document.addEventListener("click", async (event) => {
         say("saved");
         loadExec();
       } else say(d.error || "could not save", true);
+    }
+    if (id === "exConnect") {
+      const clientId = document.getElementById("dirClientId").value.trim();
+      const clientSecret = document.getElementById("dirClientSecret").value.trim();
+      if (!clientId) {
+        say("enter the cTrader client ID first", true);
+        return;
+      }
+      // The server needs the secret to redeem the code, so it goes in before the
+      // browser leaves for cTrader. It is never sent back out.
+      if (clientSecret) {
+        const saved = await api("/api/exec/config", {
+          method: "POST",
+          body: JSON.stringify({ direct: { provider: "ctrader", clientId, clientSecret } }),
+        });
+        if (!saved.ok) {
+          say(saved.error || "could not save the client secret", true);
+          return;
+        }
+        document.getElementById("dirClientSecret").value = "";
+      }
+      say("opening cTrader…");
+      window.location.href = "/api/exec/ctrader/start";
     }
     if (id === "exTestBridge") {
       say("asking the bridge…");
@@ -1867,6 +1894,8 @@ async function loadExec() {
     document.getElementById("dirRefresh").placeholder = d.directHint ? `saved ${d.directHint}` : "not set";
     const tvUrl = document.getElementById("tvUrl");
     if (tvUrl) tvUrl.textContent = `${location.origin}/api/tv/webhook?token=<your secret>`;
+    const ctraderRedirect = document.getElementById("ctraderRedirect");
+    if (ctraderRedirect) ctraderRedirect.textContent = `${location.origin}/api/exec/ctrader/callback`;
     if (document.activeElement !== document.getElementById("exUrl")) {
       document.getElementById("exUrl").value = cfg.bridgeUrl || "";
     }
@@ -3328,6 +3357,29 @@ async function loadDeliveries() {
 
 loadAiStatus();
 loadDeliveries();
+
+/* cTrader's consent page sends the browser back here with the verdict. */
+(() => {
+  const params = new URLSearchParams(window.location.search);
+  const outcome = params.get("ctrader");
+  if (!outcome) return;
+  const msg = document.getElementById("exMsg");
+  const extras = params.get("more")
+    ? ` · ${params.get("more")} accounts on this login, set the right one in Account ID`
+    : "";
+  const text =
+    outcome === "ok"
+      ? `cTrader connected · account ${params.get("account")} · ${params.get("broker") || "broker"} · ${params.get("env") || "demo"}${extras}`
+      : outcome === "partial"
+        ? params.get("msg") || "cTrader tokens saved, but no account answered"
+        : `cTrader sign-in failed · ${params.get("msg") || "no reason given"}`;
+  if (msg) {
+    msg.textContent = text;
+    msg.style.color = outcome === "error" ? "#ff9a9a" : "#7ff0cf";
+  }
+  window.history.replaceState({}, "", window.location.pathname);
+  loadExec();
+})();
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {

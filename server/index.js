@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { execFile } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -31,6 +32,7 @@ const journal = require("./journal");
 const executor = require("./executor");
 const tvMod = require("./tradingview");
 const costsMod = require("./costs");
+const ctraderBroker = require("./brokers/ctrader");
 const digestMod = require("./digest");
 const paperReviewMod = require("./paperreview");
 const ivbSent = new Set();
@@ -1193,6 +1195,137 @@ app.post("/api/exec/account", async (_req, res) => {
   } catch (err) {
     res.json({ ok: false, error: err.message });
   }
+});
+
+/**
+ * cTrader's OAuth round trip, run from the phone.
+ *
+ * The dashboard sends the browser here, cTrader shows its own consent page, and
+ * the one-time code comes back to /callback in this process — no terminal, no
+ * pasting, and the client secret never leaves the server. Sign-in codes die
+ * after about a minute, which is why the browser is already open on the consent
+ * page when the code is issued.
+ */
+const ctraderStates = new Map();
+const CTRADER_STATE_MS = 10 * 60 * 1000;
+
+/** The origin the browser used, so the redirect URI matches what was registered. */
+function originOf(req) {
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim();
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  return `${proto}://${host}`;
+}
+
+app.get("/api/exec/ctrader/start", (req, res) => {
+  const direct = settings.getExecConfig().direct || {};
+  const clientId = String(direct.clientId || "").trim();
+  const clientSecret = String(direct.clientSecret || "").trim();
+  if (!clientId || !clientSecret) {
+    res.status(400).json({ ok: false, error: "Save the cTrader client ID and client secret first." });
+    return;
+  }
+  const now = Date.now();
+  for (const [key, value] of ctraderStates) if (value.expires < now) ctraderStates.delete(key);
+  const redirectUri = `${originOf(req)}/api/exec/ctrader/callback`;
+  const state = crypto.randomBytes(16).toString("hex");
+  ctraderStates.set(state, { redirectUri, expires: now + CTRADER_STATE_MS });
+  res.redirect(ctraderBroker.consentUrl({ clientId, redirectUri, state }));
+});
+
+app.get("/api/exec/ctrader/callback", async (req, res) => {
+  const back = (params) => res.redirect(`/?${new URLSearchParams(params).toString()}`);
+  const { code, state, error } = req.query || {};
+  if (error) {
+    back({ ctrader: "error", msg: String(error).slice(0, 200) });
+    return;
+  }
+  const known = ctraderStates.get(String(state || ""));
+  if (!known) {
+    back({ ctrader: "error", msg: "That sign-in expired or did not start here. Press Connect cTrader again." });
+    return;
+  }
+  ctraderStates.delete(String(state));
+  if (!code) {
+    back({ ctrader: "error", msg: "cTrader came back without a code." });
+    return;
+  }
+
+  const direct = settings.getExecConfig().direct || {};
+  const clientId = String(direct.clientId || "").trim();
+  const clientSecret = String(direct.clientSecret || "").trim();
+  const tokens = await ctraderBroker.exchangeCode({
+    clientId,
+    clientSecret,
+    redirectUri: known.redirectUri,
+    code: String(code),
+  });
+  if (!tokens.ok) {
+    back({ ctrader: "error", msg: tokens.error });
+    return;
+  }
+
+  // The token endpoint never says which account the token belongs to: that only
+  // comes back over the trading socket, so ask each platform in turn.
+  let environment = "";
+  let accounts = [];
+  for (const host of ["practice", "live"]) {
+    const found = await ctraderBroker.listAccounts({
+      direct: {
+        provider: "ctrader",
+        clientId,
+        clientSecret,
+        token: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        environment: host,
+      },
+    });
+    if (found.ok && found.accounts && found.accounts.length) {
+      environment = host;
+      accounts = found.accounts;
+      break;
+    }
+  }
+
+  if (!accounts.length) {
+    // Keep the tokens regardless: they are the awkward part to obtain, and the
+    // account id can be typed in once the demo account is sorted out.
+    settings.setExecConfig({
+      direct: {
+        provider: "ctrader",
+        environment: "practice",
+        clientId,
+        clientSecret,
+        token: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      },
+    });
+    back({
+      ctrader: "partial",
+      msg: "Tokens saved, but no account answered for them. Check the demo account exists, then press Read account.",
+    });
+    return;
+  }
+
+  const chosen = accounts[0];
+  const accountId = String(chosen.accountId);
+  settings.setExecConfig({
+    direct: {
+      provider: "ctrader",
+      environment,
+      clientId,
+      clientSecret,
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      accountId,
+    },
+  });
+  back({
+    ctrader: "ok",
+    account: accountId,
+    broker: String(chosen.broker || "cTrader"),
+    env: environment === "live" ? "live" : "demo",
+    more: accounts.length > 1 ? String(accounts.length) : "",
+  });
 });
 
 /** Read the account's live spread per market from the bridge. */
