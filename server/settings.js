@@ -499,13 +499,35 @@ const EXEC_DEFAULTS = {
   symbolOverrides: { NASDAQ: "USTEC" },
   bridgeUrl: "",
   bridgeSecret: "",
+  // A broker's own REST API, for accounts with no terminal to run: the app
+  // places the order from the cloud and the broker holds the stop. Off until
+  // an account id and token are filled in.
+  direct: { provider: "oanda", environment: "practice", accountId: "", token: "" },
   requireGate: true,
+  // TradingView can only send alerts, so these settings describe the receiver.
+  // requireGate stays true by default: an alert from outside the app has not
+  // been measured by the brain, and should not silently skip it.
+  tv: { enabled: false, secret: "", requireGate: true },
+  // Broker costs. Spreads come from server/costs.js unless overridden per
+  // symbol here; commission and swap default to zero rather than a guess.
+  costs: { spreads: {}, commissionPerLot: 0, swapPerLotPerNight: 0 },
 };
 
 function getExecConfig() {
   const stored = read();
   const exec = stored.exec && typeof stored.exec === "object" ? stored.exec : {};
-  return { ...EXEC_DEFAULTS, ...exec, symbolOverrides: { ...EXEC_DEFAULTS.symbolOverrides, ...(exec.symbolOverrides || {}) } };
+  return {
+    ...EXEC_DEFAULTS,
+    ...exec,
+    symbolOverrides: { ...EXEC_DEFAULTS.symbolOverrides, ...(exec.symbolOverrides || {}) },
+    tv: { ...EXEC_DEFAULTS.tv, ...(exec.tv || {}) },
+    direct: { ...EXEC_DEFAULTS.direct, ...(exec.direct || {}) },
+    costs: {
+      ...EXEC_DEFAULTS.costs,
+      ...(exec.costs || {}),
+      spreads: { ...(exec.costs && exec.costs.spreads) },
+    },
+  };
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -520,7 +542,9 @@ function setExecConfig(patch = {}) {
   const next = { ...current };
 
   if (patch.enabled !== undefined) next.enabled = Boolean(patch.enabled);
-  if (patch.mode !== undefined) next.mode = patch.mode === "bridge" ? "bridge" : "paper";
+  if (patch.mode !== undefined) {
+    next.mode = ["paper", "bridge", "direct"].includes(patch.mode) ? patch.mode : "paper";
+  }
   if (patch.riskPct !== undefined) next.riskPct = clampNumber(patch.riskPct, 0.01, 3, current.riskPct);
   if (patch.maxDailyLossPct !== undefined) {
     next.maxDailyLossPct = clampNumber(patch.maxDailyLossPct, 0.5, 10, current.maxDailyLossPct);
@@ -543,10 +567,72 @@ function setExecConfig(patch = {}) {
     next.bridgeSecret = patch.bridgeSecret.trim().slice(0, 200);
   }
   if (patch.clearBridgeSecret) next.bridgeSecret = "";
+  if (patch.direct && typeof patch.direct === "object") {
+    const direct = { ...next.direct };
+    if (typeof patch.direct.provider === "string") {
+      direct.provider = patch.direct.provider.trim().slice(0, 40) || EXEC_DEFAULTS.direct.provider;
+    }
+    if (patch.direct.environment !== undefined) {
+      direct.environment = patch.direct.environment === "live" ? "live" : "practice";
+    }
+    if (typeof patch.direct.accountId === "string") {
+      direct.accountId = patch.direct.accountId.trim().slice(0, 40);
+    }
+    if (typeof patch.direct.baseUrl === "string") {
+      direct.baseUrl = patch.direct.baseUrl.trim().slice(0, 300);
+    }
+    if (typeof patch.direct.token === "string" && patch.direct.token.trim()) {
+      direct.token = patch.direct.token.trim().slice(0, 400);
+    }
+    // cTrader credentials: the OAuth application and its refresh token.
+    for (const field of ["clientId", "clientSecret", "refreshToken"]) {
+      if (typeof patch.direct[field] === "string" && patch.direct[field].trim()) {
+        direct[field] = patch.direct[field].trim().slice(0, 400);
+      }
+    }
+    if (patch.direct.clearToken) direct.token = "";
+    next.direct = direct;
+  }
+  if (patch.costs && typeof patch.costs === "object") {
+    const costs = { ...next.costs, spreads: { ...(next.costs.spreads || {}) } };
+    if (patch.costs.commissionPerLot !== undefined) {
+      costs.commissionPerLot = clampNumber(patch.costs.commissionPerLot, 0, 1000, costs.commissionPerLot);
+    }
+    if (patch.costs.swapPerLotPerNight !== undefined) {
+      costs.swapPerLotPerNight = clampNumber(patch.costs.swapPerLotPerNight, -1000, 1000, costs.swapPerLotPerNight);
+    }
+    if (patch.costs.spreads && typeof patch.costs.spreads === "object") {
+      for (const [symbol, value] of Object.entries(patch.costs.spreads)) {
+        const n = Number(value);
+        if (Number.isFinite(n) && n >= 0) costs.spreads[String(symbol).toUpperCase()] = n;
+      }
+    }
+    next.costs = costs;
+  }
+  if (patch.tv && typeof patch.tv === "object") {
+    const tv = { ...next.tv };
+    if (patch.tv.enabled !== undefined) tv.enabled = Boolean(patch.tv.enabled);
+    if (patch.tv.requireGate !== undefined) tv.requireGate = Boolean(patch.tv.requireGate);
+    if (typeof patch.tv.secret === "string" && patch.tv.secret.trim()) {
+      tv.secret = patch.tv.secret.trim().slice(0, 200);
+    }
+    if (patch.tv.clearSecret) tv.secret = "";
+    next.tv = tv;
+  }
 
   stored.exec = next;
   write(stored);
   return next;
+}
+
+/** Masked broker API token, the same way the bridge secret is masked. */
+function getDirectHint() {
+  const direct = getExecConfig().direct || {};
+  // cTrader can run on the refresh token alone, so either credential proves
+  // something is stored without revealing what.
+  const token = direct.token || direct.refreshToken || "";
+  if (!token) return "";
+  return `••••${token.slice(-4)}`;
 }
 
 function getExecHint() {
@@ -556,11 +642,20 @@ function getExecHint() {
   return `••••${secret.slice(-4)}`;
 }
 
+/** The TradingView webhook token, masked the same way. */
+function getTvHint() {
+  const secret = (getExecConfig().tv || {}).secret || "";
+  if (!secret) return "";
+  return `••••${secret.slice(-4)}`;
+}
+
 module.exports = {
   getBrainGate,
   getExecConfig,
   setExecConfig,
   getExecHint,
+  getTvHint,
+  getDirectHint,
   setBrainGate,
   getKey,
   setKey,
