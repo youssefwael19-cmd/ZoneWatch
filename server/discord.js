@@ -7,15 +7,17 @@
  * rich embeds.
  *
  * You can set one default webhook and optionally override it per purpose:
- *   alerts  - zone alerts, signals, signal results, session open/close
- *   news    - economic calendar warnings
- *   recap   - the weekly recap
+ *   alerts  - zone alerts, broken zones, guard/feed/heartbeat warnings
+ *   signals - signal entries, approach warnings, wins and losses
+ *   news    - economic calendar warnings and session open/close
+ *   recap   - the daily recap, weekly recap and weekly paper review
  *
  * Webhook URLs are secrets. They are stored server-side and only ever shown
  * back as their last few characters.
  */
 
 const settings = require("./settings");
+const pips = require("./pips");
 
 const COLORS = {
   inside: 0xff5f5f, // red
@@ -27,7 +29,7 @@ const COLORS = {
   sessionClose: 0x9b8cff, // purple
 };
 
-const CHANNELS = ["alerts", "news", "recap"];
+const CHANNELS = ["alerts", "signals", "news", "recap"];
 
 function defaultWebhook() {
   return settings.getDiscord() || process.env.DISCORD_WEBHOOK_URL || "";
@@ -235,7 +237,10 @@ async function sendZoneAlert(alert) {
             },
             {
               name: "Distance",
-              value: alert.distance != null ? money(alert.distance, 1) : "—",
+              value:
+                alert.distance != null
+                  ? `${money(alert.distance, 1)} · ${pips.pipsLabel(alert.symbol, pips.pipsOf(alert.symbol, alert.distance))}`
+                  : "—",
               inline: true,
             },
             ...levelField,
@@ -278,6 +283,24 @@ async function sendSignal(signal) {
             { name: "Entry", value: String(signal.entry), inline: true },
             { name: "Stop", value: String(signal.stop), inline: true },
             { name: "Target", value: String(signal.target), inline: true },
+            {
+              name: "Risk",
+              value: pips.pipsLabel(
+                signal.symbol,
+                Math.abs(pips.pipsBetween(signal.symbol, signal.entry, signal.stop)),
+                { signed: false }
+              ),
+              inline: true,
+            },
+            {
+              name: "Reward",
+              value: pips.pipsLabel(
+                signal.symbol,
+                Math.abs(pips.pipsBetween(signal.symbol, signal.entry, signal.target)),
+                { signed: false }
+              ),
+              inline: true,
+            },
             {
               name: "Zone",
               value: `${signal.zone.low}–${signal.zone.high} (${signal.zone.type})`,
@@ -323,7 +346,7 @@ async function sendSignal(signal) {
         },
       ],
     },
-    "alerts"
+    "signals"
   );
 }
 
@@ -343,7 +366,11 @@ async function sendSignalApproach(warning) {
           fields: [
             { name: "Instrument", value: warning.symbol, inline: true },
             { name: "Likely side", value: warning.side, inline: true },
-            { name: "Distance", value: String(warning.distance), inline: true },
+            {
+              name: "Distance",
+              value: `${warning.distance} · ${pips.pipsLabel(warning.symbol, pips.pipsOf(warning.symbol, warning.distance))}`,
+              inline: true,
+            },
             { name: "Price", value: String(warning.price), inline: true },
             { name: "Zone", value: `${warning.zone.low}–${warning.zone.high}`, inline: true },
             { name: "Source", value: warning.zone.source === "auto" ? "Auto zone" : "Your zone", inline: true },
@@ -354,7 +381,11 @@ async function sendSignalApproach(warning) {
             ? { fields: [
                 { name: "Instrument", value: warning.symbol, inline: true },
                 { name: "Likely side", value: warning.side, inline: true },
-                { name: "Distance", value: String(warning.distance), inline: true },
+                {
+                  name: "Distance",
+                  value: `${warning.distance} · ${pips.pipsLabel(warning.symbol, pips.pipsOf(warning.symbol, warning.distance))}`,
+                  inline: true,
+                },
                 { name: "Price", value: String(warning.price), inline: true },
                 { name: "Zone", value: `${warning.zone.low}–${warning.zone.high}`, inline: true },
                 { name: "Source", value: warning.zone.source === "auto" ? "Auto zone" : "Your zone", inline: true },
@@ -366,7 +397,7 @@ async function sendSignalApproach(warning) {
         },
       ],
     },
-    "alerts"
+    "signals"
   );
 }
 
@@ -411,6 +442,16 @@ async function sendIvb(ivb) {
             { name: "Entry (edge)", value: levelPrice(ivb.entry, ivb.entry), inline: true },
             { name: "Stop (other side)", value: levelPrice(ivb.stop, ivb.entry), inline: true },
             { name: "Target 1:2", value: levelPrice(ivb.target, ivb.entry), inline: true },
+            {
+              name: "Risk",
+              value: pips.pipsLabel(ivb.symbol, Math.abs(pips.pipsBetween(ivb.symbol, ivb.entry, ivb.stop)), { signed: false }),
+              inline: true,
+            },
+            {
+              name: "Reward",
+              value: pips.pipsLabel(ivb.symbol, Math.abs(pips.pipsBetween(ivb.symbol, ivb.entry, ivb.target)), { signed: false }),
+              inline: true,
+            },
             { name: "Broken at", value: ivb.breakoutAt ? String(ivb.breakoutAt).slice(11, 16) + " UTC" : "—", inline: true },
             {
               name: "Not included",
@@ -423,7 +464,7 @@ async function sendIvb(ivb) {
         },
       ],
     },
-    "alerts"
+    "signals"
   );
 }
 
@@ -571,6 +612,26 @@ async function sendSignalResult(result) {
   const title = won ? "Signal WON" : expired ? "Signal expired" : "Signal LOST";
   const colour = won ? COLORS.info : expired ? COLORS.near : COLORS.inside;
 
+  // Pips actually banked: entry to the price the trade left at.
+  const movedPips = Math.abs(pips.pipsBetween(result.symbol, result.entry, result.exit) ?? 0);
+  const signedPips = expired ? pips.pipsBetween(result.symbol, result.entry, result.exit) : won ? movedPips : -movedPips;
+
+  // Money, when the signal carried a position size. A paper trade risks exactly
+  // riskMoney at 1R, so the result in money is the R multiple applied to it.
+  const riskMoney = Number(result.sizing && result.sizing.riskMoney);
+  const moneyField =
+    result.sizing && Number.isFinite(riskMoney) && riskMoney > 0
+      ? [
+          {
+            name: "Money",
+            value: `${result.rMultiple < 0 ? "-" : "+"}$${Math.abs(result.rMultiple * riskMoney).toFixed(2)}${
+              result.sizing.lots != null ? ` · ${result.sizing.lots} lots` : ""
+            }`,
+            inline: true,
+          },
+        ]
+      : [];
+
   return post(
     {
       username: "Zone Watch",
@@ -591,6 +652,8 @@ async function sendSignalResult(result) {
               value: `${result.rMultiple > 0 ? "+" : ""}${result.rMultiple}R`,
               inline: true,
             },
+            { name: "Pips", value: pips.pipsLabel(result.symbol, signedPips), inline: true },
+            ...moneyField,
             { name: "Stop", value: String(result.stop), inline: true },
             { name: "Target", value: String(result.target), inline: true },
             { name: "Held", value: `${result.heldMinutes || 0} min`, inline: true },
@@ -600,7 +663,7 @@ async function sendSignalResult(result) {
         },
       ],
     },
-    "alerts"
+    "signals"
   );
 }
 

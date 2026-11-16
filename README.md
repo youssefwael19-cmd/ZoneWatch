@@ -157,6 +157,38 @@ The server polls the market on its own every 30 seconds, so Discord alerts
 arrive even when no browser is open. High-impact news warnings are posted once
 per event and can be switched off with the checkbox.
 
+### Separate channels
+
+One webhook is enough to start, but alerts, signals and recaps can each go to
+their own channel. Create a webhook in each channel you want (same steps as
+above) and paste them under **Settings → Discord alerts → Separate channels**:
+
+| Channel | Carries |
+| --- | --- |
+| Alerts | price entering or approaching a zone, broken zones, daily-loss guard, feed watchdog, heartbeat and health warnings |
+| Signals | signal entries, approach warnings, IVB breakouts, and every **win**, **loss** or expiry |
+| News | economic-calendar warnings, session and market open/close |
+| Recap | the daily recap, the weekly recap and the weekly paper review |
+
+Any box left empty falls back to the default webhook, so nothing is lost by
+filling in only the ones you care about.
+
+Signals and results are kept apart from zone alerts on purpose: zones fire all
+day and a trade is the thing you want to see on its own, with the number that
+decides whether the day was good.
+
+### Pips, not price distance
+
+Every signal, zone alert and result also states the distance in **pips**
+(`server/pips.js`): a EURUSD stop 30 pips away reads `30 pips`, gold reads in
+0.1 steps, yen pairs use the second decimal. The Nasdaq index is quoted in
+index points, so its messages say `pts` rather than calling a point a pip.
+
+Win and loss messages add the pips the trade actually moved, and — when the
+signal carried a position size — what that was worth in money. A paper trade
+risks exactly its `riskMoney` at 1R, so the money line is the R multiple
+applied to the risk: a 2R win on a $10 risk reads `+$20.00`.
+
 Discord cannot host the dashboard itself: the app stays in the browser and
 Discord receives the alerts.
 

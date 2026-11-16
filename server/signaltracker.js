@@ -71,6 +71,8 @@ function add(signal) {
     target: signal.target,
     riskReward: signal.riskReward,
     zone: signal.zone,
+    // Kept so the win/loss message can say what it was worth, not just R.
+    sizing: signal.sizing || null,
     openedAt: signal.at || new Date().toISOString(),
   });
 

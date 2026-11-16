@@ -751,15 +751,19 @@
       <h3 style="margin:20px 0 4px;font-size:13px">Separate channels (optional)</h3>
       <div class="hint" style="margin-bottom:10px">Leave a box empty and that kind of alert uses the default webhook above.</div>
       <div>
-        <label>Alerts — zones, signals, results</label>
+        <label>Alerts — zones, broken zones, feed and health warnings</label>
         <input id="chAlerts" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Signals — entries, approach warnings, wins and losses</label>
+        <input id="chSignals" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
       </div>
       <div style="margin-top:10px">
         <label>News — calendar, sessions, market open/close</label>
         <input id="chNews" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
       </div>
       <div style="margin-top:10px">
-        <label>Weekly recap</label>
+        <label>Recap — daily, weekly and paper review</label>
         <input id="chRecap" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
       </div>
       <div class="row" style="margin-top:12px">
@@ -2102,7 +2106,7 @@ function renderHealth(data) {
   const errs = data.discordErrors || [];
   if (errs.length) setHealth("h-discord", "bad", "send failed");
   else if (!dc.configured) setHealth("h-discord", "warn", "not set up");
-  else if (dc.channels && (!dc.channels.alerts?.configured || !dc.channels.news?.configured || !dc.channels.recap?.configured))
+  else if (dc.channels && (!dc.channels.alerts?.configured || !dc.channels.signals?.configured || !dc.channels.news?.configured || !dc.channels.recap?.configured))
     setHealth("h-discord", "warn", "some channels missing");
   else setHealth("h-discord", "ok", "connected");
 
@@ -2598,7 +2602,7 @@ function paintDiscord(d) {
   if (box) box.checked = d.news !== false;
 
   if (d.channels) {
-    const map = { chAlerts: "alerts", chNews: "news", chRecap: "recap" };
+    const map = { chAlerts: "alerts", chSignals: "signals", chNews: "news", chRecap: "recap" };
     for (const [id, key] of Object.entries(map)) {
       const input = document.getElementById(id);
       if (!input) continue;
@@ -2635,10 +2639,12 @@ document.getElementById("saveChannels").addEventListener("click", async () => {
   const msg = document.getElementById("chanMsg");
   const read = (id) => (document.getElementById(id).value || "").trim();
   const alerts = read("chAlerts");
+  const signals = read("chSignals");
   const newsCh = read("chNews");
   const recapCh = read("chRecap");
   const patch = {};
   if (alerts) patch.alerts = alerts;
+  if (signals) patch.signals = signals;
   if (newsCh) patch.news = newsCh;
   if (recapCh) patch.recap = recapCh;
   if (!Object.keys(patch).length) {
@@ -2647,7 +2653,7 @@ document.getElementById("saveChannels").addEventListener("click", async () => {
   }
   const d = await saveDiscord({ discordChannels: patch }, msg, "Saved. Each alert type now goes to its own channel.");
   if (d) {
-    for (const id of ["chAlerts", "chNews", "chRecap"]) document.getElementById(id).value = "";
+    for (const id of ["chAlerts", "chSignals", "chNews", "chRecap"]) document.getElementById(id).value = "";
   }
 });
 
@@ -2655,7 +2661,7 @@ document.getElementById("clearChannels").addEventListener("click", async () => {
   const msg = document.getElementById("chanMsg");
   if (!confirm("Send every alert type to the default webhook again?")) return;
   await saveDiscord(
-    { discordChannels: { alerts: "", news: "", recap: "" } },
+    { discordChannels: { alerts: "", signals: "", news: "", recap: "" } },
     msg,
     "All alerts use the default webhook now."
   );
