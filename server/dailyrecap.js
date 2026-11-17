@@ -52,6 +52,12 @@ function money(value) {
   return `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}`;
 }
 
+/** The same money format, with a leading + when it is a gain. */
+function signed(value) {
+  const n = Number(value) || 0;
+  return `${n > 0 ? "+" : ""}${money(n)}`;
+}
+
 function startOfDayUtc(now) {
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 }
@@ -120,8 +126,17 @@ function buildRecap({
 
   if (exec.enabled) {
     const pnl = Number(exec.dayRealized) || 0;
+    // Wins and losses in money, not R: the paper account is the thing being
+    // judged, so the day's record belongs on the same line as its equity.
+    const tradeRecord = Number(exec.dayClosed)
+      ? ` · ${exec.dayWins || 0}W/${exec.dayLosses || 0}L${
+          exec.dayBest == null
+            ? ""
+            : ` (best ${signed(exec.dayBest)}, worst ${signed(exec.dayWorst)})`
+        }`
+      : " · no closed trades";
     lines.push(
-      `Auto-trading (${exec.mode}): equity ${exec.equity == null ? "—" : money(exec.equity)} · today ${pnl >= 0 ? "+" : ""}${money(pnl)} · ${
+      `Auto-trading (${exec.mode}): equity ${exec.equity == null ? "—" : money(exec.equity)} · today ${signed(pnl)}${tradeRecord} · ${
         exec.openCount || 0
       } open, ${exec.closedCount || 0} closed all time${exec.killSwitch ? ` · **stopped: ${exec.killReason || "by hand"}**` : ""}.`
     );

@@ -72,6 +72,10 @@ function fresh() {
     closed: [],
     dayKey: null,
     dayRealized: 0,
+    // Realised P&L is folded into the balance, so this stays zero; it exists
+    // because equity() adds it and an undefined here used to make equity NaN,
+    // which reached the recap as "equity —" before the first trade.
+    dayRealizedTotal: 0,
     killedAt: null,
     killReason: null,
     lastError: null,
@@ -110,7 +114,7 @@ function equity(state, priceBySymbol) {
     if (!Number.isFinite(price)) continue;
     floating += pnlOf(pos, price) - (pos.cost || 0);
   }
-  return Number((start + state.dayRealizedTotal + floating).toFixed(2));
+  return Number((start + (Number(state.dayRealizedTotal) || 0) + floating).toFixed(2));
 }
 
 function priceOf(priceBySymbol, symbol) {
@@ -668,6 +672,14 @@ function status(priceBySymbol) {
   const startEquity = Number(state.balance ?? config.accountBalance) || 0;
   const eq = equity(state, priceBySymbol);
   const dayPct = ((state.dayRealized + 0) / (startEquity || 1)) * 100;
+  // Today's paper record, so a recap can say "3W/2L" next to the money instead
+  // of leaving the reader to infer it from a total.
+  const now = new Date();
+  const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const dayClosed = state.closed.filter((c) => {
+    const at = new Date(c.closedAt || 0).getTime();
+    return Number.isFinite(at) && at >= dayStart;
+  });
   // With a real broker the balance is the broker's, not the app's running
   // ledger: the broker already applied the fills and the P&L.
   const brokerBalance =
@@ -694,6 +706,15 @@ function status(priceBySymbol) {
     equity: eq,
     dayRealized: Number(state.dayRealized.toFixed(2)),
     dayRealizedPct: Number(dayPct.toFixed(2)),
+    dayClosed: dayClosed.length,
+    dayWins: dayClosed.filter((c) => c.outcome === "win").length,
+    dayLosses: dayClosed.filter((c) => c.outcome === "loss").length,
+    dayBest: dayClosed.length
+      ? Number(Math.max(...dayClosed.map((c) => Number(c.pnl) || 0)).toFixed(2))
+      : null,
+    dayWorst: dayClosed.length
+      ? Number(Math.min(...dayClosed.map((c) => Number(c.pnl) || 0)).toFixed(2))
+      : null,
     costs: costsMod.summarize(state.closed, config, state.spreads),
     open: state.open,
     openCount: state.open.length,
