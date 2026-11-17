@@ -181,6 +181,7 @@ function fullInfo() {
     statusPingHint: settings.getStatusPingHint(),
     statusPingConfigured: Boolean(settings.getStatusPingUrl()),
     statusPing: statusPingInfo(),
+    externalChecks: externalCheckInfo(),
     quietHours: settings.getQuietHours(),
     lab: { ...labMod.summary(), results: undefined },
     ai: { ...aiMod.status() },
@@ -334,6 +335,30 @@ async function pingStatus({ force = false } = {}) {
     lastStatusPingError = err.message;
     return { ok: false, error: err.message };
   }
+}
+
+/*
+ * Outside checks on /healthz. A stopped machine stays stopped until something
+ * requests its URL, so "no outside check since start" is the answer to "why was
+ * there a 40-minute gap?" — nobody was knocking. In memory on purpose: every
+ * wake-up restarts the process, and a stale count would be misleading.
+ */
+const processStartedAt = Date.now();
+let externalCheckCount = 0;
+let lastExternalCheckAt = null;
+
+function noteExternalCheck() {
+  externalCheckCount += 1;
+  lastExternalCheckAt = Date.now();
+}
+
+function externalCheckInfo() {
+  return {
+    count: externalCheckCount,
+    lastAt: lastExternalCheckAt ? new Date(lastExternalCheckAt).toISOString() : null,
+    lastAgeSeconds: lastExternalCheckAt ? Math.round((Date.now() - lastExternalCheckAt) / 1000) : null,
+    sinceStartSeconds: Math.round((Date.now() - processStartedAt) / 1000),
+  };
 }
 
 /** What the dashboard shows next to the ping URL: proof pings are leaving. */
@@ -1811,6 +1836,7 @@ app.get("/api/heartbeat", (_req, res) => {
  * 503 = the process answers but the watcher is stuck, which a plain ping misses.
  */
 app.get("/healthz", (_req, res) => {
+  noteExternalCheck();
   const beat = readHeartbeat();
   const ageMs = beat && Number.isFinite(beat.at) ? Date.now() - beat.at : null;
   const limitMs = Math.max(90 * 1000, WATCH_INTERVAL_MS * 4);
@@ -1825,6 +1851,7 @@ app.get("/healthz", (_req, res) => {
     uptimeUrl: settings.getStatusPingUrl() ? "configured" : "not set",
     lastUptimePingError: lastStatusPingError,
     uptimePing: statusPingInfo(),
+    externalChecks: externalCheckInfo(),
     ...(healthy ? {} : { error: "watcher has not checked the market recently" }),
   });
 });

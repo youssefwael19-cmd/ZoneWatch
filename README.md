@@ -635,7 +635,12 @@ the watcher on every wake-up, so it is a workaround for the trial, not a fix.
 
 Settings shows `last ping …` so you can see pings leaving, `Send test ping` fires
 one immediately, and `/healthz` reports the same state for other monitors (200
-while the watcher is alive, 503 when it is stuck). Every ping stops when the Fly
+while the watcher is alive, 503 when it is stuck).
+
+That same `/healthz` also counts **outside checks** — requests from a cron job or
+URL monitor — and `/api/settings` shows the count next to the ping hint. If it
+says "no outside check since start", nothing is actually knocking on the app, and
+a stopped machine will stay stopped however the pings are configured. Every ping stops when the Fly
 machine is stopped by the trial limit, so "down" from Healthchecks during a trial
 is usually the machine sleeping, not a broken ping.
 

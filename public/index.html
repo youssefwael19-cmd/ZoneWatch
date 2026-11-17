@@ -3020,6 +3020,11 @@ async function loadSettings() {
       } else if (d.provider.statusPingConfigured) {
         text += " · no ping sent yet this run";
       }
+      // A cron job or URL monitor must request this app to wake a stopped host.
+      const outside = d.provider.externalChecks || {};
+      text += outside.count
+        ? ` · outside check ${outside.lastAgeSeconds != null ? outside.lastAgeSeconds + "s ago" : "just now"} (${outside.count} this run)`
+        : ` · no outside check in ${Math.round((outside.sinceStartSeconds || 0) / 60)} min, so nothing is polling /healthz`;
       pingHint.textContent = text;
     }
     const pingUrl = document.getElementById("pingUrl");
