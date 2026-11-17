@@ -1018,7 +1018,13 @@ async function buildSnapshot() {
     // Daily recap, due from 21:00 UTC: always sent, unlike the old conditional
     // digest, because "nothing happened and here is why" is the useful answer at
     // the end of a day. The digest endpoint stays for previewing its content.
-    if (dailyRecapReady && dailyRecapMod.shouldSend(new Date())) {
+    //
+    // It needs a cycle with real prices behind it. A cold start can produce a
+    // cycle with no quotes and no zones, and a recap built from that would say
+    // "0 markets · 0 zones" for a day the app spent watching ten of them — and
+    // then mark itself sent, so the day's real recap never went out.
+    const recapHasPrices = (quotes || []).some((q) => Number.isFinite(Number(q.price)));
+    if (dailyRecapReady && recapHasPrices && dailyRecapMod.shouldSend(new Date())) {
       try {
         const recapStats = tracker.stats();
         const recapProven = (brainMod.summary().conditions || [])

@@ -732,6 +732,16 @@ const TOOL_IMPLS = {
   },
 
   daily_recap_preview(_args, live) {
+    // The recap counts markets and zones from the live snapshot. Without one,
+    // it would report "0 markets · 0 zones" and read as if the feed were empty
+    // rather than as if the snapshot were missing, which is a different fact.
+    const state = live || {};
+    if (!Array.isArray(state.quotes) || !state.quotes.some((q) => Number.isFinite(Number(q.price)))) {
+      return {
+        error:
+          "there is no live price snapshot in this cycle yet, so a recap now would wrongly say 0 markets; ask again after the next watch cycle (about 20 seconds)",
+      };
+    }
     const stats = tracker.stats();
     const proven = (brainMod.summary().conditions || [])
       .filter((c) => c.champion && c.champion.family)
