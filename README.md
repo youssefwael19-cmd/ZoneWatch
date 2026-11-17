@@ -418,7 +418,14 @@ the bridge is connected — "Read live spreads" pulls the account's current spre
 for each market, and it is refreshed with the account every few minutes. Until
 then a table is used (gold 0.30, Nasdaq 1.5 points, majors about 1.2 pips), and
 `costs.spreads` overrides either. Commission and swap are set in the panel.
-Paper results are net of costs, and the status line answers the only question
+
+Paper fills slip as well, because a market order never fills at the price on the
+screen. Every entry is moved against the trade by a quarter of the spread
+(`costs.slippageSpreadMultiple`, or `costs.slippage` per market), and a stop
+fills at the stop plus that slippage — or at the price the market actually
+gapped to when it blew through both. Targets stay at the target: a gap running
+past one is not booked as a better fill than the one that was planned. Paper
+results are net of costs, and the status line answers the only question
 that matters for a small edge: whether today's winners still paid for every
 trade taken, broker included.
 

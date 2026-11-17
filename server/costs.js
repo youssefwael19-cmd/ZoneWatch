@@ -17,6 +17,14 @@
  * dollars on raw-spread accounts). Swap is per lot per night held; it is
  * instrument- and direction-dependent and sometimes a credit, so it defaults to
  * zero and is configured rather than guessed.
+ *
+ * Slippage is the third cost, and the one a backtest forgets. A market order
+ * does not fill at the price the app was looking at: it fills at whatever the
+ * book offers when it arrives, always against the trader. It is modelled as a
+ * multiple of the spread (a quarter of it by default), which scales with the
+ * market instead of being a fixed number of pips that is too big for gold and
+ * too small for the Nasdaq. Per-symbol overrides are allowed the same way
+ * spreads are.
  */
 
 const SPREADS = {
@@ -53,12 +61,22 @@ const DEFAULT_STOPS = {
 
 const LIVE_MAX_AGE_MS = 15 * 60 * 1000;
 
+// How far a market fill may slip, as a fraction of the spread. A quarter is a
+// deliberate middle: retail FX usually fills inside it, a stop order during a
+// news spike can blow well past it, and a model that is right on average is
+// more useful than one that is optimistic on every trade.
+const SLIPPAGE_SPREAD_MULTIPLE = 0.25;
+
 function costConfig(config) {
   const costs = (config && config.costs) || {};
+  const multiple = Number(costs.slippageSpreadMultiple);
   return {
     spreads: costs.spreads && typeof costs.spreads === "object" ? costs.spreads : {},
     commissionPerLot: Number(costs.commissionPerLot) || 0,
     swapPerLotPerNight: Number(costs.swapPerLotPerNight) || 0,
+    slippage: costs.slippage && typeof costs.slippage === "object" ? costs.slippage : {},
+    slippageSpreadMultiple:
+      Number.isFinite(multiple) && multiple >= 0 ? multiple : SLIPPAGE_SPREAD_MULTIPLE,
   };
 }
 
@@ -87,6 +105,31 @@ function spreadInfo(symbol, config, live) {
 /** Spread in price units for a symbol. Kept for callers that want just the number. */
 function spreadFor(symbol, config, live) {
   return spreadInfo(symbol, config, live).units;
+}
+
+/**
+ * How far a market order fills past the price the app saw, in price units.
+ *
+ * Best first: an explicit per-symbol override, then the same fraction of the
+ * spread the broker is actually quoting. With no spread known there is nothing
+ * to scale against, so it returns zero rather than inventing a number — the
+ * trade still pays the spread itself.
+ */
+function slippageInfo(symbol, config, live) {
+  const { slippage, slippageSpreadMultiple } = costConfig(config);
+  const override = Number(slippage[symbol]);
+  if (Number.isFinite(override) && override >= 0) return { units: override, source: "override" };
+
+  const spread = spreadInfo(symbol, config, live);
+  if (Number.isFinite(spread.units)) {
+    return {
+      units: Number((spread.units * slippageSpreadMultiple).toFixed(8)),
+      source: "model",
+      multiple: slippageSpreadMultiple,
+      spreadSource: spread.source,
+    };
+  }
+  return { units: 0, source: "unknown", multiple: slippageSpreadMultiple };
 }
 
 /**
@@ -148,6 +191,10 @@ function summarize(closed = [], config = null, live = null, now = new Date()) {
   const lossGross = money(losses.reduce((a, c) => a + Number(c.grossPnl != null ? c.grossPnl : c.pnl), 0));
   const lossCost = money(losses.reduce((a, c) => a + Number(c.cost || 0), 0));
 
+  // Slippage never appears in `cost` — it is already inside the fill prices —
+  // so it is summed separately to show how much of a result the fill assumed.
+  const slippage = money(rows.reduce((a, c) => a + Number(c.slippageMoney || 0) + Number(c.gapMoney || 0), 0));
+
   const avgCost = rows.length ? money(cost / rows.length) : null;
   const avgWinGross = wins.length ? money(winGross / wins.length) : null;
   const avgWinNet = wins.length ? money((winGross - winCost) / wins.length) : null;
@@ -163,6 +210,7 @@ function summarize(closed = [], config = null, live = null, now = new Date()) {
     losses: losses.length,
     gross,
     cost,
+    slippage,
     net,
     winGross,
     winCost,
@@ -257,8 +305,10 @@ module.exports = {
   SPREADS,
   DEFAULT_STOPS,
   LIVE_MAX_AGE_MS,
+  SLIPPAGE_SPREAD_MULTIPLE,
   spreadInfo,
   spreadFor,
+  slippageInfo,
   entryCost,
   exitCost,
   summarize,

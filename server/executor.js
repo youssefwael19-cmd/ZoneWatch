@@ -3,9 +3,11 @@
  * survivable.
  *
  * Two modes:
- *   paper  — nothing leaves the app. Orders are filled at the signal price and
- *            resolved against live quotes, so the whole chain (sizing, stops,
- *            limits) can be proved before any real money is involved.
+ *   paper  — nothing leaves the app. Orders are filled at the signal price
+ *            moved against the trade by slippage, resolved against live quotes
+ *            and, when the market gaps through a stop, filled at the price it
+ *            gapped to rather than at the stop. The whole chain (sizing,
+ *            stops, limits, costs) can be proved before real money is involved.
  *   bridge — a POST to a small service running on the machine that has
  *            MetaTrader 5 open and logged in (see bridge/mt5_bridge.py). MT5
  *            has no public REST API and its Python package is Windows-only, so
@@ -201,6 +203,53 @@ function refusal(signal, state, priceBySymbol) {
   return null;
 }
 
+/**
+ * The paper entry fill: the signal price moved against the trade by the
+ * modelled slippage, in price units.
+ *
+ * Capped at a quarter of the stop distance. Past that, the fill is so far from
+ * the setup the app approved that the order is no longer the same trade, and a
+ * paper result depending on it would be measuring the model, not the strategy.
+ */
+function paperFill(signal, signalEntry, config, state, lots) {
+  const reading = costsMod.slippageInfo(signal.symbol, config, state.spreads);
+  const stopDistance = Math.abs(signalEntry - Number(signal.stop));
+  const units = Math.min(Number(reading.units) || 0, stopDistance * 0.25);
+  if (!(units > 0)) {
+    return { price: signalEntry, slippage: 0, money: 0, units: 0, source: reading.source };
+  }
+  // Against the trade, always: a buyer pays up, a seller gets less.
+  const adverse = signal.side === "BUY" ? units : -units;
+  return {
+    price: Number((signalEntry + adverse).toFixed(6)),
+    slippage: Number(adverse.toFixed(6)),
+    money: Number((units * lots * valuePerUnit(signal.symbol)).toFixed(2)),
+    units: Number(units.toFixed(8)),
+    source: reading.source,
+  };
+}
+
+/**
+ * What a stop really fills at. A stop is a market order once it triggers, so it
+ * fills at the stop plus slippage — and at the observed price when the market
+ * gapped straight through both. That is the one place a paper ledger must not
+ * be generous: a stop that only ever fills at the stop makes a gap look like a
+ * neat, planned loss.
+ */
+function stopFill(pos, price, config, state) {
+  const units = Number(costsMod.slippageInfo(pos.symbol, config, state.spreads).units) || 0;
+  const withSlip = pos.side === "BUY" ? pos.stop - units : pos.stop + units;
+  const exit = pos.side === "BUY" ? Math.min(price, withSlip) : Math.max(price, withSlip);
+  const gap = Math.abs(Number((exit - withSlip).toFixed(8)));
+  return {
+    exit: Number(exit.toFixed(6)),
+    slippageUnits: Number(units.toFixed(8)),
+    gap,
+    gapMoney: Number((gap * pos.lots * pos.valuePerUnit).toFixed(2)),
+    fillModel: "stop-market",
+  };
+}
+
 /** Position size from the risk budget and the real stop distance. */
 function sizeFor(signal, equityNow) {
   const config = settings.getExecConfig();
@@ -273,14 +322,24 @@ async function place(signal, priceBySymbol) {
   if (!size) return { ok: false, reason: "could not size the position" };
   if (size.refused) return { ok: false, reason: size.refused, mode: config.mode };
 
+  const signalEntry = Number(signal.entry ?? signal.price);
+  // Paper does not fill at the price the app happened to see: a market order
+  // crosses the spread and pays for whatever the book moved by while it
+  // arrived. Both are charged here, so a paper winner is one the same trade
+  // could plausibly have been live.
+  const fill = config.mode === "paper" ? paperFill(signal, signalEntry, config, state, size.lots) : null;
+
   const order = {
     id: `${signal.symbol}-${Date.now()}`,
     symbol: signal.symbol,
     brokerSymbol: brokerSymbol(signal.symbol),
     side: signal.side,
     lots: size.lots,
-    entry: Number(signal.entry ?? signal.price),
-    signalEntry: Number(signal.entry ?? signal.price),
+    entry: fill ? fill.price : signalEntry,
+    signalEntry,
+    slippage: fill ? fill.slippage : 0,
+    slippageMoney: fill ? fill.money : 0,
+    fillModel: fill ? "paper-market" : "broker",
     stop: Number(signal.stop),
     target: Number(signal.target),
     riskMoney: size.riskMoney,
@@ -393,7 +452,7 @@ async function sendToBridge(order) {
  * and by reconciliation after a broker closed the trade itself (direct), so a
  * position costs the same whichever path closed it.
  */
-function settle(state, pos, exit, outcome, note) {
+function settle(state, pos, exit, outcome, note, extra) {
   const config = settings.getExecConfig();
   const grossPnl = Number(pnlOf(pos, exit).toFixed(2));
   const heldMs = Date.now() - new Date(pos.openedAt).getTime();
@@ -420,6 +479,7 @@ function settle(state, pos, exit, outcome, note) {
     pnl,
     outcome: outcome || (pnl >= 0 ? "win" : "loss"),
     closedAt: new Date().toISOString(),
+    ...(extra || {}),
   };
   if (note) record.note = note;
   return record;
@@ -454,8 +514,20 @@ function mark(priceBySymbol) {
     if (!direct) {
       const hitStop = pos.side === "BUY" ? price <= pos.stop : price >= pos.stop;
       const hitTarget = pos.side === "BUY" ? price >= pos.target : price <= pos.target;
-      if (hitStop || hitTarget) {
-        closed.push(settle(state, pos, hitStop ? pos.stop : pos.target, hitStop ? "loss" : "win"));
+      if (hitStop) {
+        const stop = stopFill(pos, price, config, state);
+        closed.push(settle(state, pos, stop.exit, "loss", null, {
+          slippageUnits: stop.slippageUnits,
+          gap: stop.gap,
+          gapMoney: stop.gapMoney,
+          fillModel: stop.fillModel,
+        }));
+        continue;
+      }
+      if (hitTarget) {
+        // The target is left at the target on purpose: a gap that runs past it
+        // is not booked as a better fill than the one that was planned.
+        closed.push(settle(state, pos, pos.target, "win"));
         continue;
       }
     }

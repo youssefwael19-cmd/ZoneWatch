@@ -608,7 +608,15 @@ const EXEC_DEFAULTS = {
   tv: { enabled: false, secret: "", requireGate: true },
   // Broker costs. Spreads come from server/costs.js unless overridden per
   // symbol here; commission and swap default to zero rather than a guess.
-  costs: { spreads: {}, commissionPerLot: 0, swapPerLotPerNight: 0 },
+  // Slippage is charged as a fraction of the spread, with per-symbol overrides
+  // in `slippage` when one market behaves differently.
+  costs: {
+    spreads: {},
+    commissionPerLot: 0,
+    swapPerLotPerNight: 0,
+    slippage: {},
+    slippageSpreadMultiple: 0.25,
+  },
 };
 
 function getExecConfig() {
@@ -703,6 +711,21 @@ function setExecConfig(patch = {}) {
       for (const [symbol, value] of Object.entries(patch.costs.spreads)) {
         const n = Number(value);
         if (Number.isFinite(n) && n >= 0) costs.spreads[String(symbol).toUpperCase()] = n;
+      }
+    }
+    if (patch.costs.slippageSpreadMultiple !== undefined) {
+      costs.slippageSpreadMultiple = clampNumber(
+        patch.costs.slippageSpreadMultiple,
+        0,
+        5,
+        costs.slippageSpreadMultiple
+      );
+    }
+    if (patch.costs.slippage && typeof patch.costs.slippage === "object") {
+      costs.slippage = { ...(costs.slippage || {}) };
+      for (const [symbol, value] of Object.entries(patch.costs.slippage)) {
+        const n = Number(value);
+        if (Number.isFinite(n) && n >= 0) costs.slippage[String(symbol).toUpperCase()] = n;
       }
     }
     next.costs = costs;
