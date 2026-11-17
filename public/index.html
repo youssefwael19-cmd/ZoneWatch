@@ -977,9 +977,9 @@
         <span class="hint" id="pingMsg"></span>
       </div>
       <div class="hint">
-        In Healthchecks.io set the period to <strong>1 minute</strong> (2 is safer) with a grace of an hour: the app pings every 20
-        seconds, worst case 30, so a shorter period shows as permanently late. Pings stop when the app stops — that silence is the
-        alert, which is exactly what a stopped Fly machine produces. Uptime monitor endpoint for other services: <code>/healthz</code> returns 200 while the watcher is alive and recently
+        In Healthchecks.io set the period to <strong>1 minute</strong> (2 is safer) and the grace to <strong>3 minutes</strong>: the app pings every 20
+        seconds, worst case 30, so a shorter period shows as permanently late, while an hour of grace hides a stopped machine for that long. Pings stop when the app stops — that silence is the
+        alert, which is exactly what a stopped Fly machine produces. Healthchecks only receives pings, so it cannot restart the app; only a request to the app can wake a stopped machine. Uptime monitor endpoint for other services: <code>/healthz</code> returns 200 while the watcher is alive and recently
         checked the market, and 503 if it is stuck.
       </div>
 

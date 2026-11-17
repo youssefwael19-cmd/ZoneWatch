@@ -620,8 +620,18 @@ when the pings **stop**, which is the one failure the app cannot report itself.
 
 Because the ping is attempted from the watch cycle, the worst-case gap is the
 interval plus one cycle — 30 seconds. Set the check's period to **1 minute** (2 is
-safer) with a grace period of an hour. A check period shorter than the cadence
-shows as permanently "late" no matter how healthy the app is.
+safer) and its grace period to **3 minutes**: long enough that a slow ping never
+shows as late, short enough that a stopped machine is reported within minutes
+instead of after an hour. A check period shorter than the cadence shows as
+permanently "late" no matter how healthy the app is.
+
+Healthchecks only *receives* pings; it never calls the app, so it cannot restart
+it or notice the gap before the app's own alert does. The app's own heartbeat
+notice fires at 15 minutes, which is usually the first thing you hear. Nothing
+wakes a stopped Fly machine except an incoming request to its URL: a monitor that
+polls `/healthz` (a dead-man's switch will not) starts it each time, because
+`auto_start_machines = true` is set. That keeps the gap near a minute but pauses
+the watcher on every wake-up, so it is a workaround for the trial, not a fix.
 
 Settings shows `last ping …` so you can see pings leaving, `Send test ping` fires
 one immediately, and `/healthz` reports the same state for other monitors (200
