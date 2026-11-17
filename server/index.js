@@ -862,7 +862,10 @@ async function buildSnapshot() {
     if (alertsReady && settings.getSignalAlerts()) {
       for (const { signal, gate } of approvedSignals) {
         try {
-          await discord.sendSignal({ ...signal, linked: linkedMarketsFor(signal.symbol) });
+          // What the broker was charging at the moment of the signal: a trade has
+        // to clear this before it makes a penny.
+        const spreadNow = costsMod.spreadInfo(signal.symbol, settings.getExecConfig(), execMod.liveSpreads());
+        await discord.sendSignal({ ...signal, spread: spreadNow, linked: linkedMarketsFor(signal.symbol) });
           lastAlertAt.set(signal.symbol, Date.now());
           journal.record(signal, {
             status: "sent",
@@ -892,6 +895,7 @@ async function buildSnapshot() {
 
     for (const result of alertsReady ? tracked.resolved : []) {
       try {
+        result.spread = costsMod.spreadInfo(result.symbol, settings.getExecConfig(), execMod.liveSpreads());
         await discord.sendSignalResult(result);
       } catch (err) {
         discordErrors.push(err.message);

@@ -191,6 +191,20 @@ signal carried a position size — what that was worth in money. A paper trade
 risks exactly its `riskMoney` at 1R, so the money line is the R multiple
 applied to the risk: a 2R win on a $10 risk reads `+$20.00`.
 
+### The spread comes first
+
+A trade has to clear the broker before it pays you, so every result is stated
+three ways: `Pips` (what price moved), `Spread` (what the broker took), and
+`Net` (what is left, in pips and in R). Money is calculated from **net** R.
+
+The spread is the account's own live reading from the MT5 bridge when it is
+under fifteen minutes old (`server/executor.js` → `liveSpreads`), and otherwise
+the modelled table in `server/costs.js`. Signal messages show the spread in
+force at the moment the signal was sent, because a 4-pip target against a 2-pip
+spread is not a 4-pip trade — and a winner that only just beat the spread reads
+as the near-nothing it is: a 2R winner on EURUSD becomes `+58.8 pips
+(+1.96R)`, not `+60 pips (+2.00R)`.
+
 Discord cannot host the dashboard itself: the app stays in the browser and
 Discord receives the alerts.
 
@@ -297,8 +311,11 @@ roughly 33% to 49%. Treat it as promising, not proven, and do not size up on it.
 
 ## The assistant
 
-The assistant answers from the app's own state and can now look things up
-instead of guessing. Its tools are read-only except one, and every one of them
+The assistant sits at the top of the **Watch** tab — the first thing on the
+front page — so asking "why is gold blocked?" does not mean opening Settings
+first. Its key and provider fields are in the same panel, below the answer box.
+
+It answers from the app's own state and can look things up instead of guessing. Its tools are read-only except one, and every one of them
 returns plain data the model must quote rather than invent:
 
 | tool | what it reads |
@@ -311,7 +328,7 @@ returns plain data the model must quote rather than invent:
 | `news_outlook`, `market_hours`, `discord_activity` | calendar risk, session state, recent Discord deliveries |
 | `app_settings` | markets, trading rules, quiet hours, broker mode, cost settings |
 | `daily_recap_preview` | tonight's recap text |
-| `send_discord` | **writes** one message to alerts/news/recap, only when you ask it to |
+| `send_discord` | **writes** one message to alerts/signals/results/news/recap, only when you ask it to |
 | `web_search` | the live internet, via Exa |
 
 ### Internet search
@@ -622,7 +639,11 @@ pm2 save && pm2 startup
 - **Demo prices are random.** They exist so the app is usable before you add a
   key, not to represent a real market.
 - **News feeds can lag or miss events.** Treat the calendar as a second opinion,
-  not the only one.
+  not the only one. The calendar host also rate-limits datacenter IPs, so the
+  app falls back to a reader for the same JSON, keeps the last good calendar on
+  disk (`newscalendar.json`, reused for up to 36 hours) and slows retries to five
+  minutes after a failure. A week-old file is still the right week's events; an
+  empty one means the app would be blind to news risk entirely.
 
 ## Files
 

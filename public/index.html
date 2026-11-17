@@ -272,7 +272,6 @@
       <span class="hitem" id="h-discord"><i class="dot"></i><b>discord</b><em></em></span>
       <span class="hitem" id="h-watcher"><i class="dot"></i><b>watcher</b><em></em></span>
     </div>
-    <span class="pill" id="marketPill">…</span>
     <span class="pill" id="statusPill">idle</span>
     <span class="spacer"></span>
     <button class="ghost tiny" id="toggleBtn">Pause updates</button>
@@ -293,6 +292,48 @@
 
   <!-- WATCH -->
   <section id="tab-watch">
+    <div class="panel">
+      <h2>Assistant (LLM + retrieval)</h2>
+      <div class="hint" id="aiStatus">Checking…</div>
+      <div style="margin-top:10px">
+        <label>Ask about your app</label>
+        <input id="aiQuestion" placeholder="e.g. why is gold blocked?" />
+      </div>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+        <button class="act" id="aiAsk">Ask</button>
+        <button class="act" id="aiMic" title="Ask by speaking">🎤 Speak</button>
+        <button class="act" id="aiSpeak" title="Read the answer aloud">🔊 Read aloud</button>
+        <button class="btn ghost" data-agent="briefing">Briefing</button>
+        <button class="btn ghost" data-agent="risk">Risk check</button>
+        <button class="btn ghost" data-agent="coach">Coach</button>
+      </div>
+      <div id="aiMicHint" class="hint" style="margin-top:8px"></div>
+      <div id="aiAnswer" class="hint" style="margin-top:12px"></div>
+
+      <h2 style="margin-top:20px">Connection</h2>
+      <div class="fields">
+        <div><label>Provider base URL</label><input id="aiBase" placeholder="https://api.groq.com/openai/v1" /></div>
+        <div><label>Model</label><input id="aiModel" placeholder="openai/gpt-oss-120b" /></div>
+        <div style="grid-column:1/-1"><label>API key</label><input id="aiKey" type="password" autocomplete="off" placeholder="paste your key — stored on the server, never shown again" /></div>
+        <div style="grid-column:1/-1"><label>Internet search key (Exa)</label><input id="webSearchKey" type="password" autocomplete="off" placeholder="optional — lets the assistant search the web, stored on the server" /></div>
+      </div>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+        <button class="act" id="aiSave">Save key</button>
+        <button class="btn ghost" id="aiTest">Test connection</button>
+        <button class="btn ghost" id="aiClear">Remove key</button>
+        <span class="hint" id="aiMsg"></span>
+        <button class="btn ghost" id="webSearchSave">Save search key</button>
+        <button class="btn ghost" id="webSearchTest">Test search</button>
+        <button class="btn ghost" id="webSearchClear">Remove search key</button>
+        <span class="hint" id="webSearchMsg"></span>
+      </div>
+      <div class="hint">
+        Free option: create a key at <strong>console.groq.com</strong> → API Keys. Leave the fields as they are for Groq
+        (base URL <code>https://api.groq.com/openai/v1</code>, model <code>openai/gpt-oss-120b</code>) and paste the key above.
+        Google Gemini also works with base URL <code>https://generativelanguage.googleapis.com/v1beta/openai/</code>.
+      </div>
+    </div>
+
     <div id="newsBanner" class="banner calm">Checking the calendar…</div>
 
     <div class="cols">
@@ -406,6 +447,18 @@
 
   <!-- NEWS -->
   <section id="tab-news" style="display:none">
+    <div class="panel">
+      <h2>Market &amp; sessions</h2>
+      <div class="row" style="margin-bottom:10px">
+        <span class="pill" id="marketPill">…</span>
+        <span class="hint" id="marketNote2"></span>
+      </div>
+      <div id="sessionRows" style="display:grid;gap:6px"></div>
+      <div class="hint" style="margin-top:10px">
+        Open and close times are UTC and approximate. The same events are posted to the Discord news channel
+        when session alerts are on.
+      </div>
+    </div>
     <div class="panel">
       <h2>Economic calendar · filter available</h2>
       <div class="row" style="margin-bottom:12px">
@@ -766,6 +819,10 @@
         <label>News — calendar, sessions, market open/close</label>
         <input id="chNews" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
       </div>
+      <label class="row" style="margin-top:8px;text-transform:none;letter-spacing:0;font-size:12px">
+        <input type="checkbox" id="sessionBox" style="width:auto;margin-right:6px" checked />
+        Send session and market open/close to that news channel
+      </label>
       <div style="margin-top:10px">
         <label>Recap — daily, weekly and paper review</label>
         <input id="chRecap" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
@@ -801,10 +858,6 @@
       <label class="row" style="margin-top:10px;text-transform:none;letter-spacing:0;font-size:13px">
         <input type="checkbox" id="ivbBox" style="width:auto;margin-right:8px" checked />
         Initial balance breakout at the New York open (Nasdaq &amp; gold)
-      </label>
-      <label class="row" style="margin-top:10px;text-transform:none;letter-spacing:0;font-size:13px">
-        <input type="checkbox" id="sessionBox" style="width:auto;margin-right:8px" checked />
-        Post session and market open/close alerts to Discord (news channel)
       </label>
       <label class="row" style="margin-top:10px;text-transform:none;letter-spacing:0;font-size:13px">
         <input type="checkbox" id="openOnlyBox" style="width:auto;margin-right:8px" checked />
@@ -954,47 +1007,6 @@
       <div id="deliveryLog" class="empty">Loading…</div>
     </div>
 
-    <div class="panel">
-      <h2>Assistant (LLM + retrieval)</h2>
-      <div class="hint" id="aiStatus">Checking…</div>
-      <div style="margin-top:10px">
-        <label>Ask about your app</label>
-        <input id="aiQuestion" placeholder="e.g. why is gold blocked?" />
-      </div>
-      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
-        <button class="act" id="aiAsk">Ask</button>
-        <button class="act" id="aiMic" title="Ask by speaking">🎤 Speak</button>
-        <button class="act" id="aiSpeak" title="Read the answer aloud">🔊 Read aloud</button>
-        <button class="btn ghost" data-agent="briefing">Briefing</button>
-        <button class="btn ghost" data-agent="risk">Risk check</button>
-        <button class="btn ghost" data-agent="coach">Coach</button>
-      </div>
-      <div id="aiMicHint" class="hint" style="margin-top:8px"></div>
-      <div id="aiAnswer" class="hint" style="margin-top:12px"></div>
-
-      <h2 style="margin-top:20px">Connection</h2>
-      <div class="fields">
-        <div><label>Provider base URL</label><input id="aiBase" placeholder="https://api.groq.com/openai/v1" /></div>
-        <div><label>Model</label><input id="aiModel" placeholder="openai/gpt-oss-120b" /></div>
-        <div style="grid-column:1/-1"><label>API key</label><input id="aiKey" type="password" autocomplete="off" placeholder="paste your key — stored on the server, never shown again" /></div>
-        <div style="grid-column:1/-1"><label>Internet search key (Exa)</label><input id="webSearchKey" type="password" autocomplete="off" placeholder="optional — lets the assistant search the web, stored on the server" /></div>
-      </div>
-      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
-        <button class="act" id="aiSave">Save key</button>
-        <button class="btn ghost" id="aiTest">Test connection</button>
-        <button class="btn ghost" id="aiClear">Remove key</button>
-        <span class="hint" id="aiMsg"></span>
-        <button class="btn ghost" id="webSearchSave">Save search key</button>
-        <button class="btn ghost" id="webSearchTest">Test search</button>
-        <button class="btn ghost" id="webSearchClear">Remove search key</button>
-        <span class="hint" id="webSearchMsg"></span>
-      </div>
-      <div class="hint">
-        Free option: create a key at <strong>console.groq.com</strong> → API Keys. Leave the fields as they are for Groq
-        (base URL <code>https://api.groq.com/openai/v1</code>, model <code>openai/gpt-oss-120b</code>) and paste the key above.
-        Google Gemini also works with base URL <code>https://generativelanguage.googleapis.com/v1beta/openai/</code>.
-      </div>
-    </div>
 
     <div class="panel">
       <h2>How to get a free key</h2>
@@ -2134,6 +2146,30 @@ function renderMarketClock(data) {
   if (pill) {
     pill.textContent = open ? "market open" : "market closed";
     pill.className = open ? "pill live" : "pill warn";
+  }
+
+  // Sessions used to be a header pill and nothing else; they belong with the
+  // news, next to the calendar that decides whether a session is worth trading.
+  const sessionRows = document.getElementById("sessionRows");
+  if (sessionRows) {
+    const list = Array.isArray(data.sessions) ? data.sessions : [];
+    sessionRows.innerHTML = list.length
+      ? list
+          .map(
+            (x) =>
+              `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.03)">
+                 <strong style="font-size:12.5px">${x.name}</strong>
+                 <span class="hint" style="margin:0">${x.openTime}–${x.closeTime} UTC</span>
+                 <span class="pill ${x.open ? "live" : "warn"}">${x.open ? "open" : "closed"}</span>
+               </div>`
+          )
+          .join("")
+      : '<div class="empty">No session data yet.</div>';
+  }
+  const note2 = document.getElementById("marketNote2");
+  if (note2) {
+    const openNow = (Array.isArray(data.sessions) ? data.sessions : []).filter((x) => x.open).map((x) => x.name);
+    note2.textContent = openNow.length ? `Open now: ${openNow.join(", ")}.` : "Every session is closed.";
   }
   const stale = (data.feed && data.feed.stale) || [];
   if (stale.length) {

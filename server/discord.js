@@ -303,6 +303,16 @@ async function sendSignal(signal) {
               inline: true,
             },
             {
+              name: "Spread",
+              // The trade has to clear this before it is a winner. A 4-pip
+              // target on a 2-pip spread is not a 4-pip trade.
+              value:
+                signal.spread && Number.isFinite(Number(signal.spread.units))
+                  ? `${pips.pipsLabel(signal.symbol, pips.pipsOf(signal.symbol, signal.spread.units), { signed: false })} · ${signal.spread.source}`
+                  : "unknown",
+              inline: true,
+            },
+            {
               name: "Zone",
               value: `${signal.zone.low}–${signal.zone.high} (${signal.zone.type})`,
               inline: true,
@@ -613,19 +623,29 @@ async function sendSignalResult(result) {
   const title = won ? "Signal WON" : expired ? "Signal expired" : "Signal LOST";
   const colour = won ? COLORS.info : expired ? COLORS.near : COLORS.inside;
 
-  // Pips actually banked: entry to the price the trade left at.
+  // Pips the price moved, then what the broker took, then what was left.
   const movedPips = Math.abs(pips.pipsBetween(result.symbol, result.entry, result.exit) ?? 0);
-  const signedPips = expired ? pips.pipsBetween(result.symbol, result.entry, result.exit) : won ? movedPips : -movedPips;
+  const grossPips = expired ? pips.pipsBetween(result.symbol, result.entry, result.exit) ?? 0 : won ? movedPips : -movedPips;
+  const spreadPips =
+    result.spread && Number.isFinite(Number(result.spread.units))
+      ? Math.abs(pips.pipsOf(result.symbol, result.spread.units) ?? 0)
+      : 0;
+  // The spread is paid either way: it eats into a winner and deepens a loser,
+  // which is exactly how a "win" that barely beat the spread is not a win.
+  const netPips = Number((grossPips - spreadPips).toFixed(1));
 
-  // Money, when the signal carried a position size. A paper trade risks exactly
-  // riskMoney at 1R, so the result in money is the R multiple applied to it.
+  const riskPips = Math.abs(pips.pipsBetween(result.symbol, result.entry, result.stop) ?? 0);
+  const netR = riskPips > 0 ? netPips / riskPips : result.rMultiple;
+
+  // Money, when the signal carried a position size: 1R is exactly the money
+  // risked, so net R times risk is what the account actually gained or lost.
   const riskMoney = Number(result.sizing && result.sizing.riskMoney);
   const moneyField =
     result.sizing && Number.isFinite(riskMoney) && riskMoney > 0
       ? [
           {
             name: "Money",
-            value: `${result.rMultiple < 0 ? "-" : "+"}$${Math.abs(result.rMultiple * riskMoney).toFixed(2)}${
+            value: `${netR < 0 ? "-" : "+"}$${Math.abs(netR * riskMoney).toFixed(2)}${
               result.sizing.lots != null ? ` · ${result.sizing.lots} lots` : ""
             }`,
             inline: true,
@@ -653,7 +673,17 @@ async function sendSignalResult(result) {
               value: `${result.rMultiple > 0 ? "+" : ""}${result.rMultiple}R`,
               inline: true,
             },
-            { name: "Pips", value: pips.pipsLabel(result.symbol, signedPips), inline: true },
+            { name: "Pips", value: pips.pipsLabel(result.symbol, grossPips), inline: true },
+            {
+              name: "Spread",
+              value: spreadPips ? pips.pipsLabel(result.symbol, -spreadPips) : "not recorded",
+              inline: true,
+            },
+            {
+              name: "Net",
+              value: `${pips.pipsLabel(result.symbol, netPips)} (${netR > 0 ? "+" : ""}${netR.toFixed(2)}R)`,
+              inline: true,
+            },
             ...moneyField,
             { name: "Stop", value: String(result.stop), inline: true },
             { name: "Target", value: String(result.target), inline: true },
