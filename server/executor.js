@@ -122,8 +122,7 @@ function priceOf(priceBySymbol, symbol) {
   return priceBySymbol instanceof Map ? priceBySymbol.get(symbol) : priceBySymbol[symbol];
 }
 
-function valuePerUnit(symbol) {
-  const config = settings.getExecConfig();
+function valuePerUnit(symbol, config = settings.getExecConfig()) {
   const override = config.valuePerUnit && config.valuePerUnit[symbol];
   if (Number.isFinite(override)) return override;
   if (VALUE_PER_UNIT[symbol]) return VALUE_PER_UNIT[symbol];
@@ -267,8 +266,26 @@ function sizeFor(signal, equityNow) {
   if (!(stopDistance > 0) || !(perUnit > 0)) return null;
 
   const rawLots = riskAmount / (stopDistance * perUnit);
-  // 0.01 is the smallest size most retail accounts accept.
-  const lots = Math.max(0.01, Math.floor(rawLots * 100) / 100);
+  let lots;
+  if (settings.getExecConfig().mode === "paper") {
+    // Paper sizes fractionally, down to a ten-thousandth of a lot. A small
+    // balance with a 0.01 floor risked ten times the cap on gold, so the lot
+    // minimum — not the percentage — decided the risk of every trade. These
+    // sizes are not broker-legal; the point is to test decisions at the risk
+    // the settings promise, and the README says so.
+    const step = 0.0001;
+    lots = Number((Math.floor(rawLots / step) * step).toFixed(4));
+    if (lots < step) {
+      const smallest = Number((stopDistance * perUnit * step).toFixed(2));
+      const pct = Number(((smallest / equityNow) * 100).toFixed(2));
+      return {
+        refused: `smallest lot would risk ${smallest} (${pct}% of equity), above the ${riskPct}% limit`,
+      };
+    }
+  } else {
+    // 0.01 is the smallest size most retail accounts accept.
+    lots = Math.max(0.01, Math.floor(rawLots * 100) / 100);
+  }
 
   // A direct API fills in units, not lots, and a fraction of its minimum is
   // simply rejected. Refuse here instead of rounding up: rounding up would
@@ -959,6 +976,7 @@ module.exports = {
   syncAccount,
   syncSpreads,
   brokerSymbol,
+  valuePerUnit,
   sizeFor,
   refusal,
 };

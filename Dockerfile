@@ -27,6 +27,7 @@ RUN mkdir -p /app/data && \
     ln -sf /app/data/brain.json /app/brain.json && \
     ln -sf /app/data/journal.json /app/journal.json && \
     ln -sf /app/data/executor.json /app/executor.json && \
+    ln -sf /app/data/shadow.json /app/shadow.json && \
     ln -sf /app/data/digest.json /app/digest.json && \
     ln -sf /app/data/paperreview.json /app/paperreview.json && \
     ln -sf /app/data/dailyrecap.json /app/dailyrecap.json && \

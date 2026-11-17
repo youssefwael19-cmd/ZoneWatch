@@ -31,6 +31,7 @@ const healthMod = require("./health");
 const brainMod = require("./brain");
 const journal = require("./journal");
 const executor = require("./executor");
+const shadowMod = require("./shadow");
 const tvMod = require("./tradingview");
 const costsMod = require("./costs");
 const pipsMod = require("./pips");
@@ -849,6 +850,9 @@ async function buildSnapshot() {
   // Which of this cycle's signals survived every gate? Evaluated once, so the
   // Discord message and the order can never disagree about what was approved.
   const approvedSignals = [];
+  // Rejected setups, kept only so the shadow book can measure what the gate
+  // held back. They are still never posted and never ordered.
+  const gateHeldSignals = [];
   for (const signal of newSignals) {
     if (hoursBlocked(signal.symbol)) continue;
     if (correlatedRecently(signal.symbol)) continue;
@@ -871,6 +875,11 @@ async function buildSnapshot() {
         heldReason: gateVerdict.reason,
         regime: gateVerdict.condition,
         newsNear: Boolean(blackout && blackout.active),
+      });
+      gateHeldSignals.push({
+        signal,
+        reason: gateVerdict.reason,
+        condition: gateVerdict.condition,
       });
       continue;
     }
@@ -1033,6 +1042,7 @@ async function buildSnapshot() {
         const recapText = dailyRecapMod.fromApp({
           journal: journal.summary(),
           exec: executor.status(priceBySymbol),
+          shadow: shadowMod.status(priceBySymbol),
           history: tracker.load().history,
           openTrades: recapStats.open,
           proven: recapProven,
@@ -1170,6 +1180,15 @@ async function buildSnapshot() {
         console.error("executor:", err.message);
       }
     }
+  }
+
+  // The shadow book: what the gate's refusals would have been worth. It cannot
+  // place an order or affect the live account, so a failure here must never
+  // break the cycle.
+  try {
+    shadowMod.cycle(gateHeldSignals, priceBySymbol);
+  } catch (err) {
+    console.error("shadow book:", err.message);
   }
 
   snapshot = {
@@ -1396,6 +1415,7 @@ app.get("/api/exec", (_req, res) => {
   res.json({
     ok: true,
     ...executor.status(priceMapNow()),
+    shadow: shadowMod.status(priceMapNow()),
     bridgeHint: settings.getExecHint(),
     tvHint: settings.getTvHint(),
     directHint: settings.getDirectHint(),

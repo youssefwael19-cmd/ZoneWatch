@@ -429,6 +429,21 @@ results are net of costs, and the status line answers the only question
 that matters for a small edge: whether today's winners still paid for every
 trade taken, broker included.
 
+Paper sizes fractionally, down to a ten-thousandth of a lot, so the risk
+percentage is the risk the settings promise rather than whatever a 0.01 lot
+minimum happens to be. At a small balance that is the difference between
+risking $1 and risking $20 on gold. These sizes are not broker-legal: paper
+here tests decisions at the stated risk, not the smallest order a broker will
+accept — worth remembering when a paper result is read as a promise.
+
+The shadow book is the other half of the gate question. Every setup the
+proven-rule gate refuses is also paper-traded in its own ledger
+(`shadow.json`), with the same balance, risk, spread, slippage and stop rules,
+and each fill records the verdict that rejected it. It never places an order
+and never touches the live account. The daily recap reports its equity, today's
+money and win/loss record beside the live paper account, so the gate can be
+judged on what it prevented instead of taken on faith.
+
 The break-even panel turns that into a decision per market. Because spread and
 risk both scale with lot size, the two cancel: cost in R is just the spread over
 the stop distance. So the table shows what share of your risk the spread eats,

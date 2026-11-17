@@ -87,6 +87,7 @@ function describeNearest(row) {
 function buildRecap({
   journal = {},
   exec = {},
+  shadow = null,
   history = [],
   openTrades = 0,
   nearest = [],
@@ -144,6 +145,24 @@ function buildRecap({
     lines.push("Auto-trading: off.");
   }
 
+  // The experiment on the other side of the gate, in the same money and the
+  // same units, so holding a setup back can be judged rather than assumed.
+  if (shadow && shadow.enabled && (shadow.closedCount || shadow.openCount)) {
+    const shadowPnl = Number(shadow.dayRealized) || 0;
+    const shadowRecord = Number(shadow.dayClosed)
+      ? ` · ${shadow.dayWins || 0}W/${shadow.dayLosses || 0}L${
+          shadow.dayBest == null
+            ? ""
+            : ` (best ${signed(shadow.dayBest)}, worst ${signed(shadow.dayWorst)})`
+        }`
+      : " · no closed trades";
+    lines.push(
+      `Shadow, gate-rejected: equity ${shadow.equity == null ? "—" : money(shadow.equity)} · today ${signed(shadowPnl)}${shadowRecord} · ${
+        shadow.openCount || 0
+      } open, ${shadow.closedCount || 0} closed all time${shadow.killSwitch ? ` · **stopped: ${shadow.killReason || "by hand"}**` : ""}.`
+    );
+  }
+
   lines.push(
     proven.length
       ? `Gate: ${proven.length} market${proven.length === 1 ? "" : "s"} cleared (${proven.join(", ")}).`
@@ -161,11 +180,12 @@ function buildRecap({
  * Build from the app's own objects, so the scheduler and the assistant's preview
  * cannot drift apart and describe the same day differently.
  */
-function fromApp({ journal, exec, history = [], openTrades = 0, proven = [], live = {} }) {
+function fromApp({ journal, exec, shadow = null, history = [], openTrades = 0, proven = [], live = {} }) {
   const zones = Array.isArray(live.zones) ? live.zones : [];
   return buildRecap({
     journal,
     exec,
+    shadow,
     history,
     openTrades,
     proven,
