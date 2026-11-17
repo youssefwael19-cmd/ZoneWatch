@@ -294,7 +294,7 @@
   <section id="tab-watch">
     <div class="panel">
       <h2>Assistant (LLM + retrieval)</h2>
-      <div class="hint" id="aiStatus">Checking…</div>
+      <div class="hint">Ask it anything about the app, the market or your own results.</div>
       <div style="margin-top:10px">
         <label>Ask about your app</label>
         <input id="aiQuestion" placeholder="e.g. why is gold blocked?" />
@@ -310,27 +310,8 @@
       <div id="aiMicHint" class="hint" style="margin-top:8px"></div>
       <div id="aiAnswer" class="hint" style="margin-top:12px"></div>
 
-      <h2 style="margin-top:20px">Connection</h2>
-      <div class="fields">
-        <div><label>Provider base URL</label><input id="aiBase" placeholder="https://api.groq.com/openai/v1" /></div>
-        <div><label>Model</label><input id="aiModel" placeholder="openai/gpt-oss-120b" /></div>
-        <div style="grid-column:1/-1"><label>API key</label><input id="aiKey" type="password" autocomplete="off" placeholder="paste your key — stored on the server, never shown again" /></div>
-        <div style="grid-column:1/-1"><label>Internet search key (Exa)</label><input id="webSearchKey" type="password" autocomplete="off" placeholder="optional — lets the assistant search the web, stored on the server" /></div>
-      </div>
-      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
-        <button class="act" id="aiSave">Save key</button>
-        <button class="btn ghost" id="aiTest">Test connection</button>
-        <button class="btn ghost" id="aiClear">Remove key</button>
-        <span class="hint" id="aiMsg"></span>
-        <button class="btn ghost" id="webSearchSave">Save search key</button>
-        <button class="btn ghost" id="webSearchTest">Test search</button>
-        <button class="btn ghost" id="webSearchClear">Remove search key</button>
-        <span class="hint" id="webSearchMsg"></span>
-      </div>
-      <div class="hint">
-        Free option: create a key at <strong>console.groq.com</strong> → API Keys. Leave the fields as they are for Groq
-        (base URL <code>https://api.groq.com/openai/v1</code>, model <code>openai/gpt-oss-120b</code>) and paste the key above.
-        Google Gemini also works with base URL <code>https://generativelanguage.googleapis.com/v1beta/openai/</code>.
+      <div class="hint" style="margin-top:12px">
+        The model, API key and search key are set in the <strong>Settings</strong> tab, behind the dashboard password.
       </div>
     </div>
 
@@ -770,6 +751,33 @@
         <span class="hint">The password is checked on the server; nothing is stored in the phone beyond a signed cookie.</span>
       </div>
       <div class="hint">Forgot the password? Remove the <span class="mono">auth</span> block from settings.json on the server and reload to set a new one.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Assistant (LLM + retrieval)</h2>
+      <div class="hint" id="aiStatus">Checking…</div>
+      <div class="fields" style="margin-top:12px">
+        <div><label>Provider base URL</label><input id="aiBase" placeholder="https://api.groq.com/openai/v1" /></div>
+        <div><label>Model</label><input id="aiModel" placeholder="openai/gpt-oss-120b" /></div>
+        <div style="grid-column:1/-1"><label>API key</label><input id="aiKey" type="password" autocomplete="off" placeholder="paste your key — stored on the server, never shown again" /></div>
+        <div style="grid-column:1/-1"><label>Internet search key (Exa)</label><input id="webSearchKey" type="password" autocomplete="off" placeholder="optional — lets the assistant search the web, stored on the server" /></div>
+      </div>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px">
+        <button class="act" id="aiSave">Save key</button>
+        <button class="btn ghost" id="aiTest">Test connection</button>
+        <button class="btn ghost" id="aiClear">Remove key</button>
+        <span class="hint" id="aiMsg"></span>
+        <button class="btn ghost" id="webSearchSave">Save search key</button>
+        <button class="btn ghost" id="webSearchTest">Test search</button>
+        <button class="btn ghost" id="webSearchClear">Remove search key</button>
+        <span class="hint" id="webSearchMsg"></span>
+      </div>
+      <div class="hint">
+        Free option: create a key at <strong>console.groq.com</strong> → API Keys. Leave the fields as they are for Groq
+        (base URL <code>https://api.groq.com/openai/v1</code>, model <code>openai/gpt-oss-120b</code>) and paste the key above.
+        Google Gemini also works with base URL <code>https://generativelanguage.googleapis.com/v1beta/openai/</code>.
+        The key is stored on the server and never shown again.
+      </div>
     </div>
 
     <div class="panel">

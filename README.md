@@ -330,8 +330,9 @@ roughly 33% to 49%. Treat it as promising, not proven, and do not size up on it.
 ## The assistant
 
 The assistant sits at the top of the **Watch** tab — the first thing on the
-front page — so asking "why is gold blocked?" does not mean opening Settings
-first. Its key and provider fields are in the same panel, below the answer box.
+front page — so asking "why is gold blocked?" never means opening Settings
+first. It is read-only to use. Its provider, model and API-key fields live in
+**Settings → Assistant (LLM + retrieval)**, behind the dashboard password.
 
 It answers from the app's own state and can look things up instead of guessing. Its tools are read-only except one, and every one of them
 returns plain data the model must quote rather than invent:
@@ -351,7 +352,7 @@ returns plain data the model must quote rather than invent:
 
 ### Internet search
 
-Set an Exa API key in the assistant panel (**Save search key**) or as
+Set an Exa API key in **Settings → Assistant** (**Save search key**) or as
 `EXA_API_KEY` in the environment. The key stays server-side; the API only ever
 reports its last four characters. Exa's free tier covers a few thousand searches
 a month, and the tool is capped at five results per call with 500-character
