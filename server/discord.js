@@ -598,14 +598,35 @@ async function sendHealthRecovered(component, minutes) {
   );
 }
 
-async function sendWatcherGap(gapMinutes) {
+/** "17:26 UTC" from an ISO stamp, for the offline window in the gap alert. */
+function utcClock(iso) {
+  const at = new Date(iso);
+  if (!iso || Number.isNaN(at.getTime())) return null;
+  return at.toISOString().slice(11, 16) + " UTC";
+}
+
+/**
+ * The gap alert fires only after 15+ minutes of silence, which a process that
+ * crashes and restarts in seconds can never produce. So the cause is always the
+ * host being off, not "restarting too often" — say so, and name the real one.
+ */
+async function sendWatcherGap(gapMinutes, span) {
+  const { from = null, to = null } = span || {};
+  const start = utcClock(from);
+  const end = utcClock(to);
+  const window = start && end ? ` It was off from **${start}** to **${end}**.` : "";
+  const onFly = Boolean(process.env.FLY_APP_NAME || process.env.FLY_MACHINE_ID);
+  const cause = onFly
+    ? "A gap that long is the host being stopped, not a restart loop. Fly's trial plan stops the machine five minutes after it starts, and it only comes back when something requests the app. Adding a payment method at https://fly.io/trial is what makes it run continuously."
+    : "A gap that long is the host being stopped or asleep, not a restart loop — a crash that comes straight back would be seconds, not minutes. Check whether the container is being stopped for inactivity.";
+
   return post(
     {
       username: "Zone Watch",
       embeds: [
         {
           title: "⚠️ Watcher was offline",
-          description: `The bot did not check the market for about **${gapMinutes} minutes**. Any alerts during that window were missed.\n\nIf this keeps happening, the host is restarting too often.`,
+          description: `The bot did not check the market for about **${gapMinutes} minutes**.${window} Any alerts during that window were missed.\n\n${cause}`,
           color: COLORS.approaching,
           footer: { text: "Zone Watch · heartbeat" },
           timestamp: new Date().toISOString(),

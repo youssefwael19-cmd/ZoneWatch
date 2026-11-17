@@ -379,10 +379,16 @@ async function buildSnapshot() {
   // Heartbeat: notice if the watcher itself was down for a while
   const previousBeat = readHeartbeat();
   let watcherGapMinutes = null;
+  // The window matters as much as the length: it is what lets you match the
+  // gap against the host's own start/stop events instead of guessing.
+  let watcherGapFrom = null;
+  let watcherGapTo = null;
   if (previousBeat && Number.isFinite(previousBeat.at)) {
     const gapMs = Date.now() - previousBeat.at;
     if (gapMs > Math.max(15 * 60 * 1000, WATCH_INTERVAL_MS * 6)) {
       watcherGapMinutes = Math.round(gapMs / 60000);
+      watcherGapFrom = new Date(previousBeat.at).toISOString();
+      watcherGapTo = new Date().toISOString();
     }
   }
   writeHeartbeat();
@@ -907,7 +913,10 @@ async function buildSnapshot() {
 
     if (alertsReady && watcherGapMinutes) {
       try {
-        await discord.sendWatcherGap(watcherGapMinutes);
+        await discord.sendWatcherGap(watcherGapMinutes, {
+          from: watcherGapFrom,
+          to: watcherGapTo,
+        });
       } catch (err) {
         discordErrors.push(err.message);
       }
@@ -1130,6 +1139,8 @@ async function buildSnapshot() {
     ivb: ivbState,
     brokenZones: newlyBroken,
     watcherGapMinutes,
+    watcherGapFrom,
+    watcherGapTo,
     resolvedSignals: tracked.resolved,
     fired,
     alerts: zonesStore.loadAlerts().slice(-40).reverse(),
