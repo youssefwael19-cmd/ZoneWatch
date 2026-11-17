@@ -829,13 +829,38 @@
         <span class="hint" id="hookMsg"></span>
       </div>
 
-      <h3 style="margin:20px 0 4px;font-size:13px">Separate channels (optional)</h3>
-      <div class="hint" style="margin-bottom:10px">Leave a box empty and that kind of alert uses the default webhook above.</div>
-      <div>
+      <div style="margin-top:14px">
         <label>Alerts — zones, broken zones, feed and health warnings</label>
         <input id="chAlerts" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
       </div>
-      <div style="margin-top:10px">
+      <div class="hint">Leave this empty and zone alerts use the default webhook above.</div>
+
+      <h3 style="margin:24px 0 6px;font-size:13px">News channel — its own webhook</h3>
+      <div class="hint" style="margin-bottom:10px">
+        News is separate from alerts. Paste a webhook from a different Discord channel and save it below. News never falls back to
+        the alerts webhook, so if this box is empty news posts pause instead of landing in the alerts channel.
+      </div>
+      <div>
+        <label>News — economic calendar, sessions, market open/close</label>
+        <input id="chNews" type="password" placeholder="not set — news posts paused" autocomplete="off" spellcheck="false" />
+      </div>
+      <label class="row" style="margin-top:10px;text-transform:none;letter-spacing:0;font-size:12px">
+        <input type="checkbox" id="sessionBox" style="width:auto;margin-right:6px" checked />
+        Post session and market open/close to the news channel
+      </label>
+      <label class="row" style="margin-top:8px;text-transform:none;letter-spacing:0;font-size:12px">
+        <input type="checkbox" id="hookNews" style="width:auto;margin-right:6px" checked />
+        Post news-risk warnings to the news channel
+      </label>
+      <div class="row" style="margin-top:12px">
+        <button class="act" id="saveNewsCh">Save news channel</button>
+        <button class="ghost" id="testNewsCh">Send test to news</button>
+        <span class="hint" id="newsChMsg"></span>
+      </div>
+
+      <h3 style="margin:24px 0 6px;font-size:13px">Other channels (optional)</h3>
+      <div class="hint" style="margin-bottom:10px">Leave a box empty and that kind of alert uses the default webhook above.</div>
+      <div>
         <label>Signals — entries, approach warnings, IVB breakouts</label>
         <input id="chSignals" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
       </div>
@@ -843,14 +868,6 @@
         <label>Results — wins, losses, expiries</label>
         <input id="chResults" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
       </div>
-      <div style="margin-top:10px">
-        <label>News — calendar, sessions, market open/close</label>
-        <input id="chNews" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
-      </div>
-      <label class="row" style="margin-top:8px;text-transform:none;letter-spacing:0;font-size:12px">
-        <input type="checkbox" id="sessionBox" style="width:auto;margin-right:6px" checked />
-        Send session and market open/close to that news channel
-      </label>
       <div style="margin-top:10px">
         <label>Recap — daily, weekly and paper review</label>
         <input id="chRecap" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
@@ -860,9 +877,6 @@
         <button class="ghost" id="clearChannels">Use default for all</button>
         <span class="hint" id="chanMsg"></span>
       </div>
-      <label class="row" style="margin-top:12px;text-transform:none;letter-spacing:0;font-size:12px">
-        <input type="checkbox" id="hookNews" style="width:auto;margin-right:6px" checked /> Also post news-risk warnings
-      </label>
       <div class="hint" style="margin-top:10px">
         <strong>How to get the URL:</strong> in Discord, right-click your channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL.
         The app checks the market every 30 seconds by itself, so alerts reach Discord even when this page is closed.
@@ -2685,6 +2699,10 @@ function paintDiscord(d) {
       const input = document.getElementById(id);
       if (!input) continue;
       const c = d.channels[key] || {};
+      if (key === "news") {
+        input.placeholder = c.dedicated ? "saved " + (c.hint || "") : "not set — news posts paused";
+        continue;
+      }
       input.placeholder = c.dedicated ? "saved " + (c.hint || "") : "uses default";
     }
   }
@@ -2719,13 +2737,11 @@ document.getElementById("saveChannels").addEventListener("click", async () => {
   const alerts = read("chAlerts");
   const signals = read("chSignals");
   const results = read("chResults");
-  const newsCh = read("chNews");
   const recapCh = read("chRecap");
   const patch = {};
   if (alerts) patch.alerts = alerts;
   if (signals) patch.signals = signals;
   if (results) patch.results = results;
-  if (newsCh) patch.news = newsCh;
   if (recapCh) patch.recap = recapCh;
   if (!Object.keys(patch).length) {
     msg.textContent = "Paste at least one webhook URL first.";
@@ -2733,17 +2749,40 @@ document.getElementById("saveChannels").addEventListener("click", async () => {
   }
   const d = await saveDiscord({ discordChannels: patch }, msg, "Saved. Each alert type now goes to its own channel.");
   if (d) {
-    for (const id of ["chAlerts", "chSignals", "chResults", "chNews", "chRecap"]) document.getElementById(id).value = "";
+    for (const id of ["chAlerts", "chSignals", "chResults", "chRecap"]) document.getElementById(id).value = "";
+  }
+});
+
+document.getElementById("saveNewsCh").addEventListener("click", async () => {
+  const msg = document.getElementById("newsChMsg");
+  const url = (document.getElementById("chNews").value || "").trim();
+  if (!url) { msg.textContent = "Paste the news channel's webhook URL first."; return; }
+  const d = await saveDiscord({ discordChannels: { news: url } }, msg, "Saved. News now posts to its own channel. Press Send test to news.");
+  if (d) document.getElementById("chNews").value = "";
+});
+
+document.getElementById("testNewsCh").addEventListener("click", async () => {
+  const msg = document.getElementById("newsChMsg");
+  msg.textContent = "Sending…";
+  try {
+    await api("/api/discord/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel: "news" })
+    });
+    msg.textContent = "Test sent to the news channel — check that it is not the alerts one.";
+  } catch (err) {
+    msg.textContent = err.message;
   }
 });
 
 document.getElementById("clearChannels").addEventListener("click", async () => {
   const msg = document.getElementById("chanMsg");
-  if (!confirm("Send every alert type to the default webhook again?")) return;
+  if (!confirm("Send every other alert type to the default webhook again? The news channel stays as it is.")) return;
   await saveDiscord(
-    { discordChannels: { alerts: "", signals: "", results: "", news: "", recap: "" } },
+    { discordChannels: { alerts: "", signals: "", results: "", recap: "" } },
     msg,
-    "All alerts use the default webhook now."
+    "Alerts, signals, results and recaps use the default webhook now. News is unchanged."
   );
 });
 
@@ -2998,7 +3037,7 @@ document.getElementById("brainGateBox").addEventListener("change", async (e) => 
 });
 
 document.getElementById("hookNews").addEventListener("change", (e) => {
-  saveDiscord({ discordNews: e.target.checked }, document.getElementById("hookMsg"),
+  saveDiscord({ discordNews: e.target.checked }, document.getElementById("newsChMsg"),
     e.target.checked ? "News warnings on." : "News warnings off.");
 });
 

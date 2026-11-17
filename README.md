@@ -161,7 +161,8 @@ per event and can be switched off with the checkbox.
 
 One webhook is enough to start, but alerts, signals and recaps can each go to
 their own channel. Create a webhook in each channel you want (same steps as
-above) and paste them under **Settings → Discord alerts → Separate channels**:
+above) and paste them under **Settings → Discord alerts** — each purpose has
+its own box, and news has its own section with a save and test button:
 
 | Channel | Carries |
 | --- | --- |
@@ -172,7 +173,11 @@ above) and paste them under **Settings → Discord alerts → Separate channels*
 | Recap | the daily recap, the weekly recap and the weekly paper review |
 
 Any box left empty falls back to the default webhook, so nothing is lost by
-filling in only the ones you care about.
+filling in only the ones you care about — except **news**, which is deliberately
+never sent to the alerts channel. News has its own webhook and its own
+**Save news channel** / **Send test to news** buttons; with no news webhook
+saved, news posts pause rather than mixing into alerts. Alerts keep using the
+default webhook exactly as before.
 
 Alerts, signals and results are three separate places on purpose: zones fire all
 day, entries are the setups to act on, and results are the record of how they

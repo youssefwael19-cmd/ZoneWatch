@@ -36,11 +36,23 @@ function defaultWebhook() {
   return settings.getDiscord() || process.env.DISCORD_WEBHOOK_URL || "";
 }
 
-/** Webhook for a purpose, falling back to the default one. */
+/**
+ * Webhook for a purpose, falling back to the default one.
+ *
+ * News is the exception: it is a separate channel by request, so it never
+ * inherits the default webhook. If no news webhook is saved, news stays home
+ * instead of landing in the alerts channel.
+ */
 function webhookFor(channel) {
   if (!channel) return defaultWebhook();
   const channels = settings.getDiscordChannels();
+  if (channel === "news") return channels.news || "";
   return channels[channel] || defaultWebhook();
+}
+
+/** Whether a purpose falls back to the default webhook when it has none. */
+function usesDefault(channel) {
+  return channel !== "news";
 }
 
 function channelConfigured(channel) {
@@ -59,8 +71,9 @@ function status() {
   for (const name of CHANNELS) {
     const own = channels[name];
     perChannel[name] = {
-      configured: Boolean(own || url),
+      configured: Boolean(own || (usesDefault(name) && url)),
       dedicated: Boolean(own),
+      inheritsDefault: usesDefault(name),
       hint: own ? "••••" + own.slice(-6) : "",
     };
   }
@@ -845,9 +858,17 @@ async function testAllChannels() {
 }
 
 async function sendTest(channel) {
-  const target = channel && webhookFor(channel) ? channel : CHANNELS.find((c) => webhookFor(c));
+  // An explicit channel must use its own webhook; substituting another channel
+  // would make a news test land in alerts and read as a pass.
+  const target = channel || CHANNELS.find((c) => webhookFor(c));
   const url = webhookFor(target);
-  if (!url) throw new Error("Save a webhook URL first");
+  if (!url) {
+    throw new Error(
+      channel
+        ? `No webhook saved for the ${channel} channel. Paste one and save it first.`
+        : "Save a webhook URL first"
+    );
+  }
   if (!looksLikeDiscord(url)) {
     throw new Error(
       "That does not look like a Discord webhook URL. Copy it from Channel settings → Integrations → Webhooks."
