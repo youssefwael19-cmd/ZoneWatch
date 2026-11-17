@@ -185,6 +185,44 @@ day, entries are the setups to act on, and results are the record of how they
 went. Keeping the last two out of the zone stream means a channel you can read
 like a scorecard, and muting zone noise never mutes a win or a loss.
 
+### Asking the assistant from Discord: `/ask`
+
+The assistant can answer inside Discord through a slash command. That is the one
+place the app receives data from Discord: a small HTTPS endpoint Discord calls
+for every command, with an Ed25519 signature over the exact request body. No bot
+connection is kept open, and the endpoint is not protected by the dashboard
+password — Discord cannot send a cookie — so the signature and a single allowed
+Discord user id are the access control. Every answer spends the owner's model
+credits, which is why only one user id may ask.
+
+Setup, once:
+
+1. Create an application at **discord.com/developers/applications**.
+2. Copy its **Application ID** and **Public Key**.
+3. In **Settings → Discord alerts → Ask the assistant from Discord**, paste both
+   plus your own Discord user id (Discord settings → Advanced → Developer Mode,
+   then right-click yourself → **Copy User ID**), and press **Save /ask setup**.
+4. Copy the **Interactions endpoint URL** shown there and paste it into the
+   application's **Interactions Endpoint URL**. Discord immediately sends a
+   signed PING; the app answers it, so the URL saves only when the fields above
+   were saved first.
+5. To create the command without hand-written API calls: on the app's **Bot**
+   tab reset the token, paste it into the same panel, press **Register /ask
+   command**, then wait a minute for Discord to publish it. Invite the app with
+   the `applications.commands` scope so the command appears in your server.
+
+Then `/ask question: is gold near a zone?` in the channel answers there. The
+answer arrives as a follow-up a few seconds later because Discord wants an
+acknowledgement within three seconds and the assistant takes longer. The bot
+token is only ever used to register the command and is stored server-side,
+never shown back. The same conversation history as the panel is used, so a
+question asked in Discord and the next one in the panel share context.
+
+One caveat specific to this deployment: the Fly machine is stopped when idle, so
+a command that arrives while it is asleep has to wake it first and may overrun
+Discord's three-second acknowledgement. Repeating the command once the machine
+is awake works.
+
 ### Pips, not price distance
 
 Every signal, zone alert and result also states the distance in **pips**

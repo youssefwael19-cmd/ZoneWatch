@@ -10,6 +10,7 @@ const zonesStore = require("./zones");
 const news = require("./news");
 const settings = require("./settings");
 const discord = require("./discord");
+const discordCommandMod = require("./discordcommand");
 const candlesMod = require("./candles");
 const autozones = require("./autozones");
 const signalsMod = require("./signals");
@@ -56,7 +57,16 @@ const AUTO_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 const APPROACH_COOLDOWN_MS = 30 * 60 * 1000;
 
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+// The Discord slash-command route needs the exact bytes Discord signed, so the
+// raw body is kept alongside the parsed one.
+app.use(
+  express.json({
+    limit: "2mb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 
 /* ------------------------------------------------------------------ *
  * Access
@@ -144,6 +154,7 @@ const AUTH_ONLY_PREFIXES = [
   "/api/recap",
   "/api/status-ping",
   "/api/delivery",
+  "/api/discord/command",
 ];
 const AUTH_ONLY_PATHS = new Set([
   "/api/ai/status",
@@ -2206,6 +2217,85 @@ app.post("/api/discord/test", async (req, res) => {
 });
 
 app.get("/api/delivery", (_req, res) => res.json({ ok: true, deliveries: discord.getDeliveries() }));
+
+/* ---- the /ask slash command ---- */
+
+app.get("/api/discord/command", (_req, res) =>
+  res.json({ ok: true, ...settings.getDiscordCommandStatus(), endpoint: "/api/discord/interactions" })
+);
+
+app.post("/api/discord/command", (req, res) => {
+  settings.setDiscordCommand(req.body || {});
+  res.json({ ok: true, ...settings.getDiscordCommandStatus() });
+});
+
+app.post("/api/discord/command/register", async (_req, res) => {
+  try {
+    const cfg = settings.getDiscordCommand();
+    if (!cfg.appId || !cfg.botToken) {
+      return res.status(400).json({ ok: false, error: "Save the application id and a bot token first" });
+    }
+    const out = await discordCommandMod.register(cfg);
+    res.json({ ok: true, ...out, ...settings.getDiscordCommandStatus() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * Discord's interaction endpoint. Public by necessity — Discord cannot send the
+ * dashboard cookie — so the Ed25519 signature and the owner's user id are the
+ * whole access control. Never add anything secret to the responses here.
+ */
+app.post("/api/discord/interactions", async (req, res) => {
+  const cfg = settings.getDiscordCommand();
+  const signed = discordCommandMod.verify(
+    cfg.publicKey,
+    req.rawBody,
+    req.get("X-Signature-Ed25519"),
+    req.get("X-Signature-Timestamp")
+  );
+  if (!signed) return res.status(401).json({ error: "invalid request signature" });
+
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  if (body.type === 1) return res.json({ type: 1 }); // PING
+  if (body.type !== 2) {
+    return res.json({ type: 4, data: { content: "Only the /ask command is supported here.", flags: 64 } });
+  }
+
+  const user =
+    (body.member && body.member.user && body.member.user.id) || (body.user && body.user.id) || "";
+  if (!cfg.ownerId || user !== cfg.ownerId) {
+    return res.json({ type: 4, data: { content: "This assistant only answers its owner.", flags: 64 } });
+  }
+
+  const option = ((body.data && body.data.options) || []).find((o) => o && o.name === "question");
+  const question = option ? String(option.value || "").trim() : "";
+  if (!question) {
+    return res.json({
+      type: 4,
+      data: { content: "Ask a question: `/ask question: is gold near a zone?`", flags: 64 },
+    });
+  }
+
+  // Discord allows three seconds; the assistant needs longer, so acknowledge
+  // now and post the answer to the interaction token afterwards.
+  res.json({ type: 5 });
+
+  const reply = { applicationId: body.application_id, token: body.token };
+  try {
+    const snap = await getSnapshot();
+    const result = await aiMod.ask(question, condense(snap));
+    await discordCommandMod.followUp({ ...reply, content: result.answer || "(no answer)" });
+  } catch (err) {
+    console.error("discord /ask:", err.message);
+    try {
+      await discordCommandMod.followUp({ ...reply, content: `The assistant could not answer: ${err.message}` });
+    } catch (postErr) {
+      console.error("discord /ask follow-up:", postErr.message);
+    }
+  }
+});
 
 /* ---- journal ---- */
 

@@ -893,6 +893,40 @@
         <button class="ghost" id="testWeeklyCh">Send test to weekly</button>
         <span class="hint" id="recapChMsg"></span>
       </div>
+
+      <h3 style="margin:24px 0 6px;font-size:13px">Ask the assistant from Discord — /ask</h3>
+      <div class="hint" style="margin-bottom:10px">
+        Type <code>/ask question: …</code> in Discord and the answer appears in that channel. Only the user id below may
+        ask, because every answer spends your model credits. Setup: create an application at
+        discord.com/developers/applications, copy its <b>Application ID</b> and <b>Public Key</b>, paste the endpoint URL
+        into <b>Interactions Endpoint URL</b>, then save. To register the command without hand-made API calls, paste a bot
+        token and press <b>Register</b>.
+      </div>
+      <div>
+        <label>Application ID</label>
+        <input id="cmdAppId" autocomplete="off" spellcheck="false" placeholder="1234…" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Public key</label>
+        <input id="cmdPublicKey" autocomplete="off" spellcheck="false" placeholder="64 hex characters" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Your Discord user id — the only person allowed to ask</label>
+        <input id="cmdOwnerId" autocomplete="off" spellcheck="false" placeholder="Enable Developer Mode, right-click yourself, Copy User ID" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Bot token — used only to register the command, never shown back</label>
+        <input id="cmdBotToken" type="password" autocomplete="off" spellcheck="false" placeholder="not set" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Interactions endpoint URL — paste this into the Discord application</label>
+        <input id="cmdEndpoint" readonly />
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="act" id="saveCmd">Save /ask setup</button>
+        <button class="ghost" id="registerCmd">Register /ask command</button>
+        <span class="hint" id="cmdMsg"></span>
+      </div>
       <div class="hint" style="margin-top:10px">
         <strong>How to get the URL:</strong> in Discord, right-click your channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL.
         The app checks the market every 30 seconds by itself, so alerts reach Discord even when this page is closed.
@@ -2722,7 +2756,62 @@ function paintDiscord(d) {
       input.placeholder = c.dedicated ? "saved " + (c.hint || "") : "uses default";
     }
   }
+
+  fetch("/api/discord/command")
+    .then((r) => (r.ok ? r.json() : null))
+    .then((cmd) => cmd && paintCommand(cmd))
+    .catch(() => {});
 }
+
+function paintCommand(d) {
+  if (!d) return;
+  const set = (id, value) => {
+    const el = document.getElementById(id);
+    if (el && value) el.value = value;
+  };
+  set("cmdAppId", d.appId);
+  set("cmdPublicKey", d.publicKey);
+  set("cmdOwnerId", d.ownerId);
+  const token = document.getElementById("cmdBotToken");
+  if (token) token.placeholder = d.token ? "saved " + d.token : "not set";
+  const endpoint = document.getElementById("cmdEndpoint");
+  if (endpoint) endpoint.value = window.location.origin + "/api/discord/interactions";
+}
+
+document.getElementById("saveCmd").addEventListener("click", async () => {
+  const msg = document.getElementById("cmdMsg");
+  const val = (id) => (document.getElementById(id).value || "").trim();
+  const patch = { appId: val("cmdAppId"), publicKey: val("cmdPublicKey"), ownerId: val("cmdOwnerId") };
+  if (!patch.appId || !patch.publicKey || !patch.ownerId) {
+    msg.textContent = "Application id, public key and your user id are all needed.";
+    return;
+  }
+  const token = val("cmdBotToken");
+  if (token) patch.botToken = token;
+  try {
+    const d = await api("/api/discord/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    document.getElementById("cmdBotToken").value = "";
+    paintCommand(d);
+    msg.textContent = "Saved. Discord pings the endpoint when you save it there.";
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+});
+
+document.getElementById("registerCmd").addEventListener("click", async () => {
+  const msg = document.getElementById("cmdMsg");
+  msg.textContent = "Registering…";
+  try {
+    await api("/api/discord/command/register", { method: "POST" });
+    msg.textContent = "Registered. /ask appears in Discord within a minute or two.";
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+});
 
 async function saveDiscord(patch, msgEl, okText) {
   try {

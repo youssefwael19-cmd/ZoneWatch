@@ -465,6 +465,54 @@ function setDiscordChannels(patch) {
   write(stored);
 }
 
+/**
+ * The Discord application behind the /ask slash command: its id, the Ed25519
+ * public key Discord signs interactions with, the one user id allowed to ask,
+ * and the bot token used only to register the command. The token never leaves
+ * the server and is masked wherever it is shown.
+ */
+function getDiscordCommand() {
+  const stored = read();
+  const raw = stored.discordCommand && typeof stored.discordCommand === "object" ? stored.discordCommand : {};
+  const text = (v, max) => String(v || "").trim().slice(0, max);
+  return {
+    appId: text(raw.appId, 32),
+    publicKey: text(raw.publicKey, 80),
+    ownerId: text(raw.ownerId, 32),
+    botToken: text(raw.botToken, 200),
+  };
+}
+
+/** Merge a patch; clearToken empties the bot token without touching the rest. */
+function setDiscordCommand(patch) {
+  const stored = read();
+  const next = getDiscordCommand();
+  if (patch && typeof patch === "object") {
+    if (patch.appId != null) next.appId = String(patch.appId).trim().slice(0, 32);
+    if (patch.publicKey != null) next.publicKey = String(patch.publicKey).trim().slice(0, 80);
+    if (patch.ownerId != null) next.ownerId = String(patch.ownerId).trim().slice(0, 32);
+    if (typeof patch.botToken === "string" && patch.botToken.trim()) {
+      next.botToken = patch.botToken.trim().slice(0, 200);
+    }
+    if (patch.clearToken) next.botToken = "";
+  }
+  stored.discordCommand = next;
+  write(stored);
+  return next;
+}
+
+/** What the browser may see about the /ask setup: no token, only its tail. */
+function getDiscordCommandStatus() {
+  const cmd = getDiscordCommand();
+  return {
+    appId: cmd.appId,
+    publicKey: cmd.publicKey,
+    ownerId: cmd.ownerId,
+    token: cmd.botToken ? `\u2022\u2022\u2022\u2022${cmd.botToken.slice(-4)}` : "",
+    ready: Boolean(cmd.appId && cmd.publicKey && cmd.ownerId),
+  };
+}
+
 /** Whether news-risk warnings are also posted to Discord. */
 function getDiscordNews() {
   const stored = read();
@@ -747,6 +795,9 @@ module.exports = {
   clearAiConfig,
   getQuietHours,
   setQuietHours,
+  getDiscordCommand,
+  setDiscordCommand,
+  getDiscordCommandStatus,
   getDiscordNews,
   setDiscordNews,
   getAutoZones,
