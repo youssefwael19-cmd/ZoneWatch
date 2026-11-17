@@ -28,7 +28,9 @@ RUN mkdir -p /app/data && \
     ln -sf /app/data/journal.json /app/journal.json && \
     ln -sf /app/data/executor.json /app/executor.json && \
     ln -sf /app/data/digest.json /app/digest.json && \
-    ln -sf /app/data/paperreview.json /app/paperreview.json
+    ln -sf /app/data/paperreview.json /app/paperreview.json && \
+    ln -sf /app/data/dailyrecap.json /app/dailyrecap.json && \
+    ln -sf /app/data/newscalendar.json /app/newscalendar.json
 
 # Fly.io sets PORT, default to 8080
 ENV NODE_ENV=production

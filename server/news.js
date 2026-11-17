@@ -13,6 +13,19 @@
 const CALENDAR_URL =
   process.env.CALENDAR_URL || "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
 
+/**
+ * The calendar host rate-limits datacenter IPs (a Fly machine gets HTTP 429
+ * within seconds of booting). When the direct fetch is refused, the same JSON
+ * is pulled through a plain reader proxy, which is enough for a small weekly
+ * file. Direct is always tried first, so normal hosting never depends on it.
+ */
+const CALENDAR_READER_URL = process.env.CALENDAR_READER_URL || `https://r.jina.ai/${CALENDAR_URL}`;
+
+/** Last successful calendar, kept across restarts so a 429 cannot blind us. */
+const CALENDAR_FILE = require("path").join(__dirname, "..", "newscalendar.json");
+const CALENDAR_MAX_AGE_MS = 36 * 60 * 60 * 1000;
+const RETRY_AFTER_FAILURE_MS = 5 * 60 * 1000;
+
 const RSS_FEEDS = [
   { name: "FXStreet", url: "https://www.fxstreet.com/rss/news" },
   { name: "Investing.com", url: "https://www.investing.com/rss/news_1.rss" },
@@ -64,32 +77,83 @@ function normaliseEvent(raw) {
   };
 }
 
+/** Rows out of a fetch body: plain JSON, or JSON embedded in reader output. */
+function rowsFromText(text) {
+  const trimmed = String(text || "").trim();
+  if (trimmed.startsWith("[")) return JSON.parse(trimmed);
+  const start = trimmed.indexOf("[{");
+  const end = trimmed.lastIndexOf("}]");
+  if (start < 0 || end <= start) throw new Error("Calendar feed was not valid JSON");
+  return JSON.parse(trimmed.slice(start, end + 2));
+}
+
+async function fetchRows(url) {
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
+    headers: { "User-Agent": "trading-agent/1.0" },
+  });
+  if (!res.ok) throw new Error(`Calendar HTTP ${res.status}`);
+  const rows = rowsFromText(await res.text());
+  if (!Array.isArray(rows)) throw new Error("Calendar feed had an unexpected shape");
+  return rows;
+}
+
+/** Remember the last good calendar so a restart starts with real events. */
+function loadSavedCalendar() {
+  try {
+    const raw = require("fs").readFileSync(CALENDAR_FILE, "utf-8").trim();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const age = Date.now() - new Date(parsed.at).getTime();
+    if (!Array.isArray(parsed.events) || !Number.isFinite(age) || age > CALENDAR_MAX_AGE_MS) return null;
+    return parsed.events;
+  } catch {
+    return null;
+  }
+}
+
+function saveCalendar(events) {
+  try {
+    require("./atomicWrite").writeJson(CALENDAR_FILE, { at: new Date().toISOString(), events }, 2);
+  } catch {}
+}
+
 async function fetchCalendar() {
-  if (Date.now() - cache.calendar.at < CACHE_TTL_MS && cache.calendar.data) {
-    return cache.calendar;
+  const cached = cache.calendar;
+  if (Date.now() - cached.at < CACHE_TTL_MS && cached.data && cached.data.length) {
+    return cached;
+  }
+
+  // No network answer yet this run: start from the last good file, if recent.
+  if (!cached.data || !cached.data.length) {
+    const saved = loadSavedCalendar();
+    if (saved) cache.calendar = { ...cached, data: saved, savedAt: true };
   }
 
   try {
-    const res = await fetch(CALENDAR_URL, {
-      signal: AbortSignal.timeout(12000),
-      headers: { "User-Agent": "trading-agent/1.0" },
-    });
-    if (!res.ok) throw new Error(`Calendar HTTP ${res.status}`);
-
-    const text = await res.text();
     let rows;
+    let source = "direct";
     try {
-      rows = JSON.parse(text);
-    } catch {
-      throw new Error("Calendar feed was not valid JSON");
+      rows = await fetchRows(CALENDAR_URL);
+    } catch (directErr) {
+      source = "reader";
+      try {
+        rows = await fetchRows(CALENDAR_READER_URL);
+      } catch (readerErr) {
+        throw new Error(`${directErr.message}; fallback: ${readerErr.message}`);
+      }
     }
-    if (!Array.isArray(rows)) throw new Error("Calendar feed had an unexpected shape");
 
     const events = rows.map(normaliseEvent).filter(Boolean);
-    cache.calendar = { at: Date.now(), data: events, error: null };
+    if (!events.length) throw new Error("Calendar feed came back empty");
+
+    cache.calendar = { at: Date.now(), data: events, error: null, source };
+    saveCalendar(events);
   } catch (err) {
+    // Keep whatever we have (memory or the saved file) and slow down retries so
+    // a rate-limited host is not hammered every ten seconds.
     cache.calendar = {
-      at: Date.now(),
+      at: Date.now() - CACHE_TTL_MS + RETRY_AFTER_FAILURE_MS,
       data: cache.calendar.data || [],
       error: err.message,
     };
@@ -204,6 +268,7 @@ async function getNewsSummary() {
     ok: true,
     checkedAt: new Date().toISOString(),
     calendarError: calendar.error,
+    calendarSource: calendar.source || (calendar.savedAt ? "saved" : null),
     headlinesError: headlines.error,
     windowMinutes: MINUTES_BEFORE_EVENT,
     highImpactSoon,
