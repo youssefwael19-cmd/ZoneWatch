@@ -575,10 +575,11 @@ in once and stays signed in. The password is stored as a scrypt hash, never as
 text, and the cookie is signed with a secret generated on the server, so a forged
 cookie is refused.
 
-What stays public: the sign-in pages themselves, `/healthz`, and
-`/api/tv/webhook`, which carries its own token and cannot work behind a cookie.
-Everything else — every zone, signal, setting and trading endpoint — answers
-`401` without the session.
+What stays public: the sign-in pages themselves, `/healthz`, `/api/heartbeat`
+(a status probe with no secrets, for cron jobs that must be able to wake a stopped
+machine), and `/api/tv/webhook`, which carries its own token and cannot work
+behind a cookie. Everything else — every zone, signal, setting and trading
+endpoint — answers `401` without the session.
 
 To reset a forgotten password, remove the `auth` object from `settings.json` on
 the server (`fly ssh console` → edit `/app/data/settings.json`) and reload: the
@@ -636,6 +637,22 @@ the watcher on every wake-up, so it is a workaround for the trial, not a fix.
 Settings shows `last ping …` so you can see pings leaving, `Send test ping` fires
 one immediately, and `/healthz` reports the same state for other monitors (200
 while the watcher is alive, 503 when it is stuck).
+
+### The cron job that wakes it
+
+A cron service pointed at the app every minute is what keeps the gap near a
+minute: the request starts the stopped machine (`auto_start_machines = true`).
+Use **`/api/heartbeat`** as the URL, not `/healthz` and not `/`. It needs no
+password, it answers `200` even when the watcher is stale, and it returns the
+last check time so the service's history is meaningful. Point a cron at `/` and
+the `302` to the login page looks like a failure to some services; point it at
+`/healthz` and a genuinely stuck watcher makes the job fail 26 times in a row,
+which is how such jobs get disabled automatically. `401 Unauthorized` in that
+history means the URL is behind the dashboard password — that is a URL problem,
+not a password problem, and the fix is this endpoint, not turning auth off.
+
+When the job says it was disabled after repeated failures, re-enable it in the
+cron service after fixing the URL; the app cannot re-enable it from here.
 
 That same `/healthz` also counts **outside checks** — requests from a cron job or
 URL monitor — and `/api/settings` shows the count next to the ping hint. If it

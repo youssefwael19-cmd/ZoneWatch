@@ -134,6 +134,14 @@ const PUBLIC_PATHS = new Set([
   "/login",
   "/setup",
   "/healthz",
+  /**
+   * Machine-wake / status probe for an external cron job. It answers with the
+   * watcher's last check time and nothing else, so an uptime service may call it
+   * without a session — the app password must not turn a waker into a 401.
+   * Always 200 (even when stale), because a cron service disables a job that
+   * keeps failing; use /healthz if you want the 503-on-stuck behaviour.
+   */
+  "/api/heartbeat",
   "/api/auth/status",
   "/api/auth/setup",
   "/api/auth/login",
@@ -1820,6 +1828,7 @@ app.post("/api/lab/run", async (req, res) => {
 });
 
 app.get("/api/heartbeat", (_req, res) => {
+  noteExternalCheck();
   const beat = readHeartbeat();
   const ageMs = beat && Number.isFinite(beat.at) ? Date.now() - beat.at : null;
   res.json({
