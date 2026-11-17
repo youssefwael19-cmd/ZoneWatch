@@ -594,6 +594,23 @@ Two honest fixes, in order of effort:
    containers out — a free tier that sleeps on inactivity has the same problem as
    the trial, just with a longer timer.
 
+### Uptime monitoring (Healthchecks.io)
+
+Settings → **Uptime monitoring** takes a ping URL (`https://hc-ping.com/<uuid>`).
+The app sends a GET every 20 seconds while it is running; the service alerts you
+when the pings **stop**, which is the one failure the app cannot report itself.
+
+Because the ping is attempted from the watch cycle, the worst-case gap is the
+interval plus one cycle — 30 seconds. Set the check's period to **1 minute** (2 is
+safer) with a grace period of an hour. A check period shorter than the cadence
+shows as permanently "late" no matter how healthy the app is.
+
+Settings shows `last ping …` so you can see pings leaving, `Send test ping` fires
+one immediately, and `/healthz` reports the same state for other monitors (200
+while the watcher is alive, 503 when it is stuck). Every ping stops when the Fly
+machine is stopped by the trial limit, so "down" from Healthchecks during a trial
+is usually the machine sleeping, not a broken ping.
+
 ## Running it 24/5
 
 The server watches and posts to Discord whether or not a browser is open — but

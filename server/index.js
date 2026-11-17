@@ -179,6 +179,7 @@ function fullInfo() {
     brainGate: settings.getBrainGate(),
     statusPingHint: settings.getStatusPingHint(),
     statusPingConfigured: Boolean(settings.getStatusPingUrl()),
+    statusPing: statusPingInfo(),
     quietHours: settings.getQuietHours(),
     lab: { ...labMod.summary(), results: undefined },
     ai: { ...aiMod.status() },
@@ -304,24 +305,45 @@ function writeHeartbeat() {
  * service alerts you when the pings STOP, which is the one failure the app
  * cannot report itself. The URL carries a token, so it is never logged.
  */
+// Ping every 20 seconds, not 60. The ping is attempted from the watch cycle, so
+// the real gap is the interval plus up to one cycle: at 60s that is up to 70s,
+// which a one-minute check reads as "late" or "down" even though every ping
+// arrives. At 20s the worst case is 30s, comfortably inside a minute.
+const STATUS_PING_INTERVAL_MS = 20 * 1000;
+
 let lastStatusPingAt = 0;
 let lastStatusPingError = null;
+let lastStatusPingOk = null;
 
 async function pingStatus({ force = false } = {}) {
   const url = settings.getStatusPingUrl();
   if (!url) return { skipped: true, reason: "no uptime URL set" };
-  if (!force && Date.now() - lastStatusPingAt < 60 * 1000) {
-    return { skipped: true, reason: "pinged within the last minute" };
+  if (!force && Date.now() - lastStatusPingAt < STATUS_PING_INTERVAL_MS) {
+    return { skipped: true, reason: "pinged within the last 20 seconds" };
   }
   try {
     const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(8000) });
     lastStatusPingAt = Date.now();
+    lastStatusPingOk = res.ok;
     lastStatusPingError = res.ok ? null : `HTTP ${res.status}`;
     return { ok: res.ok, status: res.status };
   } catch (err) {
+    lastStatusPingAt = Date.now() - STATUS_PING_INTERVAL_MS + 10 * 1000; // try again in 10s
+    lastStatusPingOk = false;
     lastStatusPingError = err.message;
     return { ok: false, error: err.message };
   }
+}
+
+/** What the dashboard shows next to the ping URL: proof pings are leaving. */
+function statusPingInfo() {
+  return {
+    lastAt: lastStatusPingAt ? new Date(lastStatusPingAt).toISOString() : null,
+    lastAgeSeconds: lastStatusPingAt ? Math.round((Date.now() - lastStatusPingAt) / 1000) : null,
+    ok: lastStatusPingOk,
+    error: lastStatusPingError,
+    intervalSeconds: Math.round(STATUS_PING_INTERVAL_MS / 1000),
+  };
 }
 
 let snapshot = null;
@@ -1759,6 +1781,7 @@ app.get("/healthz", (_req, res) => {
     limitSeconds: Math.round(limitMs / 1000),
     uptimeUrl: settings.getStatusPingUrl() ? "configured" : "not set",
     lastUptimePingError: lastStatusPingError,
+    uptimePing: statusPingInfo(),
     ...(healthy ? {} : { error: "watcher has not checked the market recently" }),
   });
 });
