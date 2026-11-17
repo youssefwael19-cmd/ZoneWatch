@@ -161,7 +161,7 @@ function retrieve(question, limit = 4) {
  * One provider round-trip. Returns the assistant message verbatim, including
  * any tool calls, because the caller decides whether to run them.
  */
-async function chat(messages, { temperature = 0.2, maxTokens = 700, tools = null } = {}) {
+async function chatOnce(messages, { temperature = 0.2, maxTokens = 700, tools = null } = {}) {
   const key = settings.apiKey();
   if (!key) {
     const err = new Error(
@@ -196,6 +196,13 @@ async function chat(messages, { temperature = 0.2, maxTokens = 700, tools = null
     const body = await res.text().catch(() => "");
     const err = new Error(`AI provider responded ${res.status}: ${body.slice(0, 200)}`);
     err.status = 502;
+    if (res.status === 429) {
+      // Free tiers limit tokens per minute, and one question can spend most of
+      // that on its own. Honour Retry-After instead of failing the question.
+      const after = Number(res.headers.get("retry-after"));
+      err.rateLimited = true;
+      err.retryAfterMs = Number.isFinite(after) && after > 0 ? Math.min(after * 1000, 65000) : 8000;
+    }
     throw err;
   }
 
@@ -206,6 +213,34 @@ async function chat(messages, { temperature = 0.2, maxTokens = 700, tools = null
     content: String(message.content || "").trim(),
     toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [],
   };
+}
+
+/**
+ * Groq's gpt-oss sometimes emits a tool call whose arguments are cut off, and
+ * the provider rejects the whole generation with tool_use_failed ("Failed to
+ * parse tool call arguments as JSON", "Tool choice is none, but model called a
+ * tool"). Which call trips over is random, so the same request normally works
+ * on the next attempt; losing the owner's answer to it is not worth it.
+ */
+const TOOL_CALL_FAILURE = /tool_use_failed|tool call|tool_choice/i;
+
+async function chat(messages, opts = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await chatOnce(messages, opts);
+    } catch (err) {
+      lastErr = err;
+      if (err.status === 503) throw err;
+      if (err.rateLimited) {
+        await new Promise((resolve) => setTimeout(resolve, err.retryAfterMs || 8000));
+        continue;
+      }
+      if (!TOOL_CALL_FAILURE.test(String(err.message || ""))) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 /** Text-only reply, for the planner and the connection test. */
@@ -222,6 +257,18 @@ async function complete(messages, opts = {}) {
  */
 
 const MAX_TOOL_ROUNDS = 4;
+
+/**
+ * Appended on the last allowed round. The tool definitions stay in the request
+ * because some providers reject a whole generation with a hard 400 when the
+ * model asks for a tool and none were declared ("Tool choice is none, but the
+ * model called a tool"); asking for prose is what actually stops the loop.
+ */
+const FINAL_ROUND_NOTE = {
+  role: "system",
+  content:
+    "No more lookups: answer now in plain text from what you already have, and name anything you could not look up.",
+};
 const MAX_TOOL_RESULT_CHARS = 4000;
 
 const TOOLS = [
@@ -736,7 +783,7 @@ async function executeTool(name, args, live) {
  * The answer loop: let the model call tools until it stops asking for them.
  *
  * If the provider rejects tool calls outright (some models behind these base
- * URLs do), retry once without them rather than failing the question. A tool
+ * URLs do), retry once as plain text rather than failing the question. A tool
  * that throws comes back as an error the model can read and work around.
  */
 async function answerWithTools({ messages, live, temperature = 0.3, maxTokens = 1200 }) {
@@ -745,16 +792,13 @@ async function answerWithTools({ messages, live, temperature = 0.3, maxTokens = 
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     const lastRound = round === MAX_TOOL_ROUNDS;
+    const turn = lastRound ? [...msgs, FINAL_ROUND_NOTE] : msgs;
     let reply;
     try {
-      reply = await chat(msgs, {
-        temperature,
-        maxTokens,
-        tools: lastRound ? null : TOOLS,
-      });
+      reply = await chat(turn, { temperature, maxTokens, tools: TOOLS });
     } catch (err) {
-      if (err.status === 502 && round === 0) {
-        reply = await chat(msgs, { temperature, maxTokens });
+      if (round === 0 && err.status !== 503 && !err.rateLimited) {
+        reply = await chat([...msgs, FINAL_ROUND_NOTE], { temperature, maxTokens });
       } else {
         throw err;
       }
@@ -762,6 +806,15 @@ async function answerWithTools({ messages, live, temperature = 0.3, maxTokens = 
 
     if (!reply.toolCalls.length) {
       return { answer: reply.content, toolsUsed: used };
+    }
+
+    if (lastRound) {
+      return {
+        answer:
+          reply.content ||
+          "I could not finish that within the lookup budget. Ask a narrower question and I will try again.",
+        toolsUsed: used,
+      };
     }
 
     msgs.push({ role: "assistant", content: reply.content || "", tool_calls: reply.toolCalls });
