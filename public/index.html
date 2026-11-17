@@ -739,6 +739,26 @@
 
   <!-- SETTINGS -->
   <section id="tab-settings" style="display:none">
+    <!-- Everything else in the app is readable without a password; this tab is
+         not. It stays locked until the password is entered here. -->
+    <div class="panel" id="settingsGate">
+      <h2 id="gateTitle">Settings are locked</h2>
+      <p class="hint" style="margin:-6px 0 10px">
+        The dashboard itself is open to read — zones, signals and results. Changing a setting, a key or an execution rule needs the password.
+      </p>
+      <div class="fields">
+        <div style="grid-column:1/-1">
+          <label>Dashboard password</label>
+          <input id="gatePass" type="password" autocomplete="current-password" placeholder="password" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="act" id="gateLogin">Unlock</button>
+        <span class="hint" id="gateMsg"></span>
+      </div>
+    </div>
+
+    <div id="settingsBody" style="display:none">
     <div class="panel">
       <h2>Session</h2>
       <div class="row" style="margin-bottom:10px">
@@ -1020,6 +1040,7 @@
       </ol>
       <div class="hint">Free plan: 800 requests a day, 8 per minute, real-time forex including XAU/USD. If Nasdaq shows an error, tell me and I will switch it to a symbol your plan covers.</div>
     </div>
+    </div>
   </section>
 </div>
 
@@ -1040,6 +1061,9 @@ const api = async (p, opts) => {
 
 let pollMs = 30000;
 let timer = null;
+// Settings are the only locked part of the page; the rest reads without a password.
+let settingsUnlocked = false;
+let gateConfigured = false;
 let soundOn = true;
 let instruments = [];
 let lastPrices = {};
@@ -1208,7 +1232,11 @@ document.querySelectorAll("nav button").forEach(b => {
     if (b.dataset.tab === "zones") loadZones();
     if (b.dataset.tab === "risk") loadExec();
     if (b.dataset.tab === "learning") loadLearning();
-    if (b.dataset.tab === "settings") loadSettings();
+    if (b.dataset.tab === "settings") {
+      loadAuth().then(() => {
+        if (settingsUnlocked) loadLockedPanels();
+      });
+    }
   });
 });
 
@@ -2831,7 +2859,6 @@ if (webSearchTestBtn) {
     }
   });
 }
-loadWebSearchStatus();
 
 document.getElementById("saveTrading").addEventListener("click", async () => {
   const msg = document.getElementById("tradingMsg");
@@ -3532,13 +3559,15 @@ async function loadDeliveries() {
   }
 }
 
-loadAiStatus();
-loadDeliveries();
-loadAuth();
+loadAuth().then(() => {
+  if (settingsUnlocked) loadLockedPanels();
+});
 
 async function loadAuth() {
   try {
     const d = await api("/api/auth/status");
+    settingsUnlocked = Boolean(d.signedIn);
+    gateConfigured = Boolean(d.configured);
     const state = document.getElementById("authState");
     const expiry = document.getElementById("authExpiry");
     if (state) {
@@ -3551,7 +3580,59 @@ async function loadAuth() {
         : "sign in again to use this device";
     }
   } catch {}
+  paintSettingsGate();
 }
+
+/** Show either the password prompt or the settings panels, never both. */
+function paintSettingsGate() {
+  const gate = document.getElementById("settingsGate");
+  const body = document.getElementById("settingsBody");
+  if (!gate || !body) return;
+  gate.style.display = settingsUnlocked ? "none" : "";
+  body.style.display = settingsUnlocked ? "" : "none";
+  const title = document.getElementById("gateTitle");
+  const btn = document.getElementById("gateLogin");
+  if (title) title.textContent = gateConfigured ? "Settings are locked" : "Create the dashboard password";
+  if (btn) btn.textContent = gateConfigured ? "Unlock" : "Set password";
+}
+
+/** Everything behind the password: settings, keys, execution, deliveries. */
+function loadLockedPanels() {
+  loadSettings();
+  loadAiStatus();
+  loadDeliveries();
+  loadWebSearchStatus();
+}
+
+document.getElementById("gateLogin").addEventListener("click", async () => {
+  const msg = document.getElementById("gateMsg");
+  const field = document.getElementById("gatePass");
+  const password = field ? field.value : "";
+  if (!password) { msg.textContent = gateConfigured ? "Enter the password." : "Choose a password."; return; }
+  msg.textContent = "Checking…";
+  try {
+    const res = await fetch(gateConfigured ? "/api/auth/login" : "/api/auth/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password })
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok || !d.ok) { msg.textContent = d.error || ("Failed: HTTP " + res.status); return; }
+    field.value = "";
+    settingsUnlocked = true;
+    gateConfigured = true;
+    paintSettingsGate();
+    loadLockedPanels();
+    loadAuth();
+    msg.textContent = "";
+  } catch (err) {
+    msg.textContent = "Failed: " + err.message;
+  }
+});
+
+document.getElementById("gatePass").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("gateLogin").click();
+});
 
 document.addEventListener("click", (event) => {
   const id = event.target && event.target.id;
@@ -3560,7 +3641,10 @@ document.addEventListener("click", (event) => {
   api("/api/auth/logout", { method: "POST", body: "{}" })
     .catch(() => undefined)
     .then(() => {
-      window.location.href = "/login";
+      // The dashboard stays readable; only the Settings tab locks again.
+      settingsUnlocked = false;
+      paintSettingsGate();
+      window.location.href = "/";
     });
 });
 

@@ -575,11 +575,33 @@ in once and stays signed in. The password is stored as a scrypt hash, never as
 text, and the cookie is signed with a secret generated on the server, so a forged
 cookie is refused.
 
-What stays public: the sign-in pages themselves, `/healthz`, `/api/heartbeat`
-(a status probe with no secrets, for cron jobs that must be able to wake a stopped
-machine), and `/api/tv/webhook`, which carries its own token and cannot work
-behind a cookie. Everything else — every zone, signal, setting and trading
-endpoint — answers `401` without the session.
+**The dashboard reads without a password; changing it does not.** Zones,
+signals, news, journal and learning are public — that is what makes a cron job,
+a bookmark or a monitoring service able to load the app (and wake a stopped
+machine) with no cookie at all. The **Settings tab** is the locked part: open it
+and it asks for the password before it shows a single field.
+
+What needs the session, listed once in `server/index.js` as `AUTH_ONLY_PREFIXES`
+and `AUTH_ONLY_PATHS`:
+
+| Locked | Why |
+| --- | --- |
+| `/api/settings*` | Discord webhooks, watch list, alert switches |
+| `/api/exec*` | broker bridge, account number, risk rules |
+| `/api/websearch*` | search API key |
+| `/api/recap*` | recap schedule and sends |
+| `/api/status-ping*` | uptime ping URL |
+| `/api/delivery` | delivery history |
+| `/api/ai/status`, `/api/ai/config`, `/api/ai/test`, `/api/ai/clear` | model key and endpoint |
+| `/api/discord/test`, `/api/lab/run`, `/api/brain/run` | send and run actions |
+
+Everything else stays public, including `/healthz`, `/api/heartbeat` (a status
+probe with no secrets, for cron jobs that must be able to wake a stopped machine),
+`/api/tv/webhook` (it carries its own token and cannot work behind a cookie) and
+the assistant's `/api/ai/ask` and `/api/ai/agent`, which the front page uses.
+Adding a new `/api/exec/*` or `/api/settings/*` route is private automatically;
+anything outside those prefixes is public by design, so never put a secret on a
+path that is not in that list.
 
 To reset a forgotten password, remove the `auth` object from `settings.json` on
 the server (`fly ssh console` → edit `/app/data/settings.json`) and reload: the

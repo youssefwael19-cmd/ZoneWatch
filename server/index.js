@@ -61,9 +61,10 @@ app.use(express.json({ limit: "2mb" }));
 /* ------------------------------------------------------------------ *
  * Access
  *
- * One password, one session cookie. Everything below this middleware needs it
- * except the two pages that hand it out, the TradingView webhook (which carries
- * its own token) and the health probe.
+ * The dashboard reads without a password; changing anything needs one. Every
+ * settings, key, execution and delivery route is listed in AUTH_ONLY below and
+ * answers 401 until the session cookie has been earned on the Settings tab, so
+ * the public page never shows a webhook, an API key or an account number.
  * ------------------------------------------------------------------ */
 
 app.get("/api/auth/status", (req, res) => {
@@ -130,44 +131,48 @@ app.get("/setup", (req, res) => {
   res.type("html").send(auth.page({ mode: "setup" }));
 });
 
-const PUBLIC_PATHS = new Set([
-  "/login",
-  "/setup",
-  "/healthz",
-  /**
-   * Machine-wake / status probe for an external cron job. It answers with the
-   * watcher's last check time and nothing else, so an uptime service may call it
-   * without a session — the app password must not turn a waker into a 401.
-   * Always 200 (even when stale), because a cron service disables a job that
-   * keeps failing; use /healthz if you want the 503-on-stuck behaviour.
-   */
-  "/api/heartbeat",
-  "/api/auth/status",
-  "/api/auth/setup",
-  "/api/auth/login",
-  "/api/auth/logout",
-  "/api/tv/webhook",
+/*
+ * The locked half of the app: exactly the Settings tab (keys, Discord, trading,
+ * execution, alerts, uptime, recap, web search) and nothing the public dashboard
+ * polls. Prefixes cover whole namespaces so a new /api/exec/* route is private
+ * by default instead of by remembering.
+ */
+const AUTH_ONLY_PREFIXES = [
+  "/api/settings",
+  "/api/exec",
+  "/api/websearch",
+  "/api/recap",
+  "/api/status-ping",
+  "/api/delivery",
+];
+const AUTH_ONLY_PATHS = new Set([
+  "/api/ai/status",
+  "/api/ai/config",
+  "/api/ai/test",
+  "/api/ai/clear",
+  "/api/discord/test",
+  "/api/lab/run",
+  "/api/brain/run",
 ]);
 
+function needsPassword(req) {
+  if (AUTH_ONLY_PATHS.has(req.path)) return true;
+  return AUTH_ONLY_PREFIXES.some((p) => req.path === p || req.path.startsWith(p + "/"));
+}
+
 app.use((req, res, next) => {
-  if (PUBLIC_PATHS.has(req.path)) return next();
+  if (!needsPassword(req)) return next();
   const record = settings.getAuth();
   if (!record) {
-    // Nothing is protected until a password exists, so send the browser to the
-    // one page that creates it rather than failing every request.
-    if (req.path.startsWith("/api/")) {
-      res.status(401).json({ ok: false, error: "set a dashboard password at /setup first" });
-      return;
-    }
-    res.redirect("/setup");
+    res.status(401).json({ ok: false, error: "set a dashboard password at /setup first" });
     return;
   }
   if (auth.isSignedIn(req, record)) return next();
-  if (req.path.startsWith("/api/")) {
-    res.status(401).json({ ok: false, error: "sign in first" });
-    return;
-  }
-  res.redirect("/login");
+  res.status(401).json({
+    ok: false,
+    error: "unlock the Settings tab with the dashboard password",
+    locked: true,
+  });
 });
 
 app.use(express.static(path.join(__dirname, "..", "public")));
