@@ -434,7 +434,7 @@ function setQuietHours(patch) {
   return next;
 }
 
-const CHANNEL_KEYS = ["alerts", "signals", "news", "recap"];
+const CHANNEL_KEYS = ["alerts", "signals", "results", "news", "recap"];
 
 /** Per-purpose webhook overrides, e.g. { news: "https://discord.com/api/webhooks/..." }. */
 function getDiscordChannels() {

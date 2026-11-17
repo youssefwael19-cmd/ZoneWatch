@@ -8,7 +8,8 @@
  *
  * You can set one default webhook and optionally override it per purpose:
  *   alerts  - zone alerts, broken zones, guard/feed/heartbeat warnings
- *   signals - signal entries, approach warnings, wins and losses
+ *   signals - signal entries, approach warnings, IVB breakouts
+ *   results - wins, losses and expiries
  *   news    - economic calendar warnings and session open/close
  *   recap   - the daily recap, weekly recap and weekly paper review
  *
@@ -29,7 +30,7 @@ const COLORS = {
   sessionClose: 0x9b8cff, // purple
 };
 
-const CHANNELS = ["alerts", "signals", "news", "recap"];
+const CHANNELS = ["alerts", "signals", "results", "news", "recap"];
 
 function defaultWebhook() {
   return settings.getDiscord() || process.env.DISCORD_WEBHOOK_URL || "";
@@ -663,7 +664,7 @@ async function sendSignalResult(result) {
         },
       ],
     },
-    "signals"
+    "results"
   );
 }
 

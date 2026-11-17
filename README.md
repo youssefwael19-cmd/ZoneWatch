@@ -166,16 +166,18 @@ above) and paste them under **Settings → Discord alerts → Separate channels*
 | Channel | Carries |
 | --- | --- |
 | Alerts | price entering or approaching a zone, broken zones, daily-loss guard, feed watchdog, heartbeat and health warnings |
-| Signals | signal entries, approach warnings, IVB breakouts, and every **win**, **loss** or expiry |
+| Signals | signal entries, approach warnings, IVB breakouts |
+| Results | every **win**, **loss** and expiry, with the pips and the money |
 | News | economic-calendar warnings, session and market open/close |
 | Recap | the daily recap, the weekly recap and the weekly paper review |
 
 Any box left empty falls back to the default webhook, so nothing is lost by
 filling in only the ones you care about.
 
-Signals and results are kept apart from zone alerts on purpose: zones fire all
-day and a trade is the thing you want to see on its own, with the number that
-decides whether the day was good.
+Alerts, signals and results are three separate places on purpose: zones fire all
+day, entries are the setups to act on, and results are the record of how they
+went. Keeping the last two out of the zone stream means a channel you can read
+like a scorecard, and muting zone noise never mutes a win or a loss.
 
 ### Pips, not price distance
 
