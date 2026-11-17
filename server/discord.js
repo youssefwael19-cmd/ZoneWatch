@@ -11,7 +11,8 @@
  *   signals - signal entries, approach warnings, IVB breakouts
  *   results - wins, losses and expiries
  *   news    - economic calendar warnings and session open/close
- *   recap   - the daily recap, weekly recap and weekly paper review
+ *   daily   - the daily recap sent every day at 21:00 UTC
+ *   recap   - the weekly recap and the weekly paper review
  *
  * Webhook URLs are secrets. They are stored server-side and only ever shown
  * back as their last few characters.
@@ -30,7 +31,7 @@ const COLORS = {
   sessionClose: 0x9b8cff, // purple
 };
 
-const CHANNELS = ["alerts", "signals", "results", "news", "recap"];
+const CHANNELS = ["alerts", "signals", "results", "news", "daily", "recap"];
 
 function defaultWebhook() {
   return settings.getDiscord() || process.env.DISCORD_WEBHOOK_URL || "";

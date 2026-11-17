@@ -885,6 +885,7 @@ async function buildSnapshot() {
     const alertsReady = discord.channelConfigured("alerts") && !quietNow;
     const newsReady = discord.channelConfigured("news") && !quietNow;
     const recapReady = discord.channelConfigured("recap") && !quietNow;
+    const dailyRecapReady = discord.channelConfigured("daily") && !quietNow;
 
     let sent = 0;
     for (const alert of alertsReady ? fired : []) {
@@ -1006,7 +1007,7 @@ async function buildSnapshot() {
     // Daily recap, due from 21:00 UTC: always sent, unlike the old conditional
     // digest, because "nothing happened and here is why" is the useful answer at
     // the end of a day. The digest endpoint stays for previewing its content.
-    if (dailyRecapMod.shouldSend(new Date())) {
+    if (dailyRecapReady && dailyRecapMod.shouldSend(new Date())) {
       try {
         const recapStats = tracker.stats();
         const recapProven = (brainMod.summary().conditions || [])
@@ -1027,7 +1028,7 @@ async function buildSnapshot() {
           },
         });
         dailyRecapMod.markSent();
-        await discord.post({ content: recapText }, "recap");
+        await discord.post({ content: recapText }, "daily");
       } catch (err) {
         dailyRecapMod.markSent();
         console.error("daily recap:", err.message);
@@ -1949,7 +1950,11 @@ app.get("/api/recap/daily", (req, res) => {
     text: rec,
     due: dailyRecapMod.shouldSend(),
     lastSentDay: dailyRecapMod.readState().lastSentDay,
-    channel: discord.channelConfigured("recap") ? "recap" : "alerts",
+    channel: discord.channelConfigured("daily")
+      ? "daily"
+      : discord.channelConfigured("recap")
+        ? "recap"
+        : "alerts",
   });
 });
 
@@ -1975,7 +1980,7 @@ app.post("/api/recap/daily/send", async (req, res) => {
       res.json({ ok: true, sent: false, text: rec });
       return;
     }
-    await discord.post({ content: rec }, "recap");
+    await discord.post({ content: rec }, "daily");
     dailyRecapMod.markSent();
     res.json({ ok: true, sent: true, text: rec });
   } catch (err) {

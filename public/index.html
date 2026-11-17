@@ -868,14 +868,30 @@
         <label>Results — wins, losses, expiries</label>
         <input id="chResults" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
       </div>
-      <div style="margin-top:10px">
-        <label>Recap — daily, weekly and paper review</label>
-        <input id="chRecap" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
-      </div>
       <div class="row" style="margin-top:12px">
         <button class="act" id="saveChannels">Save channels</button>
         <button class="ghost" id="clearChannels">Use default for all</button>
         <span class="hint" id="chanMsg"></span>
+      </div>
+
+      <h3 style="margin:24px 0 6px;font-size:13px">Recaps — daily and weekly, separately</h3>
+      <div class="hint" style="margin-bottom:10px">
+        The daily recap and the weekly recap can go to different channels. Leave a box empty and that recap uses the default
+        webhook above.
+      </div>
+      <div>
+        <label>Daily recap — every day at 21:00 UTC</label>
+        <input id="chDaily" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
+      </div>
+      <div style="margin-top:10px">
+        <label>Weekly recap — weekly recap and weekly paper review</label>
+        <input id="chRecap" type="password" placeholder="uses default" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="act" id="saveRecaps">Save recaps</button>
+        <button class="ghost" id="testDailyCh">Send test to daily</button>
+        <button class="ghost" id="testWeeklyCh">Send test to weekly</button>
+        <span class="hint" id="recapChMsg"></span>
       </div>
       <div class="hint" style="margin-top:10px">
         <strong>How to get the URL:</strong> in Discord, right-click your channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL.
@@ -2694,7 +2710,7 @@ function paintDiscord(d) {
   if (box) box.checked = d.news !== false;
 
   if (d.channels) {
-    const map = { chAlerts: "alerts", chSignals: "signals", chResults: "results", chNews: "news", chRecap: "recap" };
+    const map = { chAlerts: "alerts", chSignals: "signals", chResults: "results", chNews: "news", chDaily: "daily", chRecap: "recap" };
     for (const [id, key] of Object.entries(map)) {
       const input = document.getElementById(id);
       if (!input) continue;
@@ -2737,21 +2753,57 @@ document.getElementById("saveChannels").addEventListener("click", async () => {
   const alerts = read("chAlerts");
   const signals = read("chSignals");
   const results = read("chResults");
-  const recapCh = read("chRecap");
   const patch = {};
   if (alerts) patch.alerts = alerts;
   if (signals) patch.signals = signals;
   if (results) patch.results = results;
-  if (recapCh) patch.recap = recapCh;
   if (!Object.keys(patch).length) {
     msg.textContent = "Paste at least one webhook URL first.";
     return;
   }
   const d = await saveDiscord({ discordChannels: patch }, msg, "Saved. Each alert type now goes to its own channel.");
   if (d) {
-    for (const id of ["chAlerts", "chSignals", "chResults", "chRecap"]) document.getElementById(id).value = "";
+    for (const id of ["chAlerts", "chSignals", "chResults"]) document.getElementById(id).value = "";
   }
 });
+
+document.getElementById("saveRecaps").addEventListener("click", async () => {
+  const msg = document.getElementById("recapChMsg");
+  const read = (id) => (document.getElementById(id).value || "").trim();
+  const daily = read("chDaily");
+  const weekly = read("chRecap");
+  const patch = {};
+  if (daily) patch.daily = daily;
+  if (weekly) patch.recap = weekly;
+  if (!Object.keys(patch).length) {
+    msg.textContent = "Paste a webhook for the daily or weekly recap first.";
+    return;
+  }
+  const d = await saveDiscord({ discordChannels: patch }, msg, "Saved. The daily and weekly recaps now have their own destinations.");
+  if (d) {
+    for (const id of ["chDaily", "chRecap"]) document.getElementById(id).value = "";
+  }
+});
+
+for (const [buttonId, channel, label] of [
+  ["testDailyCh", "daily", "daily recap"],
+  ["testWeeklyCh", "recap", "weekly recap"],
+]) {
+  document.getElementById(buttonId).addEventListener("click", async () => {
+    const msg = document.getElementById("recapChMsg");
+    msg.textContent = "Sending…";
+    try {
+      await api("/api/discord/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel })
+      });
+      msg.textContent = `Test sent to the ${label} channel.`;
+    } catch (err) {
+      msg.textContent = err.message;
+    }
+  });
+}
 
 document.getElementById("saveNewsCh").addEventListener("click", async () => {
   const msg = document.getElementById("newsChMsg");
@@ -2780,9 +2832,9 @@ document.getElementById("clearChannels").addEventListener("click", async () => {
   const msg = document.getElementById("chanMsg");
   if (!confirm("Send every other alert type to the default webhook again? The news channel stays as it is.")) return;
   await saveDiscord(
-    { discordChannels: { alerts: "", signals: "", results: "", recap: "" } },
+    { discordChannels: { alerts: "", signals: "", results: "", daily: "", recap: "" } },
     msg,
-    "Alerts, signals, results and recaps use the default webhook now. News is unchanged."
+    "Alerts, signals, results and both recaps use the default webhook now. News is unchanged."
   );
 });
 

@@ -170,7 +170,8 @@ its own box, and news has its own section with a save and test button:
 | Signals | signal entries, approach warnings, IVB breakouts |
 | Results | every **win**, **loss** and expiry, with the pips and the money |
 | News | economic-calendar warnings, session and market open/close |
-| Recap | the daily recap, the weekly recap and the weekly paper review |
+| Daily recap | the 21:00 UTC daily recap |
+| Weekly recap | the weekly recap and the weekly paper review |
 
 Any box left empty falls back to the default webhook, so nothing is lost by
 filling in only the ones you care about — except **news**, which is deliberately
@@ -215,8 +216,9 @@ Discord receives the alerts.
 
 ### The daily recap
 
-Once a day, at or after 21:00 UTC, the app posts one recap to the **recap**
-channel (falling back to the default webhook if none is set):
+Once a day, at or after 21:00 UTC, the app posts one recap to the **daily
+recap** channel (falling back to the default webhook if none is set). It is kept
+separate from the weekly recap, which goes to the **weekly recap** channel:
 
 ```
 **Zone Watch · daily recap · Mon, 16 Nov 2026 21:00:00 UTC**
