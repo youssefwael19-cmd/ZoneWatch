@@ -2072,6 +2072,18 @@ async function loadExec() {
           </div>`;
       })()}
       ${d.enabled && !d.openCount && !d.closedCount ? `<div class="hint" style="margin-top:4px">No order has been placed yet. Paper trading only fills signals that clear the lab and brain gates, and open positions show under Equity until they close.</div>` : ""}
+      ${d.shadow && d.shadow.enabled ? (() => {
+        const s = d.shadow;
+        const cash = (n) => `${n < 0 ? "−" : ""}$${Math.abs(Number(n) || 0).toFixed(2)}`;
+        const wins = s.dayWins || 0;
+        const losses = s.dayLosses || 0;
+        return `<div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)">
+          Shadow book, gate-rejected: equity <strong>${s.equity == null ? "—" : cash(s.equity)}</strong> ·
+          today <strong style="color:${s.dayRealized < 0 ? "#ff9a9a" : "#7ff0cf"}">${cash(s.dayRealized)}</strong>
+          · ${wins}W/${losses}L · ${s.openCount} open · ${s.closedCount} closed
+          <div class="hint" style="margin-top:2px">Setups the proven-rule gate refused, paper-traded in its own ledger with the same costs, slippage and risk. It never places an order. Line it up with the account above and the gate's cost — or its saving — is visible instead of assumed.</div>
+        </div>`;
+      })() : ""}
       <div style="margin-top:4px">Risk ${d.riskPct}% per trade · daily limit ${d.maxDailyLossPct}% · broker ${d.broker}
         ${d.mode === "direct"
           ? `· API ${d.direct && d.direct.configured ? "configured" : "not configured"} ${d.direct && d.direct.accountId ? "(" + d.direct.accountId + ")" : ""}`
