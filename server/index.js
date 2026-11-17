@@ -32,6 +32,7 @@ const journal = require("./journal");
 const executor = require("./executor");
 const tvMod = require("./tradingview");
 const costsMod = require("./costs");
+const pipsMod = require("./pips");
 const ctraderBroker = require("./brokers/ctrader");
 const { writeJson } = require("./atomicWrite");
 const auth = require("./auth");
@@ -50,7 +51,7 @@ const WORKSPACE = path.resolve(__dirname, "..");
 // a fast loop cannot burn a free-plan key; Yahoo is fine at this rate.
 const WATCH_INTERVAL_MS = Math.max(10000, Number(process.env.WATCH_INTERVAL_MS || 10000));
 const AUTO_ZONE_TTL_MS = 5 * 60 * 1000;
-const SIGNAL_COOLDOWN_MS = 5 * 60 * 1000;
+const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000;
 const AUTO_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 const APPROACH_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -594,6 +595,7 @@ async function buildSnapshot() {
   // Signals
   const signals = [];
   const newSignals = [];
+  const openTrades = tracker.load().open || [];
   for (const inst of instruments) {
     const bars = candleBySymbol[inst.symbol];
     const price = priceBySymbol.get(inst.symbol);
@@ -629,9 +631,16 @@ async function buildSnapshot() {
 
     if (blockSignals) continue;
 
-    const key = `${signal.symbol}|${signal.side}|${signal.zone.low}|${signal.zone.high}`;
+    // Auto zones are recomputed every cycle, so their bounds drift by a
+    // fraction of a pip. Rounding the key to two pips keeps one setup as one
+    // signal instead of a fresh one every time the zone is redrawn.
+    const zoneStep = Math.max(pipsMod.pipSize(signal.symbol) * 2, 1e-9);
+    const key = `${signal.symbol}|${signal.side}|${Math.round(signal.zone.low / zoneStep)}|${Math.round(signal.zone.high / zoneStep)}`;
     const changed = lastSignalKey.get(signal.symbol) !== key;
     const cooled = Date.now() - (lastSignalSentAt.get(signal.symbol) || 0) > SIGNAL_COOLDOWN_MS;
+    // Never stack a second signal on a market that is already being tracked in
+    // the same direction: every copy would be scored as its own winner.
+    const alreadyOpen = openTrades.some((t) => t.symbol === signal.symbol && t.side === signal.side);
     // The lab decides whether this market has ever shown an out-of-sample edge.
     // If it has not, the signal is normally shown but never sent — unless the
     // market is on the explicit override list, in which case it goes out
@@ -643,7 +652,7 @@ async function buildSnapshot() {
       signal.labVerdict = labResult ? labResult.verdict : "not tested yet";
     }
 
-    if (changed && cooled && (signal.labApproved || signal.unproven)) {
+    if (changed && cooled && !alreadyOpen && (signal.labApproved || signal.unproven)) {
       newSignals.push(signal);
       lastSignalKey.set(signal.symbol, key);
       lastSignalSentAt.set(signal.symbol, Date.now());
@@ -691,7 +700,30 @@ async function buildSnapshot() {
 
   // Track posted signals and resolve any that hit target, stop or expiry
   for (const signal of newSignals) tracker.add(signal);
-  const tracked = tracker.update(priceBySymbol);
+
+  // Judge open signals on the bars they lived through, not on the price that
+  // happens to be on screen when the app next wakes up. Only markets with an
+  // open signal pay for candles.
+  const barsForSymbol = {};
+  for (const symbol of new Set((tracker.load().open || []).map((t) => t.symbol))) {
+    const inst = instruments.find((i) => i.symbol === symbol);
+    if (!inst) continue;
+    try {
+      const bars = await candlesMod.getCandles(inst.candleSymbol, "5m", "5d");
+      const price = priceBySymbol.get(symbol);
+      const last = bars[bars.length - 1];
+      // Gold is quoted as spot but its candles are futures: shift the series
+      // onto the quoted scale, the same way zone detection does.
+      const offset =
+        inst.candleSymbol !== inst.providerSymbol && Number.isFinite(price) && last && Number.isFinite(last.c)
+          ? price - last.c
+          : 0;
+      barsForSymbol[symbol] = offset
+        ? bars.map((b) => ({ ...b, o: b.o + offset, h: b.h + offset, l: b.l + offset, c: b.c + offset }))
+        : bars;
+    } catch {}
+  }
+  const tracked = tracker.update(priceBySymbol, Date.now(), { barsFor: (symbol) => barsForSymbol[symbol] });
   const signalStats = tracker.stats();
 
   // Judge itself on what has actually closed, every cycle.

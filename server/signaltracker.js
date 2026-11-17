@@ -2,10 +2,15 @@
  * Tracks signals from the moment they are posted until they hit their target,
  * hit their stop, or expire.
  *
- * Resolution is checked against the live quote on every watch cycle (roughly
- * every 10 seconds), so an intrabar spike that reverses between two checks can
- * be missed. That is a real limitation of price-based tracking; it is stated
- * here rather than hidden.
+ * Resolution walks the candles a signal lived through, in order, and takes the
+ * first level that was touched. Checking only the live price is not the same
+ * thing: a trade that hit its stop on Tuesday and is beyond its target by
+ * Thursday would be scored as a win, which is how a tracker reports a 100% win
+ * rate it did not earn. When no candle history is available (a market with no
+ * bars, or a gap in the feed) it falls back to the live price, and says so.
+ *
+ * A bar that touches both levels is scored as a loss: intrabar order is
+ * unknown, and assuming the exit you wanted is how backtests lie to you.
  *
  * State is persisted to signals.json so a restart does not lose open trades.
  */
@@ -54,6 +59,13 @@ function add(signal) {
   if (state.open.some((s) => s.id === id)) return state.open;
   if (state.history.some((s) => s.id === id)) return state.open;
 
+  // One live signal per market and direction. Auto zones drift by a fraction
+  // of a pip between cycles, so without this the same setup is posted again and
+  // again and each copy is scored separately.
+  if (state.open.some((s) => s.symbol === signal.symbol && s.side === signal.side)) {
+    return state.open;
+  }
+
   // Do not track something that is already past its target or stop.
   if (signal.side === "BUY") {
     if (signal.price <= signal.stop || signal.price >= signal.target) return state.open;
@@ -81,10 +93,40 @@ function add(signal) {
 }
 
 /**
- * Check open signals against current prices.
+ * Did this signal's path touch its stop or its target first?
+ *
+ * Bars are walked oldest-first and only those at or after the signal's open are
+ * used. Returns null when there is no history to judge from.
+ */
+function pathOutcome(s, bars, openedAtMs) {
+  if (!Array.isArray(bars) || !bars.length) return null;
+  for (const bar of bars) {
+    const at = Number(bar.t) < 1e12 ? Number(bar.t) * 1000 : Number(bar.t);
+    if (!Number.isFinite(at) || at + 60 * 1000 < openedAtMs) continue;
+    const high = Number(bar.h);
+    const low = Number(bar.l);
+    if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
+
+    const hitStop = s.side === "BUY" ? low <= s.stop : high >= s.stop;
+    const hitTarget = s.side === "BUY" ? high >= s.target : low <= s.target;
+
+    // Both inside one bar: the order inside the bar is unknown, so take the
+    // pessimistic reading. Anything else flatters the strategy.
+    if (hitStop) return { outcome: "loss", exit: s.stop, barAt: at };
+    if (hitTarget) return { outcome: "win", exit: s.target, barAt: at };
+  }
+  return null;
+}
+
+/**
+ * Check open signals against current prices and the bars they lived through.
+ * @param {Map|object} priceBySymbol
+ * @param {number} now
+ * @param {{barsFor?: (symbol: string) => Array}} [options]
  * @returns {{resolved: Array, open: Array}}
  */
-function update(priceBySymbol, now = Date.now()) {
+function update(priceBySymbol, now = Date.now(), options = {}) {
+  const barsFor = typeof options.barsFor === "function" ? options.barsFor : null;
   const state = load();
   const stillOpen = [];
   const resolved = [];
@@ -99,8 +141,16 @@ function update(priceBySymbol, now = Date.now()) {
 
     let outcome = null;
     let exit = null;
+    let barAt = null;
 
-    if (s.side === "BUY") {
+    const openedAtMs = new Date(s.openedAt).getTime();
+    const path = barsFor ? pathOutcome(s, barsFor(s.symbol), openedAtMs) : null;
+
+    if (path) {
+      outcome = path.outcome;
+      exit = path.exit;
+      barAt = path.barAt;
+    } else if (s.side === "BUY") {
       if (price <= s.stop) {
         outcome = "loss";
         exit = s.stop;
@@ -118,7 +168,7 @@ function update(priceBySymbol, now = Date.now()) {
       }
     }
 
-    const age = now - new Date(s.openedAt).getTime();
+    const age = now - openedAtMs;
     if (!outcome && age > EXPIRY_MS) {
       outcome = "expired";
       exit = price;
@@ -130,11 +180,15 @@ function update(priceBySymbol, now = Date.now()) {
       resolved.push({
         ...s,
         outcome,
-        exit: Number(Number(exit).toFixed(2)),
-        priceAtClose: Number(Number(price).toFixed(2)),
+        // Two decimals erased a EURUSD stop (1.095 became 1.1); ten
+        // significant digits keep every market's own precision.
+        exit: Number(Number(exit).toPrecision(10)),
+        priceAtClose: Number(Number(price).toPrecision(10)),
         rMultiple,
+        resolution: path ? "candles" : "price",
+        touchedAt: barAt ? new Date(barAt).toISOString() : null,
         closedAt: new Date(now).toISOString(),
-        heldMinutes: Math.round(age / 60000),
+        heldMinutes: Math.round((barAt ? barAt - openedAtMs : age) / 60000),
       });
     } else {
       stillOpen.push(s);
