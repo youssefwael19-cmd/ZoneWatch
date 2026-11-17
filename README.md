@@ -272,6 +272,24 @@ When price reaches a zone, the bot scores a small set of conditions:
 Six points maximum. Below 3 no signal is shown at all. Each signal carries an
 entry, a stop just beyond the far edge of the zone, and a 2R target.
 
+### How a signal is scored after it is posted
+
+One live signal per market and direction, and no new one for that market within
+30 minutes. The zone key is rounded to two pips, because auto zones are redrawn
+every cycle and an unrounded key turns one setup into a stream of identical
+signals — seven near-identical USDCAD buys were once scored as seven trades.
+
+A signal resolves by walking the 5-minute candles from the moment it was posted
+and taking the **first** level touched. A bar that touches both the stop and the
+target counts as a **loss**: the order inside a bar is unknown, and assuming the
+exit you wanted is how a backtest lies. Only when there are no candles does it
+fall back to the live price, and the history records `resolution: "price"` so you
+can see which trades were judged that way.
+
+The older price-only rule scored three of thirteen tracked trades as wins that
+had already hit their stop, and reported a 100% win rate. If you see a suspicious
+win rate, check `resolution` before believing it.
+
 **Read this before using them.** These are mechanical confluence checks, not
 predictions. Nothing here accounts for the news, the session or what the higher
 timeframe is doing. Treat them as a prompt to look at the chart, never as a
