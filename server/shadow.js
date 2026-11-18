@@ -32,6 +32,7 @@ const FILE = path.join(__dirname, "..", "shadow.json");
 // balance a 0.01 floor would decide the risk instead of the percentage.
 const LOT_STEP = 0.0001;
 const MAX_CLOSED = 500;
+const MAX_REFUSALS = 200;
 
 function fresh() {
   return {
@@ -43,6 +44,7 @@ function fresh() {
     killedAt: null,
     killReason: null,
     spreads: {},
+    refusals: [],
     lastAt: null,
   };
 }
@@ -162,7 +164,8 @@ function openPosition(state, signal, held, config, prices, now) {
   if (state.balance == null) state.balance = Number(config.accountBalance) || 1000;
   const equityNow = equity(state, prices);
   const size = lotsFor(signal, equityNow, Number(config.riskPct ?? 0.5), config);
-  if (!size || size.refused) return null;
+  if (!size) return null;
+  if (size.refused) return { refusal: size.refused };
 
   const signalEntry = Number(signal.entry ?? signal.price);
   const fill = paperFill(signal, signalEntry, config, state, size.lots);
@@ -197,7 +200,7 @@ function openPosition(state, signal, held, config, prices, now) {
     setup: signal.confidence || signal.type || "signal",
   };
   state.open.push(order);
-  return order;
+  return { order };
 }
 
 /**
@@ -289,6 +292,44 @@ function resolve(state, prices, config, now) {
 }
 
 /**
+ * Note a setup the book could not size, once per setup per day.
+ *
+ * A refused setup leaves no trade, so without a note the sample contains only
+ * the setups that happened to fit the risk cap. A run of wide stops — gold and
+ * the indices at this balance — would then look like a complete result when it
+ * is a filtered one. This keeps the filter visible instead of silent.
+ */
+function recordRefusal(state, signal, held, reason, config, prices, now) {
+  if (!Array.isArray(state.refusals)) state.refusals = [];
+  const key = [
+    dayKey(now),
+    signal.symbol,
+    signal.side,
+    signal.entry ?? signal.price,
+    signal.stop,
+    signal.target,
+  ].join("|");
+  if (state.refusals.some((r) => r.key === key)) return false;
+
+  state.refusals.push({
+    key,
+    at: now.toISOString(),
+    symbol: signal.symbol,
+    side: signal.side,
+    entry: signal.entry ?? signal.price,
+    stop: Number(signal.stop),
+    target: Number(signal.target),
+    equity: equity(state, prices),
+    riskPct: Number(config.riskPct ?? 0.5),
+    condition: held.condition || null,
+    heldReason: held.reason || null,
+    reason,
+  });
+  if (state.refusals.length > MAX_REFUSALS) state.refusals = state.refusals.slice(-MAX_REFUSALS);
+  return true;
+}
+
+/**
  * One watch cycle: resolve what is open, then take this cycle's rejected
  * setups. `held` is [{ signal, reason, condition }] from the gate.
  */
@@ -302,8 +343,11 @@ function cycle(held, prices, now = new Date()) {
   if (closed.length) dirty = true;
 
   for (const entry of Array.isArray(held) ? held : []) {
-    const order = openPosition(state, entry.signal, entry, config, prices, now);
-    if (order) dirty = true;
+    const result = openPosition(state, entry.signal, entry, config, prices, now);
+    if (result && result.order) dirty = true;
+    else if (result && result.refusal) {
+      if (recordRefusal(state, entry.signal, entry, result.refusal, config, prices, now)) dirty = true;
+    }
   }
 
   if (dirty) {
@@ -322,6 +366,8 @@ function status(prices) {
     const at = new Date(c.closedAt || 0).getTime();
     return Number.isFinite(at) && at >= dayStart;
   });
+  const refusals = Array.isArray(state.refusals) ? state.refusals : [];
+  const dayRefusals = refusals.filter((r) => String(r.at || "").slice(0, 10) === dayKey(now));
 
   return {
     enabled: enabled(config),
@@ -341,6 +387,11 @@ function status(prices) {
       : null,
     killSwitch: Boolean(state.killedAt),
     killReason: state.killReason,
+    // Setups that never became trades because no size fit the risk cap. Shown
+    // beside the result so the sample cannot be read as the whole story.
+    refusedCount: refusals.length,
+    refusedToday: dayRefusals.length,
+    refusals: refusals.slice(-10).reverse(),
     open: state.open,
     closed: state.closed.slice(-20).reverse(),
   };
