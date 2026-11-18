@@ -284,7 +284,7 @@
     <button data-tab="watch" class="active">Watch</button>
     <button data-tab="zones">Zones</button>
     <button data-tab="news">News</button>
-    <button data-tab="risk">Risk</button>
+    <button data-tab="risk">Trading</button>
     <button data-tab="journal">Journal</button>
     <button data-tab="learning">Learning</button>
     <button data-tab="settings">Settings</button>
@@ -1010,6 +1010,13 @@
         <span class="hint" id="tradingMsg"></span>
       </div>
       <div class="hint">Account size and risk % add a lot-size suggestion to each alert. Leave them empty to hide it.</div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08)">
+        <div class="hint" style="margin-bottom:8px">
+          The order-placing side of the app lives on its own tab: the paper account and its money, the broker
+          connection, the brain-gate switch and the shadow book of gate-rejected setups.
+        </div>
+        <button class="btn ghost" id="openExecTab">Open auto-trading</button>
+      </div>
     </div>
 
     <div class="panel">
@@ -1293,6 +1300,11 @@ document.addEventListener("click", async (event) => {
   } catch (err) {
     say(err.message, true);
   }
+});
+
+document.getElementById("openExecTab").addEventListener("click", () => {
+  const btn = document.querySelector('nav button[data-tab="risk"]');
+  if (btn) btn.click();
 });
 
 document.querySelectorAll("nav button").forEach(b => {
@@ -3802,6 +3814,9 @@ function loadLockedPanels() {
   loadAiStatus();
   loadDeliveries();
   loadWebSearchStatus();
+  // The auto-trading panel sits on its own tab, so unlocking Settings has to
+  // refresh it too — otherwise it keeps the "unlock the Settings tab" error.
+  loadExec();
 }
 
 document.getElementById("gateLogin").addEventListener("click", async () => {
