@@ -147,7 +147,7 @@ function buildRecap({
 
   // The experiment on the other side of the gate, in the same money and the
   // same units, so holding a setup back can be judged rather than assumed.
-  if (shadow && shadow.enabled && (shadow.closedCount || shadow.openCount)) {
+  if (shadow && shadow.enabled && (shadow.closedCount || shadow.openCount || shadow.refusedToday)) {
     const shadowPnl = Number(shadow.dayRealized) || 0;
     const shadowRecord = Number(shadow.dayClosed)
       ? ` · ${shadow.dayWins || 0}W/${shadow.dayLosses || 0}L${
@@ -156,10 +156,16 @@ function buildRecap({
             : ` (best ${signed(shadow.dayBest)}, worst ${signed(shadow.dayWorst)})`
         }`
       : " · no closed trades";
+    // Setups too wide to size never became trades, so without this the daily
+    // record silently reads as everything the book saw.
+    const skipped = Number(shadow.refusedToday) || 0;
+    const skipNote = skipped
+      ? ` · ${skipped} setup${skipped === 1 ? "" : "s"} skipped by sizing`
+      : "";
     lines.push(
       `Shadow, gate-rejected: equity ${shadow.equity == null ? "—" : money(shadow.equity)} · today ${signed(shadowPnl)}${shadowRecord} · ${
         shadow.openCount || 0
-      } open, ${shadow.closedCount || 0} closed all time${shadow.killSwitch ? ` · **stopped: ${shadow.killReason || "by hand"}**` : ""}.`
+      } open, ${shadow.closedCount || 0} closed all time${skipNote}${shadow.killSwitch ? ` · **stopped: ${shadow.killReason || "by hand"}**` : ""}.`
     );
   }
 
