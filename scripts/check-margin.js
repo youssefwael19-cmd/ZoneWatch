@@ -167,7 +167,7 @@ async function run() {
   check("margin call closes the position", out.closed.length, 1);
   check("close is labelled a margin call", out.closed[0].marginCall, true);
   contains("close reason names the call", out.closed[0].closeReason, "margin call");
-  contains("close reason carries the numbers", out.closed[0].closeReason, "below margin used");
+  contains("close reason carries the numbers", out.closed[0].closeReason, "of margin used");
   check("nothing left open", executor.status({ EURUSD: 1.075 }).openCount, 0);
   check("balance took the loss", executor.status({ EURUSD: 1.075 }).balance < 200, true);
 
@@ -190,11 +190,30 @@ async function run() {
   check("worst loss is the one closed", out.closed[0].symbol, "AAA");
   check("the rest stay open", executor.status({ AAA: 80, BBB: 95, CCC: 99 }).openCount, 2);
 
+  console.log("--- configurable stop-out level ---");
+  settings.setExecConfig({ stopOutPct: 50 });
+  writeLedger(200, [
+    makePos({ symbol: "EURUSD", entry: 1.085, stop: 1.05, target: 1.2, margin: 200, notional: 400000, leverage: 2000 }),
+  ]);
+  // Floating -8 leaves equity 192 against 200 of margin: 96%, above a 50% level.
+  out = executor.mark({ EURUSD: 1.081 });
+  check("50% level tolerates a 96% margin level", out.closed.length, 0);
+  check("position is still open", executor.status({ EURUSD: 1.081 }).openCount, 1);
+
+  settings.setExecConfig({ stopOutPct: 100 });
+  out = executor.mark({ EURUSD: 1.081 });
+  check("100% level stops the same position out", out.closed.length, 1);
+  check("stop-out level is reported", executor.status({ EURUSD: 1.081 }).margin.stopOutPct, 100);
+
   console.log("--- settings clamp ---");
   settings.setExecConfig({ leverage: 999999 });
   check("leverage is clamped to 3000", settings.getExecConfig().leverage, 3000);
   settings.setExecConfig({ leverage: 0 });
   check("leverage cannot go below 1", settings.getExecConfig().leverage, 1);
+  settings.setExecConfig({ stopOutPct: 500 });
+  check("stop-out level is clamped to 100", settings.getExecConfig().stopOutPct, 100);
+  settings.setExecConfig({ stopOutPct: -20 });
+  check("stop-out level cannot go below 0", settings.getExecConfig().stopOutPct, 0);
 
   restore();
   console.log(`\n${passed} passed, ${failed} failed`);

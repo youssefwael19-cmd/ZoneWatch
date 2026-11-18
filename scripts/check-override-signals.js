@@ -6,8 +6,10 @@
  * blocked". This boots a copy of the app against a fake Discord webhook, plants
  * a manual zone that the current price sits inside, and checks that BUY/SELL
  * alerts are actually posted for:
- *   - EURUSD: the lab found an edge, the brain gate refuses the condition.
- *   - AUDUSD: the lab found no edge, the brain gate refuses the condition.
+ *   - EURUSD: the lab found an edge, the brain gate refuses the condition, so
+ *     the alert goes out but no order is placed.
+ *   - AUDUSD: the brain gate approves the condition, so the alert goes out and
+ *     the signal reaches the paper executor.
  *
  * Nothing in the real workspace is touched: the app runs from a copy in /tmp.
  *
@@ -120,10 +122,53 @@ function writeFixtures() {
     unprovenMarkets: ["EURUSD", "AUDUSD"],
     markets: { EURUSD: true, AUDUSD: true },
     trading: { newsBlackout: false, mtfFilter: false, minConfluence: 0 },
+    exec: {
+      enabled: true,
+      mode: "paper",
+      accountBalance: 200,
+      // The fixture zone is deliberately wide, so the smallest lot risks more
+      // than 0.5% would allow; 3% lets the approved setup reach the book.
+      riskPct: 3,
+      maxDailyLossPct: 2,
+      maxPositions: 2,
+      leverage: 2000,
+      requireGate: true,
+    },
   };
   fs.writeFileSync(path.join(TMP, "settings.json"), JSON.stringify(settings, null, 2));
 
   const now = new Date().toISOString();
+  // A measured champion for AUDUSD (all four conditions, so the stubbed candles
+  // cannot land on a cell without one), and none for EURUSD.
+  const champion = {
+    family: "momentum",
+    familyName: "Momentum (EMA 20/50 cross)",
+    n: 41,
+    expectancy: 0.39,
+    winrate: 46.3,
+    tStat: 1.65,
+  };
+  const brain = {
+    updatedAt: now,
+    results: {
+      AUDUSD: {
+        at: now,
+        current: { label: "trending-volatile", efficiency: 0.2, volatilityPercentile: 0.5, asOf: now },
+        champions: {
+          "trending-volatile": champion,
+          "trending-quiet": champion,
+          "ranging-quiet": champion,
+          "ranging-volatile": champion,
+        },
+      },
+      EURUSD: {
+        at: now,
+        current: { label: "trending-volatile", efficiency: 0.2, volatilityPercentile: 0.5, asOf: now },
+        champions: {},
+      },
+    },
+  };
+  fs.writeFileSync(path.join(TMP, "brain.json"), JSON.stringify(brain, null, 2));
   const zones = [
     {
       id: "manual-eurusd-demand",
@@ -250,8 +295,9 @@ async function main() {
       aud ? aud.title : "no embed"
     );
     check(
-      "AUDUSD alert says the brain gate was bypassed",
-      Boolean(aud) && /Gate bypassed/.test(aud.description || "")
+      "AUDUSD alert is not marked as bypassed",
+      Boolean(aud) && !/Gate bypassed/.test(aud.description || ""),
+      aud ? String(aud.description).split("\n")[0].slice(0, 120) : "no embed"
     );
 
     check(
@@ -265,12 +311,21 @@ async function main() {
     );
 
     const executorFile = path.join(TMP, "executor.json");
-    let orders = 0;
+    let book = { open: [], closed: [] };
     try {
-      const e = JSON.parse(fs.readFileSync(executorFile, "utf-8"));
-      orders = (e.open || []).length + (e.closed || []).length;
+      book = JSON.parse(fs.readFileSync(executorFile, "utf-8"));
     } catch {}
-    check("no trade was placed from an overridden signal", orders === 0, `${orders} orders`);
+    const orders = [...(book.open || []), ...(book.closed || [])];
+    check(
+      "gate-approved override signal is traded",
+      orders.some((o) => o.symbol === "AUDUSD"),
+      orders.map((o) => o.symbol).join(", ") || "none"
+    );
+    check(
+      "refused override signal places no trade",
+      !orders.some((o) => o.symbol === "EURUSD"),
+      orders.map((o) => o.symbol).join(", ") || "none"
+    );
 
     failed = results.some((r) => !r.ok);
   } catch (err) {

@@ -870,9 +870,11 @@ async function buildSnapshot() {
     }
 
     // The override list says "always send signals for these markets, even
-    // when blocked". Honour that for delivery only: the alert carries the
-    // reason the gate refused it, and the signal stays out of approvedSignals
-    // so the executor and the shadow book still see the gate's real verdict.
+    // when blocked". That is a delivery promise, not a trading bypass: a setup
+    // the gate approved is an ordinary approved signal, so the executor may
+    // trade it. A refused one is still posted, labelled with the reason, but
+    // stays out of approvedSignals — and is handed to the shadow book, which
+    // is what measures what those refusals were worth.
     if (unprovenMarkets.has(signal.symbol)) {
       let listed;
       try {
@@ -880,17 +882,14 @@ async function buildSnapshot() {
       } catch (err) {
         listed = { allowed: false, condition: null, reason: `brain gate failed (${err.message})` };
       }
-      if (!listed.allowed) {
-        signal.gateBypassed = listed.reason;
-        // Still recorded for the shadow book: the gate did refuse this setup,
-        // and measuring what those refusals would have been worth is the whole
-        // point of that book.
-        gateHeldSignals.push({ signal, reason: listed.reason, condition: listed.condition || null });
+      const gate = { blocked: false, condition: listed.condition || null, verdict: listed, overridden: true };
+      if (listed.allowed) {
+        approvedSignals.push({ signal, gate });
+        continue;
       }
-      overrideSignals.push({
-        signal,
-        gate: { blocked: false, condition: listed.condition || null, verdict: listed, overridden: true },
-      });
+      signal.gateBypassed = listed.reason;
+      gateHeldSignals.push({ signal, reason: listed.reason, condition: listed.condition || null });
+      overrideSignals.push({ signal, gate });
       continue;
     }
 

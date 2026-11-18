@@ -597,6 +597,10 @@ const EXEC_DEFAULTS = {
   // positions without borrowing, so paper reserves notional / leverage as
   // margin and refuses an order that would need more than the free margin.
   leverage: 2000,
+  // Margin level (equity / margin used) at which paper stops positions out, as
+  // a percentage. 100 closes when equity no longer covers the margin, 50 when
+  // half of it is gone — the level most retail brokers use.
+  stopOutPct: 100,
   symbolSuffix: "m",
   symbolOverrides: { NASDAQ: "USTEC" },
   bridgeUrl: "",
@@ -667,6 +671,9 @@ function setExecConfig(patch = {}) {
   }
   if (patch.leverage !== undefined) {
     next.leverage = Math.round(clampNumber(patch.leverage, 1, 3000, current.leverage));
+  }
+  if (patch.stopOutPct !== undefined) {
+    next.stopOutPct = Math.round(clampNumber(patch.stopOutPct, 0, 100, current.stopOutPct));
   }
   if (patch.requireGate !== undefined) next.requireGate = Boolean(patch.requireGate);
   if (patch.symbolOverrides && typeof patch.symbolOverrides === "object") {

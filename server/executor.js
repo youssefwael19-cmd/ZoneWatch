@@ -197,6 +197,12 @@ function marginFor(symbol, lots, price, priceBySymbol, config = settings.getExec
 }
 
 /** Margin already reserved by open positions. */
+function stopOutPercent(config) {
+  const n = Number(config && config.stopOutPct);
+  if (!Number.isFinite(n)) return 100;
+  return Math.min(100, Math.max(0, n));
+}
+
 function marginUsed(state, priceBySymbol = null, config = settings.getExecConfig()) {
   let used = 0;
   let notional = 0;
@@ -650,10 +656,17 @@ function marginSnapshot(state, open, priceBySymbol, realized = 0) {
  */
 function stopOut(open, priceBySymbol, state) {
   const closed = [];
+  const config = settings.getExecConfig();
+  const pct = stopOutPercent(config);
+  const leverage = leverageOf(config);
+  // The stop-out level is a margin level: equity as a percentage of the margin
+  // used. 100 closes as soon as the account no longer covers its margin, 50 at
+  // the level most retail brokers use.
+  const breached = (level) => level.used > 0 && level.equity < (level.used * pct) / 100;
   let realized = 0;
   let level = marginSnapshot(state, open, priceBySymbol, realized);
 
-  while (open.length && level.used > 0 && level.equity < level.used) {
+  while (open.length && breached(level)) {
     let worst = -1;
     let worstFloating = Infinity;
     open.forEach((pos, i) => {
@@ -673,7 +686,8 @@ function stopOut(open, priceBySymbol, state) {
     const record = settle(state, pos, price, null, "closed by margin call", {
       marginCall: true,
       fillModel: "stop-out-market",
-      closeReason: `margin call: equity $${level.equity.toFixed(2)} below margin used $${level.used.toFixed(2)} at 1:${leverageOf(settings.getExecConfig())}`,
+      closeReason: `margin call: equity $${level.equity.toFixed(2)} below ${pct}% of margin used $${level.used.toFixed(2)} at 1:${leverage}`,
+      stopOutPct: pct,
     });
     closed.push(record);
     realized += record.pnl;
@@ -921,6 +935,7 @@ function status(priceBySymbol) {
       const held = marginUsed(state, priceBySymbol, config);
       return {
         leverage: leverageOf(config),
+        stopOutPct: stopOutPercent(config),
         used: held.used,
         notional: held.notional,
         free: Number((eq - held.used).toFixed(2)),
