@@ -850,6 +850,10 @@ async function buildSnapshot() {
   // Which of this cycle's signals survived every gate? Evaluated once, so the
   // Discord message and the order can never disagree about what was approved.
   const approvedSignals = [];
+  // Signals for markets on the owner's override list. They are posted even
+  // though the gate refused them, so they are kept apart from approvedSignals:
+  // auto-trading and the shadow book must keep seeing the gate's real verdict.
+  const overrideSignals = [];
   // Rejected setups, kept only so the shadow book can measure what the gate
   // held back. They are still never posted and never ordered.
   const gateHeldSignals = [];
@@ -862,6 +866,31 @@ async function buildSnapshot() {
     const verdict = learning.verdictFor(signal);
     if (!verdict.allowed) {
       learning.noteSuppressed(signal, verdict);
+      continue;
+    }
+
+    // The override list says "always send signals for these markets, even
+    // when blocked". Honour that for delivery only: the alert carries the
+    // reason the gate refused it, and the signal stays out of approvedSignals
+    // so the executor and the shadow book still see the gate's real verdict.
+    if (unprovenMarkets.has(signal.symbol)) {
+      let listed;
+      try {
+        listed = await brainMod.gate(signal.symbol, gateCandleSymbols.get(signal.symbol));
+      } catch (err) {
+        listed = { allowed: false, condition: null, reason: `brain gate failed (${err.message})` };
+      }
+      if (!listed.allowed) {
+        signal.gateBypassed = listed.reason;
+        // Still recorded for the shadow book: the gate did refuse this setup,
+        // and measuring what those refusals would have been worth is the whole
+        // point of that book.
+        gateHeldSignals.push({ signal, reason: listed.reason, condition: listed.condition || null });
+      }
+      overrideSignals.push({
+        signal,
+        gate: { blocked: false, condition: listed.condition || null, verdict: listed, overridden: true },
+      });
       continue;
     }
 
@@ -982,11 +1011,11 @@ async function buildSnapshot() {
     }
 
     if (alertsReady && settings.getSignalAlerts()) {
-      for (const { signal, gate } of approvedSignals) {
+      for (const { signal, gate } of [...approvedSignals, ...overrideSignals]) {
         try {
           // What the broker was charging at the moment of the signal: a trade has
-        // to clear this before it makes a penny.
-        const spreadNow = costsMod.spreadInfo(signal.symbol, settings.getExecConfig(), execMod.liveSpreads());
+          // to clear this before it makes a penny.
+          const spreadNow = costsMod.spreadInfo(signal.symbol, settings.getExecConfig(), executor.liveSpreads());
         await discord.sendSignal({ ...signal, spread: spreadNow, linked: linkedMarketsFor(signal.symbol) });
           lastAlertAt.set(signal.symbol, Date.now());
           journal.record(signal, {
@@ -1017,7 +1046,7 @@ async function buildSnapshot() {
 
     for (const result of alertsReady ? tracked.resolved : []) {
       try {
-        result.spread = costsMod.spreadInfo(result.symbol, settings.getExecConfig(), execMod.liveSpreads());
+        result.spread = costsMod.spreadInfo(result.symbol, settings.getExecConfig(), executor.liveSpreads());
         await discord.sendSignalResult(result);
       } catch (err) {
         discordErrors.push(err.message);

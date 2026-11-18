@@ -959,7 +959,7 @@ async function testBroker() {
 
 /** The broker's own spread per symbol, when it has been synced recently. */
 function liveSpreads() {
-  return state.spreads || {};
+  return readState().spreads || {};
 }
 
 module.exports = {

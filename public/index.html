@@ -1101,7 +1101,7 @@
         <label>Always send signals for these markets, even when blocked (comma separated)</label>
         <input id="unprovenMarkets" placeholder="XAUUSD" />
       </div>
-      <div class="hint">These alerts are sent with an ⚠️ UNPROVEN label and the lab's verdict, so they can never be mistaken for a validated edge.</div>
+      <div class="hint">These alerts go out even when the lab or the brain gate would block them, labelled with the reason (⚠️ UNPROVEN when the lab found no edge), so they can never be mistaken for a validated edge. Auto-trading still refuses them.</div>
       <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px">
         <button class="act" id="runLab">Test a market now</button>
         <button class="btn ghost" id="saveUnproven">Save override</button>

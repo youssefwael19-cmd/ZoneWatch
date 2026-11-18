@@ -292,7 +292,12 @@ async function sendSignal(signal) {
             (unproven
               ? `**This market did not pass the app's own edge test.** ${signal.labVerdict || ""}\n` +
                 `It is sent because you listed it to bypass the gate. Treat it as a chart prompt, not a recommendation.\n\n`
-              : "") + (signal.reasons || []).map((r) => `• ${r}`).join("\n"),
+              : "") +
+            (signal.gateBypassed
+              ? `**Gate bypassed.** You listed ${signal.symbol} to always send signals: ${signal.gateBypassed}. ` +
+                `Auto-trading will not take this one.\n\n`
+              : "") +
+            (signal.reasons || []).map((r) => `• ${r}`).join("\n"),
           color: isBuy ? COLORS.info : COLORS.inside,
           fields: [
             { name: "Entry", value: String(signal.entry), inline: true },
