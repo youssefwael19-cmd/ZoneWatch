@@ -137,6 +137,59 @@ async function run() {
   );
   near("free margin never goes negative here", status.margin.free, status.equity - status.margin.used, 0.02);
 
+  console.log("--- margin call ---");
+  const openedAt = new Date().toISOString();
+  const makePos = (over) => ({
+    id: `${over.symbol}-test`,
+    symbol: over.symbol,
+    side: over.side || "BUY",
+    lots: over.lots || 0.02,
+    entry: over.entry,
+    stop: over.stop,
+    target: over.target,
+    valuePerUnit: over.valuePerUnit || 100000,
+    cost: 0,
+    openedAt,
+    margin: over.margin,
+    notional: over.notional,
+    leverage: over.leverage,
+  });
+  const writeLedger = (balance, open) =>
+    fs.writeFileSync(path.join(ROOT, "executor.json"), JSON.stringify({ balance, open, closed: [] }));
+
+  // Floating losses have eaten the account: equity below the reserved margin.
+  // The stop is never reached: the account runs out of margin first, which is
+  // exactly the case a stop cannot protect against.
+  writeLedger(200, [
+    makePos({ symbol: "EURUSD", entry: 1.085, stop: 1.05, target: 1.2, margin: 2170, notional: 2170, leverage: 2000 }),
+  ]);
+  let out = executor.mark({ EURUSD: 1.075 });
+  check("margin call closes the position", out.closed.length, 1);
+  check("close is labelled a margin call", out.closed[0].marginCall, true);
+  contains("close reason names the call", out.closed[0].closeReason, "margin call");
+  contains("close reason carries the numbers", out.closed[0].closeReason, "below margin used");
+  check("nothing left open", executor.status({ EURUSD: 1.075 }).openCount, 0);
+  check("balance took the loss", executor.status({ EURUSD: 1.075 }).balance < 200, true);
+
+  // Room to spare: equity covers the margin, so nothing is sold.
+  writeLedger(200, [
+    makePos({ symbol: "EURUSD", entry: 1.085, stop: 1.08, target: 1.1, margin: 1.08, notional: 2170, leverage: 2000 }),
+  ]);
+  out = executor.mark({ EURUSD: 1.0849 });
+  check("healthy position is not stopped out", out.closed.length, 0);
+  check("healthy position stays open", executor.status({ EURUSD: 1.0849 }).openCount, 1);
+
+  // Worst loss first, and it stops as soon as the margin is covered again.
+  writeLedger(300, [
+    makePos({ symbol: "AAA", entry: 100, stop: 50, target: 200, lots: 1, valuePerUnit: 1, margin: 100, notional: 100 }),
+    makePos({ symbol: "BBB", entry: 100, stop: 50, target: 200, lots: 1, valuePerUnit: 1, margin: 100, notional: 100 }),
+    makePos({ symbol: "CCC", entry: 100, stop: 50, target: 200, lots: 1, valuePerUnit: 1, margin: 100, notional: 100 }),
+  ]);
+  out = executor.mark({ AAA: 80, BBB: 95, CCC: 99 });
+  check("only the worst loss is closed", out.closed.length, 1);
+  check("worst loss is the one closed", out.closed[0].symbol, "AAA");
+  check("the rest stay open", executor.status({ AAA: 80, BBB: 95, CCC: 99 }).openCount, 2);
+
   console.log("--- settings clamp ---");
   settings.setExecConfig({ leverage: 999999 });
   check("leverage is clamped to 3000", settings.getExecConfig().leverage, 3000);

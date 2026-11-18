@@ -1176,7 +1176,9 @@ async function buildSnapshot() {
     }
     const executed = executor.mark(priceBySymbol);
     for (const done of executed.closed) {
-      console.log(`executor: ${done.symbol} ${done.side} closed ${done.outcome} ${done.pnl}`);
+      console.log(
+        `executor: ${done.symbol} ${done.side} closed ${done.outcome} ${done.pnl}${done.marginCall ? " (margin call)" : ""}`
+      );
     }
   } catch (err) {
     console.error("executor mark:", err.message);

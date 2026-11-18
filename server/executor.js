@@ -610,6 +610,80 @@ function settle(state, pos, exit, outcome, note, extra) {
 }
 
 /**
+ * Equity and reserved margin for a set of open positions.
+ *
+ * `realized` is P&L this pass has already closed but not yet folded into the
+ * balance, so a stop-out can decide the next step on the money that is really
+ * left rather than on a figure the caller is about to write.
+ */
+function marginSnapshot(state, open, priceBySymbol, realized = 0) {
+  let floating = 0;
+  let used = 0;
+  for (const pos of open) {
+    const price = priceOf(priceBySymbol, pos.symbol);
+    if (Number.isFinite(price)) floating += pnlOf(pos, price) - (pos.cost || 0);
+    if (Number.isFinite(Number(pos.margin))) used += Number(pos.margin);
+    else {
+      const info = marginFor(pos.symbol, pos.lots, Number(pos.entry), priceBySymbol);
+      if (info) used += info.margin;
+    }
+  }
+  const balance = Number(state.balance);
+  return {
+    equity: Number(((Number.isFinite(balance) ? balance : 0) + realized + floating).toFixed(2)),
+    used: Number(used.toFixed(2)),
+  };
+}
+
+/**
+ * A margin call.
+ *
+ * When equity no longer covers the margin the open positions reserved, a broker
+ * stops positions out at market until it does. This does the same, worst
+ * floating loss first — the order most retail brokers use, and the one that
+ * gets the account back above its margin fastest.
+ *
+ * It closes at the current price, not at the planned stop: a stop-out is a
+ * market order that arrives after the account has already run out of room, so
+ * booking it at the stop would flatter the result. A position with no live
+ * price is left alone rather than marked out at an invented one.
+ */
+function stopOut(open, priceBySymbol, state) {
+  const closed = [];
+  let realized = 0;
+  let level = marginSnapshot(state, open, priceBySymbol, realized);
+
+  while (open.length && level.used > 0 && level.equity < level.used) {
+    let worst = -1;
+    let worstFloating = Infinity;
+    open.forEach((pos, i) => {
+      const price = priceOf(priceBySymbol, pos.symbol);
+      if (!Number.isFinite(price)) return;
+      const floating = pnlOf(pos, price) - (pos.cost || 0);
+      if (floating < worstFloating) {
+        worst = i;
+        worstFloating = floating;
+      }
+    });
+    if (worst === -1) break;
+
+    const pos = open[worst];
+    const price = priceOf(priceBySymbol, pos.symbol);
+    open.splice(worst, 1);
+    const record = settle(state, pos, price, null, "closed by margin call", {
+      marginCall: true,
+      fillModel: "stop-out-market",
+      closeReason: `margin call: equity $${level.equity.toFixed(2)} below margin used $${level.used.toFixed(2)} at 1:${leverageOf(settings.getExecConfig())}`,
+    });
+    closed.push(record);
+    realized += record.pnl;
+    level = marginSnapshot(state, open, priceBySymbol, realized);
+  }
+
+  return closed;
+}
+
+/**
  * Mark open positions against live quotes. Stop wins ties, as everywhere else
  * in this app.
  *
@@ -661,6 +735,13 @@ function mark(priceBySymbol) {
       lastPrice: price,
       floating: Number((pnlOf(pos, price) - (pos.cost || 0)).toFixed(2)),
     });
+  }
+
+  // Margin call. Only paper decides this itself: in bridge mode the terminal
+  // stops positions out on its own margin (usually at 50%), and in direct mode
+  // the broker does. Closing here would fight a stop-out that already happened.
+  if (!direct && config.mode === "paper" && stillOpen.length) {
+    closed.push(...stopOut(stillOpen, priceBySymbol, state));
   }
 
   if (closed.length) {

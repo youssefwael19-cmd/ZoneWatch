@@ -2196,6 +2196,7 @@ async function loadExec() {
     document.getElementById("exClosed").innerHTML = closed.length
       ? `<div class="sub">Last closed</div>` + closed.slice(0, 8).map(p => `<div class="hint" style="padding:4px 0">
           <strong>${p.symbol}</strong> ${p.side} ${p.lots} lots — ${p.outcome} ${p.pnl > 0 ? "+" : ""}$${p.pnl.toFixed ? p.pnl.toFixed(2) : p.pnl}
+          ${p.marginCall ? `<span style="color:#f5b942"> · margin call</span>` : ""}
         </div>`).join("")
       : "";
   } catch (err) {
