@@ -593,6 +593,10 @@ const EXEC_DEFAULTS = {
   maxDailyLossPct: 2,
   maxPositions: 2,
   accountBalance: 1000,
+  // Leverage the paper account models. A real $200 account cannot open these
+  // positions without borrowing, so paper reserves notional / leverage as
+  // margin and refuses an order that would need more than the free margin.
+  leverage: 2000,
   symbolSuffix: "m",
   symbolOverrides: { NASDAQ: "USTEC" },
   bridgeUrl: "",
@@ -660,6 +664,9 @@ function setExecConfig(patch = {}) {
   }
   if (patch.accountBalance !== undefined) {
     next.accountBalance = clampNumber(patch.accountBalance, 1, 1e9, current.accountBalance);
+  }
+  if (patch.leverage !== undefined) {
+    next.leverage = Math.round(clampNumber(patch.leverage, 1, 3000, current.leverage));
   }
   if (patch.requireGate !== undefined) next.requireGate = Boolean(patch.requireGate);
   if (patch.symbolOverrides && typeof patch.symbolOverrides === "object") {

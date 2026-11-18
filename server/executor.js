@@ -129,6 +129,88 @@ function valuePerUnit(symbol, config = settings.getExecConfig()) {
   return FX_VALUE_PER_UNIT;
 }
 
+/*
+ * Margin.
+ *
+ * A real account cannot open a position without reserving margin for it. Paper
+ * trading has no broker to say no, so it models the same limit here: the
+ * notional of an order is lots × contract units × price, converted to USD, and
+ * it reserves notional / leverage of equity. An order that would need more than
+ * the free margin is refused instead of filled, so a $200 account cannot paper
+ * its way into a position the same account could never hold at that leverage.
+ *
+ * VALUE_PER_UNIT is the contract size for every symbol the app watches: 100 oz
+ * of gold, 100,000 units of FX, one Nasdaq unit. Only the currency the notional
+ * is quoted in differs, so that is what the conversion below is for.
+ */
+const QUOTE_CURRENCY = {
+  XAUUSD: "USD",
+  GOLD: "USD",
+  NASDAQ: "USD",
+  US100: "USD",
+  USTEC: "USD",
+  EURUSD: "USD",
+  GBPUSD: "USD",
+  AUDUSD: "USD",
+  NZDUSD: "USD",
+  USDJPY: "JPY",
+  USDCHF: "CHF",
+  USDCAD: "CAD",
+  AUDJPY: "JPY",
+  NZDJPY: "JPY",
+};
+// For these pairs the base currency is USD, so one contract is already dollars.
+const USD_BASE = new Set(["USDJPY", "USDCHF", "USDCAD"]);
+// A cross is quoted in its second currency; these majors carry that currency
+// against the dollar, so dividing by them turns the notional into USD.
+const USD_PER_QUOTE_PAIR = { JPY: "USDJPY", CHF: "USDCHF", CAD: "USDCAD" };
+const DEFAULT_LEVERAGE = 2000;
+
+function leverageOf(config) {
+  const n = Number(config && config.leverage);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_LEVERAGE;
+  return Math.min(3000, Math.floor(n));
+}
+
+function notionalUsd(symbol, lots, price, priceBySymbol) {
+  const units = valuePerUnit(symbol);
+  if (!(units > 0) || !(Number(lots) > 0) || !Number.isFinite(price)) return NaN;
+  const quote = QUOTE_CURRENCY[symbol] || "USD";
+  if (quote === "USD") return units * lots * price;
+  if (USD_BASE.has(symbol)) return units * lots;
+  const pair = USD_PER_QUOTE_PAIR[quote];
+  const rate = pair ? priceOf(priceBySymbol, pair) : NaN;
+  if (!(Number.isFinite(rate) && rate > 0)) return NaN;
+  return (units * lots * price) / rate;
+}
+
+/** Notional and the margin it reserves at the configured leverage. */
+function marginFor(symbol, lots, price, priceBySymbol, config = settings.getExecConfig()) {
+  const notional = notionalUsd(symbol, lots, price, priceBySymbol);
+  if (!Number.isFinite(notional)) return null;
+  const leverage = leverageOf(config);
+  return {
+    notional: Number(notional.toFixed(2)),
+    leverage,
+    margin: Number((notional / leverage).toFixed(2)),
+  };
+}
+
+/** Margin already reserved by open positions. */
+function marginUsed(state, priceBySymbol = null, config = settings.getExecConfig()) {
+  let used = 0;
+  let notional = 0;
+  for (const pos of state.open || []) {
+    if (Number.isFinite(Number(pos.margin))) used += Number(pos.margin);
+    else {
+      const info = marginFor(pos.symbol, pos.lots, Number(pos.entry), priceBySymbol, config);
+      if (info) used += info.margin;
+    }
+    if (Number.isFinite(Number(pos.notional))) notional += Number(pos.notional);
+  }
+  return { used: Number(used.toFixed(2)), notional: Number(notional.toFixed(2)) };
+}
+
 function pnlOf(pos, price) {
   const move = pos.side === "BUY" ? price - pos.entry : pos.entry - price;
   return move * pos.lots * pos.valuePerUnit;
@@ -344,6 +426,24 @@ async function place(signal, priceBySymbol) {
   if (size.refused) return { ok: false, reason: size.refused, mode: config.mode };
 
   const signalEntry = Number(signal.entry ?? signal.price);
+  // Margin is reserved before the order exists. Only paper enforces it: with a
+  // real broker the broker's own free margin decides, and refusing on our
+  // approximation could block a trade the account could actually hold.
+  const marginInfo = marginFor(signal.symbol, size.lots, signalEntry, priceBySymbol, config);
+  if (config.mode === "paper") {
+    if (!marginInfo) {
+      return { ok: false, reason: "could not work out the margin for this order", mode: config.mode };
+    }
+    const held = marginUsed(state, priceBySymbol, config).used;
+    const free = Number((equityNow - held).toFixed(2));
+    if (marginInfo.margin > free) {
+      return {
+        ok: false,
+        mode: config.mode,
+        reason: `not enough free margin at 1:${marginInfo.leverage}: needs $${marginInfo.margin.toFixed(2)} for $${marginInfo.notional.toFixed(2)} notional, free $${free.toFixed(2)}`,
+      };
+    }
+  }
   // Paper does not fill at the price the app happened to see: a market order
   // crosses the spread and pays for whatever the book moved by while it
   // arrived. Both are charged here, so a paper winner is one the same trade
@@ -365,6 +465,9 @@ async function place(signal, priceBySymbol) {
     target: Number(signal.target),
     riskMoney: size.riskMoney,
     riskPct: size.riskPctActual,
+    notional: marginInfo ? marginInfo.notional : null,
+    margin: marginInfo ? marginInfo.margin : null,
+    leverage: marginInfo ? marginInfo.leverage : null,
     valuePerUnit: valuePerUnit(signal.symbol),
     mode: config.mode,
     openedAt: new Date().toISOString(),
@@ -733,6 +836,16 @@ function status(priceBySymbol) {
       ? Number(Math.min(...dayClosed.map((c) => Number(c.pnl) || 0)).toFixed(2))
       : null,
     costs: costsMod.summarize(state.closed, config, state.spreads),
+    margin: (() => {
+      const held = marginUsed(state, priceBySymbol, config);
+      return {
+        leverage: leverageOf(config),
+        used: held.used,
+        notional: held.notional,
+        free: Number((eq - held.used).toFixed(2)),
+        usedPct: eq > 0 ? Number(((held.used / eq) * 100).toFixed(1)) : 0,
+      };
+    })(),
     open: state.open,
     openCount: state.open.length,
     closedCount: state.closed.length,

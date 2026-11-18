@@ -507,12 +507,17 @@
         <div><label>Daily loss limit (%)</label><input id="exDayLoss" type="number" step="0.1" min="0.5" max="10" /></div>
         <div><label>Max open positions</label><input id="exMax" type="number" step="1" min="1" max="5" /></div>
         <div><label>Account balance (paper)</label><input id="exBal" type="number" step="any" min="1" /></div>
+        <div><label>Leverage (1 : x)</label><input id="exLev" type="number" step="100" min="1" max="3000" /></div>
         <div><label>Commission per lot (round turn)</label><input id="exComm" type="number" step="0.1" min="0" placeholder="0 on standard accounts" /></div>
         <div><label>Swap per lot per night</label><input id="exSwap" type="number" step="0.01" placeholder="0 unless you hold overnight" /></div>
       </div>
       <div class="hint" style="margin-top:4px">
         Spread is modelled per market (gold 0.30, Nasdaq 1.5 points, majors ~1.2 pips) and charged on entry and exit, so paper results are net of the
         broker rather than flattered by free trading.
+      </div>
+      <div class="hint" style="margin-top:4px">
+        Paper reserves margin the way a real account does: notional (lots × contract × price, in USD) divided by your leverage. An order that would need
+        more than the free margin is refused rather than filled, so a $200 account cannot take a position it could not actually hold at that leverage.
       </div>
 
       <div class="fields" style="margin-top:12px">
@@ -1202,6 +1207,7 @@ document.addEventListener("click", async (event) => {
         maxDailyLossPct: Number(document.getElementById("exDayLoss").value),
         maxPositions: Number(document.getElementById("exMax").value),
         accountBalance: Number(document.getElementById("exBal").value),
+        leverage: Number(document.getElementById("exLev").value),
         bridgeUrl: document.getElementById("exUrl").value,
         costs: {
           commissionPerLot: Number(document.getElementById("exComm").value || 0),
@@ -2095,6 +2101,7 @@ async function loadExec() {
     document.getElementById("exDayLoss").value = cfg.maxDailyLossPct;
     document.getElementById("exMax").value = cfg.maxPositions;
     document.getElementById("exBal").value = cfg.accountBalance;
+    document.getElementById("exLev").value = cfg.leverage;
     document.getElementById("exComm").value = (cfg.costs && cfg.costs.commissionPerLot) || 0;
     document.getElementById("exSwap").value = (cfg.costs && cfg.costs.swapPerLotPerNight) || 0;
     document.getElementById("exUrl").value = cfg.bridgeUrl || "";
@@ -2156,6 +2163,7 @@ async function loadExec() {
         </div>`;
       })() : ""}
       <div style="margin-top:4px">Risk ${d.riskPct}% per trade · daily limit ${d.maxDailyLossPct}% · broker ${d.broker}
+        ${d.margin ? `· margin 1:${d.margin.leverage} · used $${d.margin.used.toFixed(2)} (${d.margin.usedPct}% of equity) · free $${d.margin.free.toFixed(2)}` : ""}
         ${d.mode === "direct"
           ? `· API ${d.direct && d.direct.configured ? "configured" : "not configured"} ${d.direct && d.direct.accountId ? "(" + d.direct.accountId + ")" : ""}`
           : `· bridge ${d.bridgeConfigured ? "configured" : "not configured"}`}
@@ -2179,6 +2187,7 @@ async function loadExec() {
     document.getElementById("exOpen").innerHTML = open.length
       ? `<div class="sub">Open positions</div>` + open.map(p => `<div class="hint" style="padding:4px 0">
           <strong>${p.symbol}</strong> ${p.side} ${p.lots} lots @ ${p.entry} · stop ${p.stop} · target ${p.target}
+          ${p.margin != null ? `· margin $${Number(p.margin).toFixed(2)}` : ""}
           ${p.floating != null ? `· now ${p.floating > 0 ? "+" : ""}$${p.floating.toFixed(2)}` : ""}
         </div>`).join("")
       : "";
