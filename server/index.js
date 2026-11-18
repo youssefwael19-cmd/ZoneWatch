@@ -1411,6 +1411,32 @@ function publicExecConfig(config) {
   };
 }
 
+/*
+ * The money strip on the Watch tab. /api/exec needs the dashboard password, so
+ * the public dashboard gets the totals only: no exec config, no bridge hint, no
+ * account login, and nothing here can place or close an order. Keeping the
+ * numbers public means the paper account is visible without unlocking anything.
+ */
+app.get("/api/money", (_req, res) => {
+  const prices = priceMapNow();
+  const totals = (o) => ({
+    enabled: Boolean(o.enabled),
+    mode: o.mode || "paper",
+    balance: o.balance == null ? null : o.balance,
+    equity: o.equity == null ? null : o.equity,
+    dayRealized: Number(o.dayRealized) || 0,
+    dayRealizedPct: o.dayRealizedPct == null ? null : o.dayRealizedPct,
+    dayClosed: o.dayClosed || 0,
+    dayWins: o.dayWins || 0,
+    dayLosses: o.dayLosses || 0,
+    openCount: o.openCount || 0,
+    closedCount: o.closedCount || 0,
+    killSwitch: Boolean(o.killSwitch),
+    killReason: o.killReason || null,
+  });
+  res.json({ ok: true, account: totals(executor.status(prices)), shadow: totals(shadowMod.status(prices)) });
+});
+
 app.get("/api/exec", (_req, res) => {
   res.json({
     ok: true,

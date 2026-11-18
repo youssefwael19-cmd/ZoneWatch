@@ -293,6 +293,15 @@
   <!-- WATCH -->
   <section id="tab-watch">
     <div class="panel">
+      <h2>Paper money <span class="hint" id="moneyMeta" style="letter-spacing:0;text-transform:none"></span></h2>
+      <div id="moneyRows" class="hint">Reading the paper account…</div>
+      <div class="hint" style="margin-top:8px">
+        Paper only — no real order is placed. The full account, shadow ledger and every setting live on the
+        <strong>Trading</strong> tab.
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>Assistant (LLM + retrieval)</h2>
       <div class="hint">Ask it anything about the app, the market or your own results.</div>
       <div style="margin-top:10px">
@@ -2025,6 +2034,55 @@ async function loadBreakEven(attempt = 0) {
   }
 }
 
+/* ---------- paper money on the Watch tab ---------- */
+function cash(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  const v = Number(n);
+  return `${v < 0 ? "−" : ""}$${Math.abs(v).toFixed(2)}`;
+}
+
+/**
+ * The public totals, loaded without the dashboard password. Its own endpoint
+ * keeps /api/exec locked, so this is the only money the open dashboard sees.
+ */
+async function loadMoney() {
+  const box = document.getElementById("moneyRows");
+  if (!box) return;
+  try {
+    const d = await api("/api/money");
+    const a = d.account || {};
+    const s = d.shadow || {};
+    const meta = document.getElementById("moneyMeta");
+    if (meta) meta.textContent = a.enabled ? `auto-trading on · ${a.mode}` : "auto-trading off";
+    const row = (label, o, note) => {
+      const tone = (o.dayRealized || 0) < 0 ? "#ff9a9a" : "#7ff0cf";
+      const record = o.dayClosed ? ` · today ${o.dayWins}W/${o.dayLosses}L` : "";
+      const stopped = o.killSwitch
+        ? ` <span style="color:#ff9a9a">· stopped${o.killReason ? " (" + o.killReason + ")" : ""}</span>`
+        : "";
+      return `<div style="display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;padding:7px 0;border-top:1px solid rgba(255,255,255,.06)">
+        <span style="min-width:118px;color:#9fb3c8">${label}</span>
+        <span>equity <strong>${cash(o.equity)}</strong></span>
+        <span>today <strong style="color:${tone}">${(o.dayRealized || 0) > 0 ? "+" : ""}${cash(o.dayRealized)}</strong></span>
+        <span>${o.openCount} open · ${o.closedCount} closed${record}${stopped}</span>
+        ${note ? `<span class="hint">${note}</span>` : ""}
+      </div>`;
+    };
+    box.classList.remove("hint");
+    box.innerHTML =
+      row("Paper account", a, "") +
+      (s.enabled ? row("Shadow book", s, "gate-rejected setups, never ordered") : "") +
+      (!a.enabled
+        ? `<div class="hint" style="margin-top:6px">Auto-trading is switched off, so these numbers are frozen until it is turned back on.</div>`
+        : !a.closedCount && !a.openCount
+          ? `<div class="hint" style="margin-top:6px">No paper order yet: fills need a signal that clears the lab and brain gates.</div>`
+          : "");
+    window._zwMoneyAt = Date.now();
+  } catch (err) {
+    box.textContent = "Could not load the paper money: " + (err && err.message ? err.message : String(err));
+  }
+}
+
 async function loadExec() {
   const statusEl = document.getElementById("exStatus");
   if (!statusEl) return;
@@ -2364,6 +2422,9 @@ async function refreshWatch() {
     }
     checkWatcherFreshness(data);
     checkExecWarnings();
+    // Every poll, the money strip would be noise; every ~30s is enough to see a
+    // trade open or close without re-asking on every ten-second refresh.
+    if (!window._zwMoneyAt || Date.now() - window._zwMoneyAt > 30000) loadMoney();
     renderZoneStates(data.zones || []);
     if (!window._zwFirstLoadDone) {
       window._zwFirstLoadDone = true;
