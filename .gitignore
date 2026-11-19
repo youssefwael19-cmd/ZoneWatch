@@ -21,6 +21,7 @@ shadow.json
 digest.json
 newscalendar.json
 paperreview.json
+state-backup/
 
 # Secrets
 .env

@@ -37,6 +37,7 @@ const costsMod = require("./costs");
 const pipsMod = require("./pips");
 const ctraderBroker = require("./brokers/ctrader");
 const { writeJson } = require("./atomicWrite");
+const stateStore = require("./stateStore");
 const auth = require("./auth");
 const digestMod = require("./digest");
 const dailyRecapMod = require("./dailyrecap");
@@ -2448,19 +2449,46 @@ app.post("/api/analyze-json", async (req, res) => {
  * Start
  * ------------------------------------------------------------------ */
 
-app.listen(PORT, () => {
-  const info = fullInfo();
-  console.log(`Zone Watch v4 running on port ${PORT}`);
-  console.log(
-    "Instruments: " +
-      info.instruments.map((i) => `${i.symbol} via ${i.provider} (${i.providerSymbol})`).join(", ")
-  );
-  console.log(`Auto zones: ${info.autoZones ? "on" : "off"} | signals: on`);
-  console.log(`Discord: ${info.discord.configured ? "on " + info.discord.hint : "not configured"}`);
-  console.log(`Watching every ${Math.round(WATCH_INTERVAL_MS / 1000)}s`);
+async function start() {
+  // Before anything reads a state file: on a host with no disk this is the step
+  // that puts the real ledger back after a wipe. With STATE_STORE unset it
+  // returns immediately and the local files are used as they are.
+  if (stateStore.misconfigured) {
+    console.error(
+      "State store: STATE_STORE=supabase needs SUPABASE_URL and SUPABASE_SERVICE_KEY. " +
+        "Starting with local files only."
+    );
+  }
+  if (stateStore.enabled) {
+    const restored = await stateStore.hydrate();
+    if (restored.error) {
+      console.error(`State store: restore incomplete (${restored.error}). Using what is on disk.`);
+    }
+    console.log(
+      `State store: supabase ${stateStore.TABLE} — restored ${restored.restored}, ` +
+        `kept local ${restored.keptLocal}, pushed ${restored.pushed}`
+    );
+  }
 
-  getSnapshot({ maxAgeMs: 0 }).catch((err) => console.error("First watch failed:", err.message));
-  setInterval(() => {
-    runWatchCycle().catch((err) => console.error("Watch cycle failed:", err.message));
-  }, WATCH_INTERVAL_MS).unref();
+  app.listen(PORT, () => {
+    const info = fullInfo();
+    console.log(`Zone Watch v4 running on port ${PORT}`);
+    console.log(
+      "Instruments: " +
+        info.instruments.map((i) => `${i.symbol} via ${i.provider} (${i.providerSymbol})`).join(", ")
+    );
+    console.log(`Auto zones: ${info.autoZones ? "on" : "off"} | signals: on`);
+    console.log(`Discord: ${info.discord.configured ? "on " + info.discord.hint : "not configured"}`);
+    console.log(`Watching every ${Math.round(WATCH_INTERVAL_MS / 1000)}s`);
+
+    getSnapshot({ maxAgeMs: 0 }).catch((err) => console.error("First watch failed:", err.message));
+    setInterval(() => {
+      runWatchCycle().catch((err) => console.error("Watch cycle failed:", err.message));
+    }, WATCH_INTERVAL_MS).unref();
+  });
+}
+
+start().catch((err) => {
+  console.error(`Could not start: ${err.message}`);
+  process.exit(1);
 });

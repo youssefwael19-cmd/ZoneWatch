@@ -682,11 +682,11 @@ login page also explains this.
 
 ### Deploying for free (no card)
 
-This app has to poll prices around the clock and keep its ledger on disk, and no
-free *platform* does both in 2026. Render's Free web service spins down after 15
-minutes without traffic, may restart at any time, and wipes its filesystem on
-every restart — a dead watcher and a vanished ledger are exactly the two things
-this app cannot survive. Koyeb now wants a card and a $29 hold, Heroku's free tier
+This app has to poll prices around the clock and keep its ledger, and no free
+*platform* does both in 2026. Render's Free web service spins down after 15
+minutes without traffic, may restart at any time, and gives the process no disk
+at all, so its filesystem is wiped on every restart. The ledger half of that has
+an answer (*When the host has no disk* below); the fifteen quiet minutes do not. Koyeb now wants a card and a $29 hold, Heroku's free tier
 ended in 2022, Fly's free allowances ended in 2024, Railway's Free plan is $1 of
 usage a month, and alwaysdata's Free plan forbids programs that run 24/7. None of
 them can host this.
@@ -705,7 +705,28 @@ certificate.
 <https://www.serv00.com/register-account> sometimes answers "registration is
 currently disabled". Try again in a few days, or use the Waifly fallback below.
 
-**Setup, once, about twenty minutes**
+**Setup, once: one command.** Register, verify the email, set **Additional
+services → Run your own applications → Enabled** in the panel, then paste this
+over SSH:
+
+```sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/youssefwael19-cmd/ZoneWatch/main/deploy/serv00-setup.sh)"
+```
+
+It checks Node, reserves a port if you have none, downloads the code into
+`~/zone-watch`, installs the dependencies, starts it under PM2, waits until it
+answers on the port, then adds the `zone-watch.<username>.serv00.net` proxy site
+and asks Let's Encrypt for a certificate. Run it twice and it updates and
+restarts rather than starting a second watcher.
+
+It fetches both itself and the app from GitHub over HTTPS, so this repository has
+to be public for that one line to work. If it is not, clone it yourself on the
+server (or upload the folder through the panel's file manager) and run
+`sh deploy/serv00-setup.sh` from inside it — the script does the same work either
+way. The steps below are the same thing done by hand, and are worth reading even
+if you use the script.
+
+**The same setup by hand, about twenty minutes**
 
 1. Register at <https://www.serv00.com/register-account>. The form asks what
    hosting will cost you — the answer is `free`. Use a real email address, verify
@@ -773,6 +794,57 @@ a forum. And a free Serv00 account is deleted after **90 days without a login to
 the panel or SSH**, data unrecoverable — put a recurring reminder in your calendar,
 because nothing in the app can protect you from that. None of this is a trial or a
 30-day offer; it stays free for as long as you keep it alive.
+
+### When the host has no disk: an external state store
+
+A host with no persistent disk — Render's Free web service is the obvious one —
+loses every file the app writes on each restart. Nothing inside the app can
+change that. What it can do is keep a copy of those files somewhere that does
+survive, and put them back at boot.
+
+Set these on the service:
+
+| Variable | What it does |
+| --- | --- |
+| `STATE_STORE=supabase` | switches it on. Unset, or anything else: plain local files, exactly as before. |
+| `SUPABASE_URL` | `https://<project>.supabase.co` |
+| `SUPABASE_SERVICE_KEY` | the service role key (also read as `SUPABASE_KEY`) |
+| `STATE_TABLE` | optional, defaults to `zone_watch_state` |
+
+Then run `deploy/supabase-state.sql` once in the Supabase SQL editor. It creates
+one table with one row per state file and leaves row level security on with no
+policy, so only the service role key can read it. That key is a real secret: it
+goes in the host's environment settings, never the repo or the Settings tab.
+
+How it behaves:
+
+- On boot, before the app serves anything, every stored file that is newer than
+  the local one is written back to disk. Any file replaced this way is first
+  copied to `state-backup/`, so a real ledger is never silently lost.
+- A local file that is genuinely newer — from a push that failed on the way out —
+  wins and is pushed again rather than overwritten.
+- After every save (the ledger, the journal, the settings) the new contents are
+  pushed in the background, so a 10-second watch cycle never waits on the
+  network. A failed push keeps the local file, logs once, and retries.
+- With `STATE_STORE` unset none of it runs and nothing about the app changes.
+
+Supabase's Free plan needs no card and holds 500 MB; the app pushes a few tens of
+kilobytes a minute, and its own activity keeps a Free project from being paused
+for inactivity.
+
+What this does **not** fix, on Render Free specifically:
+
+- **Spin-down.** Fifteen minutes without inbound traffic and the watcher stops.
+  A free pinger (cron-job.org, UptimeRobot) hitting `/api/health` every 5–10
+  minutes counts as traffic and keeps it awake, but the workspace's 750 free
+  instance-hours a month are barely one always-on service, and the month it runs
+  over, everything is suspended until the next one.
+- **A fifth of the paid CPU.** A Free instance is 0.1 CPU and 512 MB, and Render
+  may restart it at any time. Expect slower cycles, and an OOM restart is just
+  another restore from the store.
+
+If you have a host with real disk, leave all of this switched off — local files
+are faster and have no network in the path.
 
 ### If you have a card: Oracle Cloud Always Free
 
