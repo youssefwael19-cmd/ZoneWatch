@@ -219,10 +219,10 @@ never shown back. The same conversation history as the panel is used, so a
 question asked in Discord and the next one in the panel share context.
 
 One caveat specific to this deployment: a command that arrives while the host is
-restarting (a deploy, or a Free-tier spin-down) has to wake the app first and may
-overrun Discord's three-second acknowledgement. On a paid Render instance the
-service does not idle out, so this only happens around deploys; repeating the
-command once the app is back works.
+restarting has to wait for the app to come back and may overrun Discord's
+three-second acknowledgement. Nothing idles the app out on the VM, so this only
+happens around a restart or an update; repeating the command once the app is back
+works.
 
 ### Pips, not price distance
 
@@ -461,8 +461,8 @@ next to a logged-in MT5 terminal. See `bridge/README.md` for setup.
 ### Running 24/5 without your PC
 
 Two machines are involved, and only one of them has to be yours. The app runs on
-Render as a paid instance (see *Deploying on Render* below), which never sleeps,
-so it is already always on and polling.
+the always-on VM (see *Deploying for free* below), which never sleeps, so it is
+already watching and polling.
 The bridge is the part that needs Windows, because the MetaTrader5 Python
 package only talks to a terminal on the same Windows machine.
 
@@ -498,7 +498,7 @@ stops meaning anything.
 ### Direct broker API — no machine of yours
 
 A broker with a real HTTP API removes the machine entirely: the app places the
-order from wherever it runs (Render), the broker holds the stop and the target,
+order from wherever it runs (the VM), the broker holds the stop and the target,
 and nothing has to stay switched on. Set **Mode → Direct broker API**, fill in the account ID and token,
 save, then press **Test broker API** and **Read account**.
 
@@ -587,12 +587,12 @@ exists here as well.
 ### On the phone
 
 The dashboard is the phone client; there is no separate app to install from a
-store. Open the Render URL (`https://zone-watch-<suffix>.onrender.com`) in Safari
-or Chrome and use **Add to Home Screen**. It
-runs standalone (its own icon, no browser chrome), remembers nothing locally
-because the server owns all the state, and every screen works — watch, zones,
-news, risk, auto-trading, the assistant and its microphone (which needs an
-HTTPS address — Render gives every service one).
+store. Open the dashboard (`http://<vm-ip>:3000`, or the HTTPS hostname from the
+Caddy step in *Deploying for free*) in Safari or Chrome and use **Add to Home
+Screen**. It runs standalone (its own icon, no browser chrome), remembers nothing
+locally because the server owns all the state, and every screen works — watch,
+zones, news, risk, auto-trading, the assistant and its microphone (which needs an
+HTTPS address, so do the Caddy step if you want voice on the phone).
 
 Wide tables scroll sideways inside their panel rather than pushing the page, and
 form fields use a 16px font so iOS doesn't zoom in when you tap one. The
@@ -675,87 +675,138 @@ anything outside those prefixes is public by design, so never put a secret on a
 path that is not in that list.
 
 To reset a forgotten password, remove the `auth` object from `settings.json` on
-the server (Render Dashboard → **Shell** → edit `/app/data/settings.json`, or
-`docker exec` on a self-hosted box) and restart: the app offers the setup page
-again. Signing out is `POST /api/auth/logout`; the
+the server (`sudo nano /opt/zone-watch/settings.json` on the VM, or `docker exec`
+on a Docker box) and restart it: the app offers the setup page again. Signing out is `POST /api/auth/logout`; the
 login page also explains this.
 
-### Deploying on Render
+### Deploying for free (Oracle Cloud Always Free)
 
-The app is hosted on Render as a Docker web service with a persistent disk. The
-whole hosting config is in `render.yaml` (a Render *Blueprint*), so it is written
-down rather than clicked together once and forgotten.
+This app has to poll prices around the clock and keep its ledger on disk, and no
+free *platform* does both in 2026. Render's Free web service spins down after 15
+minutes without traffic, may restart at any time, and wipes its filesystem on
+every restart — a dead watcher and a vanished ledger are exactly the two things
+this app cannot survive. Koyeb now wants a card and a $29 hold, Heroku's free tier
+ended in 2022, Fly's free allowances ended in 2024, Railway's Free plan is $1 of
+usage a month. None of them can host this.
 
-**What it costs, honestly.** A Free web service cannot run this app: it spins down
-after 15 minutes without traffic — so the watcher stops polling and there are no
-zones, no signals and no paper fills — and it has no persistent disk, so the
-ledger would be wiped on every restart. The combination that actually works is the
-**0.5 CPU / 512 MB** paid instance at $7/month (Render lists it as `0.5c-512mb`)
-plus a **1 GB disk** at $0.25/month — about $7.25/month — and neither of them
-stops when nobody is watching. The Fly machine this replaces had 1 GB of RAM; if
-Render's logs ever show the process dying with exit code 137, that is an
-out-of-memory kill, and the fix is the `1c-2g` plan at $25/month rather than
-tuning the app.
+A free-forever **virtual machine** can. **Oracle Cloud Always Free** has been
+free since 2019 and is not a trial: always-on compute, a real disk, no sleep, no
+expiry.
 
-**First deploy**
+- **VM.Standard.E2.1.Micro** (AMD, 1 GB RAM, 1/8 OCPU) is enough for this app, and
+  it is the shape that is always available.
+- The **Ampere A1** shape (2 OCPU / 12 GB, also Always Free) is a big upgrade when
+  your region has capacity; these steps are the same either way, and Node and the
+  container image both come in an ARM build.
+- 200 GB of block storage and 10 TB of outbound traffic a month across the account.
 
-1. Push the repo to GitHub (it already is), branch `main`.
-2. Render Dashboard → **New → Blueprint** → pick the repo → **Connect**.
-3. Render reads `render.yaml` and shows one service, `zone-watch`: Docker runtime,
-   `0.5c-512mb` plan, region `frankfurt`, a 1 GB disk at `/app/data`, health check
-   `/api/health`, deploy on every commit to `main`. Press **Apply**.
-4. Wait for the build (it runs `npm ci` inside the Dockerfile) and for the first
-   deploy to go live.
-5. Open `https://zone-watch-<suffix>.onrender.com`. The app asks for a dashboard
-   password — that is the normal first-run setup page, not an error. Pick at least
-   8 characters; it is the only thing between the internet and the trading
-   account.
-6. In the Settings tab set what the Fly install had: paper balance **200**,
+**The honest catches.** Oracle asks for a card at sign-up for identity
+verification only — Always Free resources are not billed, and the usual result is
+a small authorisation that is refunded. Without a card on file, no free host keeps
+a process running 24/7 with a disk; the fallback is paying Render $7.25/month with
+the `render.yaml` already in this repo. Oracle also reclaims Always Free instances
+that sit genuinely idle — this one polls every ten seconds, so it never is.
+
+**Setup, once, about fifteen minutes**
+
+1. Sign up at <https://cloud.oracle.com>. The home region is permanent, so pick the
+   one nearest you.
+2. **Compute → Instances → Create instance**: image **Ubuntu 24.04**, shape
+   **VM.Standard.E2.1.Micro** (listed under Always Free), keep the 50 GB boot
+   volume, and download the SSH key when the page offers it.
+3. Open the ports in **two** places, because the cloud firewall and the VM's own
+   firewall are separate. In the instance's **Subnet → Security list**, add ingress
+   rules for TCP **22**, **80**, **443** and **3000** from `0.0.0.0/0`. Then on the
+   box run `sudo bash deploy/open-port.sh 3000 80 443`: Oracle's Ubuntu image
+   ships an iptables ruleset that drops everything except SSH, and without this
+   step the app answers locally and nowhere else.
+4. `ssh ubuntu@<public-ip>`, then install Node 22 and git:
+   ```bash
+   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+   sudo apt-get install -y nodejs git
+   ```
+5. Get the code and start it:
+   ```bash
+   sudo git clone https://github.com/youssefwael19-cmd/ZoneWatch.git /opt/zone-watch
+   sudo bash /opt/zone-watch/deploy/install.sh
+   ```
+   `install.sh` runs `npm install --omit=dev`, writes a systemd unit that starts
+   the app on boot and restarts it if it ever crashes, and starts it now.
+6. Open `http://<public-ip>:3000`. The app asks for a dashboard password; that is
+   the normal first-run page, not an error. Pick at least 8 characters — it is the
+   only thing between the internet and the trading account.
+7. In the Settings tab set what the old install had: paper balance **200**,
    leverage **2000**, stop-out level **100%**, risk **0.5%**, max positions **2**,
-   then the Twelve Data key, the Discord webhook and the watch list / unproven
+   then the Twelve Data key, the Discord webhook, the watch list and the unproven
    markets.
-7. Confirm the service is healthy: `/api/health` returns `{"ok":true,...}` and
-   `/healthz` returns 200 while the watcher is alive (503 when it is stale).
+8. Confirm it is alive: `curl -s localhost:3000/api/health` returns ok, and
+   `curl -o /dev/null -w '%{http_code}\n' localhost:3000/healthz` returns `200`
+   while the watcher is running (503 means it is stuck).
+
+**One gigabyte of swap.** 1 GB of RAM is enough for this process, but a build or a
+busy analyzer can spike. Swap removes the out-of-memory kill:
+
+```bash
+sudo fallocate -l 1G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+**HTTPS, free, ten more minutes.** Step 6 is plain HTTP, so the dashboard password
+and the session cookie would cross the internet readable. Fly and Render handed
+you TLS automatically; on a VM you add it once:
+
+1. Get a free hostname at <https://www.duckdns.org> — sign in, create a subdomain,
+   paste the VM's public IP.
+2. `sudo apt-get install -y caddy`, then put this in `/etc/caddy/Caddyfile`:
+   ```
+   <yoursub>.duckdns.org {
+       reverse_proxy 127.0.0.1:3000
+   }
+   ```
+3. `sudo systemctl restart caddy`. Caddy fetches and renews a Let's Encrypt
+   certificate on its own, so `https://<yoursub>.duckdns.org` is the dashboard from
+   then on. Ports 80 and 443 must already be open from step 3, and if you use
+   cTrader, this is the hostname for its redirect URI.
 
 **Moving the old data from Fly**
 
 Honest answer: while the Fly trial is ended, its volume cannot be read — `flyctl`
 refuses every command until a card is added, so `fly ssh console` cannot copy
-`/app/data` out. Render therefore starts empty on purpose: the setup page gives
+`/app/data` out. The VM therefore starts empty on purpose: the setup page gives
 you a fresh password and the Settings tab gives you the $200 paper balance, which
 is the same starting point the old install had. If you ever pay Fly to get the
-account back, tar `/app/data` from there and drop the files into Render's disk
-(Shell → `/app/data`), then restart. Do not run both apps at once afterwards:
-two watchers double-post to Discord and each keeps its own ledger.
+account back, tar `/app/data` there and drop those files into `/opt/zone-watch` on
+the VM (they are the app's own working directory, so no paths change), then
+restart. Do not run both apps at once afterwards: two watchers double-post to
+Discord and each keeps its own ledger.
 
 **Keeping it healthy**
 
-- The health check is `/api/health`, not `/healthz`, on purpose: it answers 200
-  even when the watcher is stale. Pointing Render at `/healthz` would turn one
-  stalled watcher into a failing check, a restart loop, and a lost start-up
-  sequence.
-- A disk means **one instance**. Do not raise the instance count: two copies would
-  double-post and both trade the same paper account.
-- Every deploy restarts the container, which is a gap of seconds. With a disk
-  Render cannot do zero-downtime deploys; that is the price of keeping the ledger.
-- **Logs** are Render Dashboard → Logs (this replaces `fly logs`), and a shell is
-  Dashboard → **Shell** (this replaces `fly ssh console`).
-- Files worth backing up are under `/app/data`: `settings.json`, `journal.json`,
-  `executor.json`, `brain.json`.
-- `fly.toml` is left in the repo for the record; Render ignores it.
+- **Logs:** `journalctl -u zone-watch -f`. **Status:** `systemctl status
+  zone-watch`. **Restart:** `sudo systemctl restart zone-watch`.
+- **Update:** `cd /opt/zone-watch && sudo git pull && sudo bash deploy/install.sh`.
+  Every update restarts the process, a gap of seconds, so expect one missed
+  poll.
+- Run **one copy only**. Two watchers double-post to Discord and both trade the
+  same paper ledger.
+- Back up `settings.json`, `journal.json`, `executor.json` and `brain.json` from
+  `/opt/zone-watch`; those four cannot be rebuilt.
+- For an outside monitor use `/api/health` (200 even when the watcher is stale),
+  not `/healthz` — a stalled watcher would otherwise look like a dead server.
+- `fly.toml` and `render.yaml` stay in the repo for the record; a plain VM uses
+  neither.
 
-**Docker anywhere instead.** `deploy/docker-compose.yml` builds the same
-Dockerfile, keeps `/app/data` on a named volume (so the settings, credentials and
-dashboard password survive), restarts unless stopped, and health-checks
-`/healthz`:
+**Docker instead.** `deploy/docker-compose.yml` builds the same Dockerfile, keeps
+`/app/data` on a named volume (so the settings, credentials and dashboard password
+survive), restarts unless stopped, and health-checks `/healthz`:
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-Then point the phone at `http://<host>:8080`. The host must not idle containers
-out — a free tier that sleeps on inactivity has the same problem the Fly trial
-had, just with a longer timer.
+Then point the phone at `http://<host>:8080`. Either method works on the VM — use
+one, not both, or the two copies will double-post and keep separate ledgers.
 
 ### Uptime monitoring (Healthchecks.io)
 
@@ -772,10 +823,10 @@ permanently "late" no matter how healthy the app is.
 
 Healthchecks only *receives* pings; it never calls the app, so it cannot restart
 it or notice the gap before the app's own alert does. The app's own heartbeat
-notice fires at 15 minutes, which is usually the first thing you hear. On a paid
-Render instance nothing stops the process from outside, so a missing ping
-means the container is down or wedged and deserves a look in the dashboard's
-Events tab, not a wake-up call.
+notice fires at 15 minutes, which is usually the first thing you hear. Nothing
+stops the process from outside on the VM, so a missing ping means the machine is
+down or the process is wedged and deserves a look at `journalctl -u zone-watch`,
+not a wake-up call.
 
 Settings shows `last ping …` so you can see pings leaving, `Send test ping` fires
 one immediately, and `/healthz` reports the same state for other monitors (200
@@ -783,8 +834,8 @@ while the watcher is alive, 503 when it is stuck).
 
 ### The cron job that wakes it
 
-A paid instance never sleeps, so nothing has to wake it and a cron job is only
-a second opinion from outside. If you keep one, use **`/api/heartbeat`** as the
+The VM never sleeps, so nothing has to wake it and a cron job is only a second
+opinion from outside. If you keep one, use **`/api/heartbeat`** as the
 URL, not `/healthz` and not `/`. It needs no
 password, it answers `200` even when the watcher is stale, and it returns the
 last check time so the service's history is meaningful. Point a cron at `/` and

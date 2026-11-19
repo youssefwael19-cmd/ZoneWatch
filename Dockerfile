@@ -13,7 +13,8 @@ RUN npm ci --omit=dev
 COPY . .
 
 # Ensure data directory exists and symlink persisted files onto the host's
-# persistent disk (Fly volume, or Render's disk mounted at /app/data)
+# persistent disk, mounted at /app/data (a Render disk, a compose volume, or a
+# directory you bind-mount on a plain VM).
 RUN mkdir -p /app/data && \
     ln -sf /app/data/settings.json /app/settings.json && \
     ln -sf /app/data/zones.json /app/zones.json && \
@@ -35,9 +36,9 @@ RUN mkdir -p /app/data && \
     ln -sf /app/data/newscalendar.json /app/newscalendar.json
 
 # The host sets PORT and the app honours it (server/index.js reads
-# process.env.PORT). 10000 is Render's default, so a container started without
-# PORT still answers on the port Render probes. deploy/docker-compose.yml pins
-# PORT=8080 for the self-hosted setup.
+# process.env.PORT). 10000 keeps Render's probe happy if this image is ever run
+# there. deploy/docker-compose.yml pins PORT=8080 for the self-hosted setup, and
+# a container started with no PORT at all still answers on 10000.
 ENV NODE_ENV=production
 ENV PORT=10000
 

@@ -1,6 +1,8 @@
 # Run the app on any machine that has Docker, for hosts that do not stop idle
-# containers. A host that sleeps idle containers (a free tier, or the old Fly
-# trial) is fatal for something that has to watch prices around the clock.
+# containers. A host that sleeps idle containers (any free PaaS tier, or a trial
+# that ran out) is fatal for something that has to watch prices around the clock,
+# which is why the documented free host is a VM: see *Deploying for free* in
+# README.md.
 #
 #   docker compose -f deploy/docker-compose.yml up -d
 #
