@@ -635,9 +635,15 @@ async function sendWatcherGap(gapMinutes, span) {
   const end = utcClock(to);
   const window = start && end ? ` It was off from **${start}** to **${end}**.` : "";
   const onFly = Boolean(process.env.FLY_APP_NAME || process.env.FLY_MACHINE_ID);
+  // Render sets RENDER=true on every service. A Free web service (and any
+  // instance that is out of hours or suspended) stops on idle, which reads as
+  // exactly this gap; a paid instance does not.
+  const onRender = Boolean(process.env.RENDER);
   const cause = onFly
     ? "A gap that long is the host being stopped, not a restart loop. Fly's trial plan stops the machine five minutes after it starts, and it only comes back when something requests the app. Adding a payment method at https://fly.io/trial is what makes it run continuously."
-    : "A gap that long is the host being stopped or asleep, not a restart loop — a crash that comes straight back would be seconds, not minutes. Check whether the container is being stopped for inactivity.";
+    : onRender
+      ? "A gap that long is the host being stopped, not a restart loop. On Render this happens when the service is on the Free plan (it spins down after 15 minutes without traffic), is suspended for a billing or usage limit, or is mid-deploy. A paid instance (0.5 CPU / 512 MB or larger) with a disk stays up. Check the service's Events tab at https://dashboard.render.com."
+      : "A gap that long is the host being stopped or asleep, not a restart loop — a crash that comes straight back would be seconds, not minutes. Check whether the container is being stopped for inactivity.";
 
   return post(
     {

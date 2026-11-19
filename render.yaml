@@ -1,0 +1,50 @@
+# Render Blueprint for Zone Watch.
+#
+# Create it with: Render Dashboard -> New -> Blueprint -> pick this repo and the
+# `main` branch. Render reads this file and asks nothing else.
+#
+# Two things this file gets right that a hand-made service often does not:
+#
+# 1. A paid instance (0.5c-512mb, $7/month). A Free web service spins down after
+#    15 minutes without traffic and has no persistent disk, so the watcher would
+#    stop polling and the paper ledger would be wiped on every restart. Neither
+#    is survivable for a bot that has to watch prices around the clock.
+# 2. disk mounted at /app/data. The Dockerfile symlinks every state file
+#    (settings.json, journal.json, executor.json, brain.json, ...) to that path,
+#    exactly as it did on Fly's volume, so the app keeps its files without any
+#    code change.
+services:
+  - type: web
+    name: zone-watch
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # 0.5 CPU / 512 MB. Fly gave this app 1 GB; if Render's logs ever show the
+    # process dying with exit code 137 (out of memory), move to 1c-2g instead.
+    plan: 0.5c-512mb
+    # Frankfurt is the closest region to Egypt. Move this before the first
+    # deploy if you would rather sit in Oregon, Ohio, Virginia or Singapore.
+    region: frankfurt
+    branch: main
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    disk:
+      name: zone-watch-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      # Render injects PORT itself (10000) and the app already reads
+      # process.env.PORT, so PORT must not be pinned here.
+      - key: NODE_ENV
+        value: production
+      - key: WATCH_INTERVAL_MS
+        value: "10000"
+      # Everything else (Twelve Data key, Discord webhook, broker bridge URL,
+      # dashboard password) lives in settings.json on the disk, entered once in
+      # the dashboard. These optional env vars win over the saved values if you
+      # ever prefer to keep a secret out of the dashboard:
+      #
+      #   TWELVE_DATA_API_KEY, DISCORD_WEBHOOK_URL, AI_API_KEY, AI_BASE_URL,
+      #   AI_MODEL, EXA_API_KEY, MARKET_PROVIDER
+      #
+      # Add them in the Render dashboard under Environment; never commit them.

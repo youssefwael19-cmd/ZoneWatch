@@ -218,10 +218,11 @@ token is only ever used to register the command and is stored server-side,
 never shown back. The same conversation history as the panel is used, so a
 question asked in Discord and the next one in the panel share context.
 
-One caveat specific to this deployment: the Fly machine is stopped when idle, so
-a command that arrives while it is asleep has to wake it first and may overrun
-Discord's three-second acknowledgement. Repeating the command once the machine
-is awake works.
+One caveat specific to this deployment: a command that arrives while the host is
+restarting (a deploy, or a Free-tier spin-down) has to wake the app first and may
+overrun Discord's three-second acknowledgement. On a paid Render instance the
+service does not idle out, so this only happens around deploys; repeating the
+command once the app is back works.
 
 ### Pips, not price distance
 
@@ -460,7 +461,8 @@ next to a logged-in MT5 terminal. See `bridge/README.md` for setup.
 ### Running 24/5 without your PC
 
 Two machines are involved, and only one of them has to be yours. The app runs on
-Fly with `auto_stop_machines = false`, so it is already always on and polling.
+Render as a paid instance (see *Deploying on Render* below), which never sleeps,
+so it is already always on and polling.
 The bridge is the part that needs Windows, because the MetaTrader5 Python
 package only talks to a terminal on the same Windows machine.
 
@@ -496,8 +498,8 @@ stops meaning anything.
 ### Direct broker API — no machine of yours
 
 A broker with a real HTTP API removes the machine entirely: the app places the
-order from Fly, the broker holds the stop and the target, and nothing has to stay
-switched on. Set **Mode → Direct broker API**, fill in the account ID and token,
+order from wherever it runs (Render), the broker holds the stop and the target,
+and nothing has to stay switched on. Set **Mode → Direct broker API**, fill in the account ID and token,
 save, then press **Test broker API** and **Read account**.
 
 OANDA v20 is the implementation in `server/brokers/oanda.js`:
@@ -585,11 +587,12 @@ exists here as well.
 ### On the phone
 
 The dashboard is the phone client; there is no separate app to install from a
-store. Open the Fly URL in Safari or Chrome and use **Add to Home Screen**. It
+store. Open the Render URL (`https://zone-watch-<suffix>.onrender.com`) in Safari
+or Chrome and use **Add to Home Screen**. It
 runs standalone (its own icon, no browser chrome), remembers nothing locally
 because the server owns all the state, and every screen works — watch, zones,
-news, risk, auto-trading, the assistant and its microphone (which needs the
-HTTPS address Fly already gives you).
+news, risk, auto-trading, the assistant and its microphone (which needs an
+HTTPS address — Render gives every service one).
 
 Wide tables scroll sideways inside their panel rather than pushing the page, and
 form fields use a 16px font so iOS doesn't zoom in when you tap one. The
@@ -672,36 +675,87 @@ anything outside those prefixes is public by design, so never put a secret on a
 path that is not in that list.
 
 To reset a forgotten password, remove the `auth` object from `settings.json` on
-the server (`fly ssh console` → edit `/app/data/settings.json`) and reload: the
-app offers the setup page again. Signing out is `POST /api/auth/logout`; the
+the server (Render Dashboard → **Shell** → edit `/app/data/settings.json`, or
+`docker exec` on a self-hosted box) and restart: the app offers the setup page
+again. Signing out is `POST /api/auth/logout`; the
 login page also explains this.
 
-### When the host keeps stopping it
+### Deploying on Render
 
-Fly's trial plan stops a machine **five minutes after it starts**. The log says so
-outright (`Trial machine stopping. To run for longer than 5m0s, add a credit
-card`), and nothing in the app can prevent it: `auto_stop_machines = false` stops
-Fly parking an idle machine, it does not lift the trial limit. A machine that
-keeps being stopped never accumulates zone-touch counts or signal history, so
-signals look rarer than they are.
+The app is hosted on Render as a Docker web service with a persistent disk. The
+whole hosting config is in `render.yaml` (a Render *Blueprint*), so it is written
+down rather than clicked together once and forgotten.
 
-Two honest fixes, in order of effort:
+**What it costs, honestly.** A Free web service cannot run this app: it spins down
+after 15 minutes without traffic — so the watcher stops polling and there are no
+zones, no signals and no paper fills — and it has no persistent disk, so the
+ledger would be wiped on every restart. The combination that actually works is the
+**0.5 CPU / 512 MB** paid instance at $7/month (Render lists it as `0.5c-512mb`)
+plus a **1 GB disk** at $0.25/month — about $7.25/month — and neither of them
+stops when nobody is watching. The Fly machine this replaces had 1 GB of RAM; if
+Render's logs ever show the process dying with exit code 137, that is an
+out-of-memory kill, and the fix is the `1c-2g` plan at $25/month rather than
+tuning the app.
 
-1. **Add a payment method** at <https://fly.io/trial>. A `shared-cpu-1x` with 1GB
-   and a 1GB volume is a few dollars a month and the machine then runs
-   continuously.
-2. **Run it anywhere with Docker.** `deploy/docker-compose.yml` builds this
-   Dockerfile, keeps `/app/data` on a named volume (so the settings, credentials
-   and dashboard password survive), restarts unless stopped, and health-checks
-   `/healthz`:
+**First deploy**
 
-   ```bash
-   docker compose -f deploy/docker-compose.yml up -d
-   ```
+1. Push the repo to GitHub (it already is), branch `main`.
+2. Render Dashboard → **New → Blueprint** → pick the repo → **Connect**.
+3. Render reads `render.yaml` and shows one service, `zone-watch`: Docker runtime,
+   `0.5c-512mb` plan, region `frankfurt`, a 1 GB disk at `/app/data`, health check
+   `/api/health`, deploy on every commit to `main`. Press **Apply**.
+4. Wait for the build (it runs `npm ci` inside the Dockerfile) and for the first
+   deploy to go live.
+5. Open `https://zone-watch-<suffix>.onrender.com`. The app asks for a dashboard
+   password — that is the normal first-run setup page, not an error. Pick at least
+   8 characters; it is the only thing between the internet and the trading
+   account.
+6. In the Settings tab set what the Fly install had: paper balance **200**,
+   leverage **2000**, stop-out level **100%**, risk **0.5%**, max positions **2**,
+   then the Twelve Data key, the Discord webhook and the watch list / unproven
+   markets.
+7. Confirm the service is healthy: `/api/health` returns `{"ok":true,...}` and
+   `/healthz` returns 200 while the watcher is alive (503 when it is stale).
 
-   Then point the phone at `http://<host>:8080`. Use a host that does not idle
-   containers out — a free tier that sleeps on inactivity has the same problem as
-   the trial, just with a longer timer.
+**Moving the old data from Fly**
+
+Honest answer: while the Fly trial is ended, its volume cannot be read — `flyctl`
+refuses every command until a card is added, so `fly ssh console` cannot copy
+`/app/data` out. Render therefore starts empty on purpose: the setup page gives
+you a fresh password and the Settings tab gives you the $200 paper balance, which
+is the same starting point the old install had. If you ever pay Fly to get the
+account back, tar `/app/data` from there and drop the files into Render's disk
+(Shell → `/app/data`), then restart. Do not run both apps at once afterwards:
+two watchers double-post to Discord and each keeps its own ledger.
+
+**Keeping it healthy**
+
+- The health check is `/api/health`, not `/healthz`, on purpose: it answers 200
+  even when the watcher is stale. Pointing Render at `/healthz` would turn one
+  stalled watcher into a failing check, a restart loop, and a lost start-up
+  sequence.
+- A disk means **one instance**. Do not raise the instance count: two copies would
+  double-post and both trade the same paper account.
+- Every deploy restarts the container, which is a gap of seconds. With a disk
+  Render cannot do zero-downtime deploys; that is the price of keeping the ledger.
+- **Logs** are Render Dashboard → Logs (this replaces `fly logs`), and a shell is
+  Dashboard → **Shell** (this replaces `fly ssh console`).
+- Files worth backing up are under `/app/data`: `settings.json`, `journal.json`,
+  `executor.json`, `brain.json`.
+- `fly.toml` is left in the repo for the record; Render ignores it.
+
+**Docker anywhere instead.** `deploy/docker-compose.yml` builds the same
+Dockerfile, keeps `/app/data` on a named volume (so the settings, credentials and
+dashboard password survive), restarts unless stopped, and health-checks
+`/healthz`:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+Then point the phone at `http://<host>:8080`. The host must not idle containers
+out — a free tier that sleeps on inactivity has the same problem the Fly trial
+had, just with a longer timer.
 
 ### Uptime monitoring (Healthchecks.io)
 
@@ -718,11 +772,10 @@ permanently "late" no matter how healthy the app is.
 
 Healthchecks only *receives* pings; it never calls the app, so it cannot restart
 it or notice the gap before the app's own alert does. The app's own heartbeat
-notice fires at 15 minutes, which is usually the first thing you hear. Nothing
-wakes a stopped Fly machine except an incoming request to its URL: a monitor that
-polls `/healthz` (a dead-man's switch will not) starts it each time, because
-`auto_start_machines = true` is set. That keeps the gap near a minute but pauses
-the watcher on every wake-up, so it is a workaround for the trial, not a fix.
+notice fires at 15 minutes, which is usually the first thing you hear. On a paid
+Render instance nothing stops the process from outside, so a missing ping
+means the container is down or wedged and deserves a look in the dashboard's
+Events tab, not a wake-up call.
 
 Settings shows `last ping …` so you can see pings leaving, `Send test ping` fires
 one immediately, and `/healthz` reports the same state for other monitors (200
@@ -730,9 +783,9 @@ while the watcher is alive, 503 when it is stuck).
 
 ### The cron job that wakes it
 
-A cron service pointed at the app every minute is what keeps the gap near a
-minute: the request starts the stopped machine (`auto_start_machines = true`).
-Use **`/api/heartbeat`** as the URL, not `/healthz` and not `/`. It needs no
+A paid instance never sleeps, so nothing has to wake it and a cron job is only
+a second opinion from outside. If you keep one, use **`/api/heartbeat`** as the
+URL, not `/healthz` and not `/`. It needs no
 password, it answers `200` even when the watcher is stale, and it returns the
 last check time so the service's history is meaningful. Point a cron at `/` and
 the `302` to the login page looks like a failure to some services; point it at
@@ -747,9 +800,9 @@ cron service after fixing the URL; the app cannot re-enable it from here.
 That same `/healthz` also counts **outside checks** — requests from a cron job or
 URL monitor — and `/api/settings` shows the count next to the ping hint. If it
 says "no outside check since start", nothing is actually knocking on the app, and
-a stopped machine will stay stopped however the pings are configured. Every ping stops when the Fly
-machine is stopped by the trial limit, so "down" from Healthchecks during a trial
-is usually the machine sleeping, not a broken ping.
+a stopped machine will stay stopped however the pings are configured. Every ping stops when the
+container is down, so "down" from Healthchecks means the app is not running, not
+that the ping URL is wrong.
 
 ## Running it 24/5
 

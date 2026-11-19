@@ -7,7 +7,8 @@ node_modules
 .env.*
 .DS_Store
 
-# Runtime state lives on the Fly volume, never in the image. Without this a
+# Runtime state lives on the host's disk (Fly volume / Render disk at
+# /app/data), never in the image. Without this a
 # local settings.json holding the broker token would be copied in by `COPY . .`
 # and stay in the layer history even after the symlink replaces the file.
 settings.json

@@ -1,6 +1,6 @@
 # Run the app on any machine that has Docker, for hosts that do not stop idle
-# containers. Fly's trial plan stops a machine five minutes after it starts, which
-# is fatal for something that has to watch prices around the clock.
+# containers. A host that sleeps idle containers (a free tier, or the old Fly
+# trial) is fatal for something that has to watch prices around the clock.
 #
 #   docker compose -f deploy/docker-compose.yml up -d
 #

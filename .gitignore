@@ -1,9 +1,9 @@
 # Dependencies
 node_modules/
 
-# Runtime state the app writes next to its code. On Fly these paths are
-# symlinked onto the volume (see the Dockerfile), so they hold live settings,
-# positions and credentials and must never be committed.
+# Runtime state the app writes next to its code. On a hosted deploy these
+# paths are symlinked onto the persistent disk (see the Dockerfile), so they
+# hold live settings, positions and credentials and must never be committed.
 settings.json
 zones.json
 alerts.json

@@ -12,7 +12,8 @@ RUN npm ci --omit=dev
 # Copy application code
 COPY . .
 
-# Ensure data directory exists and symlink persisted files to volume
+# Ensure data directory exists and symlink persisted files onto the host's
+# persistent disk (Fly volume, or Render's disk mounted at /app/data)
 RUN mkdir -p /app/data && \
     ln -sf /app/data/settings.json /app/settings.json && \
     ln -sf /app/data/zones.json /app/zones.json && \
@@ -33,10 +34,13 @@ RUN mkdir -p /app/data && \
     ln -sf /app/data/dailyrecap.json /app/dailyrecap.json && \
     ln -sf /app/data/newscalendar.json /app/newscalendar.json
 
-# Fly.io sets PORT, default to 8080
+# The host sets PORT and the app honours it (server/index.js reads
+# process.env.PORT). 10000 is Render's default, so a container started without
+# PORT still answers on the port Render probes. deploy/docker-compose.yml pins
+# PORT=8080 for the self-hosted setup.
 ENV NODE_ENV=production
-ENV PORT=8080
+ENV PORT=10000
 
-EXPOSE 8080
+EXPOSE 10000
 
 CMD ["node", "server/index.js"]
