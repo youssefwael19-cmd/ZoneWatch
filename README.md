@@ -220,9 +220,9 @@ question asked in Discord and the next one in the panel share context.
 
 One caveat specific to this deployment: a command that arrives while the host is
 restarting has to wait for the app to come back and may overrun Discord's
-three-second acknowledgement. Nothing idles the app out on the VM, so this only
-happens around a restart or an update; repeating the command once the app is back
-works.
+three-second acknowledgement. Nothing idles the app out on an always-on host, so
+this only happens around a restart or an update; repeating the command once the app
+is back works.
 
 ### Pips, not price distance
 
@@ -460,9 +460,8 @@ next to a logged-in MT5 terminal. See `bridge/README.md` for setup.
 
 ### Running 24/5 without your PC
 
-Two machines are involved, and only one of them has to be yours. The app runs on
-the always-on VM (see *Deploying for free* below), which never sleeps, so it is
-already watching and polling.
+Two machines are involved, and only one of them has to be yours. The app runs on an always-on free host (see *Deploying for free* below), which never
+sleeps, so it is already watching and polling.
 The bridge is the part that needs Windows, because the MetaTrader5 Python
 package only talks to a terminal on the same Windows machine.
 
@@ -498,7 +497,7 @@ stops meaning anything.
 ### Direct broker API — no machine of yours
 
 A broker with a real HTTP API removes the machine entirely: the app places the
-order from wherever it runs (the VM), the broker holds the stop and the target,
+order from wherever it runs (your host), the broker holds the stop and the target,
 and nothing has to stay switched on. Set **Mode → Direct broker API**, fill in the account ID and token,
 save, then press **Test broker API** and **Read account**.
 
@@ -587,12 +586,13 @@ exists here as well.
 ### On the phone
 
 The dashboard is the phone client; there is no separate app to install from a
-store. Open the dashboard (`http://<vm-ip>:3000`, or the HTTPS hostname from the
-Caddy step in *Deploying for free*) in Safari or Chrome and use **Add to Home
-Screen**. It runs standalone (its own icon, no browser chrome), remembers nothing
-locally because the server owns all the state, and every screen works — watch,
-zones, news, risk, auto-trading, the assistant and its microphone (which needs an
-HTTPS address, so do the Caddy step if you want voice on the phone).
+store. Open the dashboard (`https://zone-watch.<username>.serv00.net` from step 7
+of *Deploying for free*, or `http://<vm-ip>:3000` plus the Caddy step on a VM) in
+Safari or Chrome and use **Add to Home Screen**. It runs standalone (its own icon,
+no browser chrome), remembers nothing locally because the server owns all the
+state, and every screen works — watch, zones, news, risk, auto-trading, the
+assistant and its microphone (which needs an HTTPS address, so use the proxy site
+with a certificate if you want voice on the phone).
 
 Wide tables scroll sideways inside their panel rather than pushing the page, and
 form fields use a 16px font so iOS doesn't zoom in when you tap one. The
@@ -675,11 +675,12 @@ anything outside those prefixes is public by design, so never put a secret on a
 path that is not in that list.
 
 To reset a forgotten password, remove the `auth` object from `settings.json` on
-the server (`sudo nano /opt/zone-watch/settings.json` on the VM, or `docker exec`
-on a Docker box) and restart it: the app offers the setup page again. Signing out is `POST /api/auth/logout`; the
+the server (`~/zone-watch/settings.json` in Serv00's file manager or over SSH,
+`sudo nano /opt/zone-watch/settings.json` on the VM, or `docker exec` on a Docker
+box) and restart it: the app offers the setup page again. Signing out is `POST /api/auth/logout`; the
 login page also explains this.
 
-### Deploying for free (Oracle Cloud Always Free)
+### Deploying for free (no card)
 
 This app has to poll prices around the clock and keep its ledger on disk, and no
 free *platform* does both in 2026. Render's Free web service spins down after 15
@@ -687,25 +688,110 @@ minutes without traffic, may restart at any time, and wipes its filesystem on
 every restart — a dead watcher and a vanished ledger are exactly the two things
 this app cannot survive. Koyeb now wants a card and a $29 hold, Heroku's free tier
 ended in 2022, Fly's free allowances ended in 2024, Railway's Free plan is $1 of
-usage a month. None of them can host this.
+usage a month, and alwaysdata's Free plan forbids programs that run 24/7. None of
+them can host this.
 
-A free-forever **virtual machine** can. **Oracle Cloud Always Free** has been
-free since 2019 and is not a trial: always-on compute, a real disk, no sleep, no
-expiry.
+What can is a **free shared shell host**: a small account with SSH, a reserved
+port and a few gigabytes of real disk, where your process is allowed to stay
+running. It is not a VM — there is no root, no Docker and no `apt` — but this app
+is plain Node and three JavaScript libraries, so it does not need any of that.
+
+**Serv00** is the one to use. It has been running for years, it asks for no card,
+and it gives 3 GB of SSD, 512 MB of RAM, three open TCP ports, SSH and long-running
+processes on a `*.serv00.net` subdomain that can carry a real Let's Encrypt
+certificate.
+
+**Registration is often closed.** Serv00 caps each server at 10,000 accounts, so
+<https://www.serv00.com/register-account> sometimes answers "registration is
+currently disabled". Try again in a few days, or use the Waifly fallback below.
+
+**Setup, once, about twenty minutes**
+
+1. Register at <https://www.serv00.com/register-account>. The form asks what
+   hosting will cost you — the answer is `free`. Use a real email address, verify
+   it, then open the panel address from the welcome mail and create the free
+   account.
+2. In the panel, **Additional services → Run your own applications → Enabled**.
+   Without this nothing in your home directory may be executable.
+3. **Port reservation → Add port → TCP**, and write the number down. Every
+   listener needs one of these; you get three.
+4. SSH in (the host is `s<N>.serv00.com`, shown in the panel) and check Node:
+   ```bash
+   ssh <username>@s<N>.serv00.com
+   node -v
+   ```
+   If that prints nothing or an old version, their Node guide
+   (<https://docs.serv00.com/Node.js>) covers picking a current LTS in the panel;
+   reconnect afterwards so `node` is on your path.
+5. Get the code and its dependencies:
+   ```bash
+   git clone https://github.com/youssefwael19-cmd/ZoneWatch.git ~/zone-watch
+   cd ~/zone-watch && npm install --omit=dev
+   ```
+6. Keep it running with PM2, bound to the port from step 3:
+   ```bash
+   npm config set prefix ~/.npm-global
+   npm install -g pm2
+   echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.profile
+   . ~/.profile
+   PORT=<reserved-port> NODE_ENV=production pm2 start server/index.js --name zone-watch
+   pm2 save
+   ```
+   PM2 restarts the app if it crashes and the app keeps polling with no browser
+   open. A reboot of the shared server needs one `pm2 resurrect` over SSH — there
+   is no init system you can hook, so this is the one manual thing.
+7. Give it a URL with HTTPS. In **WWW websites → Add new website**: domain
+   `zone-watch.<username>.serv00.net`, type **Proxy**, target `localhost`, port the
+   number from step 3. Then **Manage SSL certificates → Add certificate → Let's
+   Encrypt** for that same domain. `https://zone-watch.<username>.serv00.net` is
+   now the dashboard, and the password and session cookie travel encrypted — do
+   not skip this, the password is the only thing between the internet and the
+   trading account.
+8. Open that URL. It asks for a dashboard password; that is the normal first-run
+   page, not an error. Then in the Settings tab set what the old install had:
+   paper balance **200**, leverage **2000**, stop-out level **100%**, risk **0.5%**,
+   max positions **2**, then the Twelve Data key, the Discord webhook, the watch
+   list and the unproven markets.
+9. Confirm it is alive over SSH: `curl -s localhost:<port>/api/health` returns ok,
+   and `curl -o /dev/null -w '%{http_code}\n' localhost:<port>/healthz` returns
+   `200` while the watcher is running (503 means it is stuck).
+
+**Waifly, if Serv00 sign-ups are closed.** <https://waifly.com> gives 300 MB of
+RAM, 1 GB of disk, one port and a container that never sleeps, with no card and no
+trial. Create a server with the **NodeJS** egg, upload the repo over SFTP, set the
+start command to `npm start` (the port arrives in an environment variable — do not
+hard-code one), and start it. The catch is free-plan TLS: there is no free
+subdomain with a certificate, so you reach it at `http://<ip>:<port>` and the
+dashboard password crosses the network in clear text. Fine for a look around, not
+for a live broker token you care about.
+
+**The honest catches.** No root means no Caddy, no systemd unit, no Docker — that
+is why the steps above use PM2 and the panel's proxy instead. 512 MB of RAM is
+plenty for this process but leaves nothing for a heavy analyzer run. It is FreeBSD,
+so `apt` and prebuilt Linux binaries do not exist. There is no SLA and support is
+a forum. And a free Serv00 account is deleted after **90 days without a login to
+the panel or SSH**, data unrecoverable — put a recurring reminder in your calendar,
+because nothing in the app can protect you from that. None of this is a trial or a
+30-day offer; it stays free for as long as you keep it alive.
+
+### If you have a card: Oracle Cloud Always Free
+
+A card buys something better — a real VM with root, 1 GB of RAM and no shared
+neighbours. **Oracle Cloud Always Free** has been free since 2019 and is not a
+trial: always-on compute, a real disk, no sleep, no expiry.
 
 - **VM.Standard.E2.1.Micro** (AMD, 1 GB RAM, 1/8 OCPU) is enough for this app, and
   it is the shape that is always available.
 - The **Ampere A1** shape (2 OCPU / 12 GB, also Always Free) is a big upgrade when
-  your region has capacity; these steps are the same either way, and Node and the
-  container image both come in an ARM build.
+  your region has capacity; these steps are the same either way.
 - 200 GB of block storage and 10 TB of outbound traffic a month across the account.
 
 **The honest catches.** Oracle asks for a card at sign-up for identity
 verification only — Always Free resources are not billed, and the usual result is
-a small authorisation that is refunded. Without a card on file, no free host keeps
-a process running 24/7 with a disk; the fallback is paying Render $7.25/month with
-the `render.yaml` already in this repo. Oracle also reclaims Always Free instances
-that sit genuinely idle — this one polls every ten seconds, so it never is.
+a small authorisation that is refunded. If your bank refuses the card, use the
+Serv00 path above: it is free too, just smaller. Oracle also reclaims Always Free
+instances that sit genuinely idle — this one polls every ten seconds, so it never
+is.
 
 **Setup, once, about fifteen minutes**
 
@@ -773,29 +859,33 @@ you TLS automatically; on a VM you add it once:
 
 Honest answer: while the Fly trial is ended, its volume cannot be read — `flyctl`
 refuses every command until a card is added, so `fly ssh console` cannot copy
-`/app/data` out. The VM therefore starts empty on purpose: the setup page gives
-you a fresh password and the Settings tab gives you the $200 paper balance, which
-is the same starting point the old install had. If you ever pay Fly to get the
-account back, tar `/app/data` there and drop those files into `/opt/zone-watch` on
-the VM (they are the app's own working directory, so no paths change), then
-restart. Do not run both apps at once afterwards: two watchers double-post to
-Discord and each keeps its own ledger.
+`/app/data` out. The new host therefore starts empty on purpose: the setup page
+gives you a fresh password and the Settings tab gives you the $200 paper balance,
+which is the same starting point the old install had. If you ever get the Fly
+account back, tar `/app/data` there and drop those files into the app's own
+working directory (`/opt/zone-watch` on a VM, `~/zone-watch` on Serv00 — no paths
+change either way), then restart. Do not run both apps at once afterwards: two
+watchers double-post to Discord and each keeps its own ledger.
 
 **Keeping it healthy**
 
-- **Logs:** `journalctl -u zone-watch -f`. **Status:** `systemctl status
-  zone-watch`. **Restart:** `sudo systemctl restart zone-watch`.
-- **Update:** `cd /opt/zone-watch && sudo git pull && sudo bash deploy/install.sh`.
-  Every update restarts the process, a gap of seconds, so expect one missed
-  poll.
+- **Logs:** `pm2 logs zone-watch` on Serv00, `journalctl -u zone-watch -f` on a VM.
+- **Restart:** `pm2 restart zone-watch`, or `sudo systemctl restart zone-watch` on
+  a VM.
+- **Update:** `cd ~/zone-watch && git pull && npm install --omit=dev && pm2 restart
+  zone-watch` on Serv00; `cd /opt/zone-watch && sudo git pull && sudo bash
+  deploy/install.sh` on a VM. Every update restarts the process, a gap of seconds,
+  so expect one missed poll.
 - Run **one copy only**. Two watchers double-post to Discord and both trade the
-  same paper ledger.
+  same paper ledger. In particular, stop the old Fly app before starting a new
+  host, or every alert arrives twice.
 - Back up `settings.json`, `journal.json`, `executor.json` and `brain.json` from
-  `/opt/zone-watch`; those four cannot be rebuilt.
+  the app directory; those four cannot be rebuilt. On Serv00 the panel's file
+  manager can download them, and an SSH `scp` works too.
 - For an outside monitor use `/api/health` (200 even when the watcher is stale),
   not `/healthz` — a stalled watcher would otherwise look like a dead server.
-- `fly.toml` and `render.yaml` stay in the repo for the record; a plain VM uses
-  neither.
+- `fly.toml` and `render.yaml` stay in the repo for the record; neither host above
+  uses them.
 
 **Docker instead.** `deploy/docker-compose.yml` builds the same Dockerfile, keeps
 `/app/data` on a named volume (so the settings, credentials and dashboard password
@@ -805,8 +895,9 @@ survive), restarts unless stopped, and health-checks `/healthz`:
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-Then point the phone at `http://<host>:8080`. Either method works on the VM — use
-one, not both, or the two copies will double-post and keep separate ledgers.
+Then point the phone at `http://<host>:8080`. This is a VM or laptop option only —
+Serv00 and Waifly have no Docker, which is why their steps use PM2. Use one method,
+not both, or the two copies will double-post and keep separate ledgers.
 
 ### Uptime monitoring (Healthchecks.io)
 
@@ -824,9 +915,9 @@ permanently "late" no matter how healthy the app is.
 Healthchecks only *receives* pings; it never calls the app, so it cannot restart
 it or notice the gap before the app's own alert does. The app's own heartbeat
 notice fires at 15 minutes, which is usually the first thing you hear. Nothing
-stops the process from outside on the VM, so a missing ping means the machine is
-down or the process is wedged and deserves a look at `journalctl -u zone-watch`,
-not a wake-up call.
+stops the process from outside on an always-on host, so a missing ping means the
+machine is down or the process is wedged and deserves a look at the process log
+(`pm2 logs zone-watch`, or `journalctl -u zone-watch` on a VM), not a wake-up call.
 
 Settings shows `last ping …` so you can see pings leaving, `Send test ping` fires
 one immediately, and `/healthz` reports the same state for other monitors (200
@@ -834,8 +925,8 @@ while the watcher is alive, 503 when it is stuck).
 
 ### The cron job that wakes it
 
-The VM never sleeps, so nothing has to wake it and a cron job is only a second
-opinion from outside. If you keep one, use **`/api/heartbeat`** as the
+An always-on host never sleeps, so nothing has to wake it and a cron job is only a
+second opinion from outside. If you keep one, use **`/api/heartbeat`** as the
 URL, not `/healthz` and not `/`. It needs no
 password, it answers `200` even when the watcher is stale, and it returns the
 last check time so the service's history is meaningful. Point a cron at `/` and
@@ -858,8 +949,9 @@ that the ping URL is wrong.
 ## Running it 24/5
 
 The server watches and posts to Discord whether or not a browser is open — but
-only while the process is alive. To keep it alive you need a machine that stays on:
-a small VPS, a Raspberry Pi, or a PC you leave running.
+only while the process is alive. To keep it alive you need a host that stays on —
+the free one in *Deploying for free* above, a small VPS, a Raspberry Pi, or a PC
+you leave running.
 
 **systemd (recommended on a VPS or Pi):**
 
@@ -886,8 +978,10 @@ pm2 save && pm2 startup
 - Set `WATCH_INTERVAL_MS=10000` (the default) for 10-second checks.
 - Keep `settings.json` private — it holds your API key and Discord webhook.
 - Back up `zones.json` if you hand-draw levels you care about.
-- The app has no login. Do not expose port 3000 to the open internet; reach it
-  over SSH tunnelling or a private network.
+- The dashboard needs a password (see *The dashboard password* above), but the
+  password and the session cookie travel in clear text over plain HTTP. Put it
+  behind HTTPS — the proxy site plus certificate in *Deploying for free*, or Caddy
+  on a VM — before you reach it from outside your own network.
 
 ## Important limits
 

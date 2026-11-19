@@ -1,7 +1,7 @@
 # Render Blueprint for Zone Watch — the paid managed option, not the free one.
-# The free deployment path is a VM (see *Deploying for free* in README.md); this
-# file is here so the move to Render stays a one-click choice if you ever want
-# it.
+# The free path is a shared shell host with no card (Serv00) or an Oracle Always
+# Free VM; see *Deploying for free* in README.md. This file is here so the move to
+# Render stays a one-click choice if you ever want it.
 #
 # Create it with: Render Dashboard -> New -> Blueprint -> pick this repo and the
 # `main` branch. Render reads this file and asks nothing else.
