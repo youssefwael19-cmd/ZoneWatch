@@ -44,6 +44,12 @@ function writeJournal(journal) {
   }
 }
 
+/** The share of the risk budget a signal asked for. No multiplier means full. */
+function riskMultiplierOf(signal) {
+  const n = Number(signal && signal.riskMultiplier);
+  return n > 0 && n <= 1 ? n : 1;
+}
+
 function entryId(signal) {
   const zone = signal.zone || {};
   return [signal.symbol, signal.side, zone.low, zone.high, signal.at].join("|");
@@ -87,6 +93,12 @@ function record(signal, extras = {}) {
       volatilityExpanded: checks.find((c) => c.name === "volatility")?.ok ?? null,
       confluenceScore: signal.confluence ? signal.confluence.score : null,
       confluenceTotal: signal.confluence ? signal.confluence.total : null,
+      // A trade the app cut in half because its proof came from the
+      // neighbouring condition is not the same bet as a full-size one. It is
+      // recorded so the two can be scored apart instead of blending into one
+      // number that describes neither.
+      riskMultiplier: riskMultiplierOf(signal),
+      provenCondition: (signal.adjacentProof && signal.adjacentProof.provenIn) || null,
       regime: extras.regime || null,
       atrPercentile: Number.isFinite(extras.atrPercentile) ? extras.atrPercentile : null,
       newsNear: Boolean(extras.newsNear),
@@ -219,6 +231,13 @@ function summary() {
       return score >= 4 ? "4-5 of 5 checks" : score === 3 ? "3 of 5 checks" : "0-2 of 5 checks";
     }),
     byCondition: bucket(closed, (e) => e.features.regime),
+    // Did the half-size trades behave like half-size trades should? Entries
+    // logged before the multiplier existed were full size, hence the default.
+    bySize: bucket(closed, (e) =>
+      Number(e.features.riskMultiplier) > 0 && Number(e.features.riskMultiplier) < 1
+        ? "half size (proof from the next-door condition)"
+        : "full size"
+    ),
     byMarket: bucket(closed, (e) => e.symbol),
     recent: [...entries].slice(-8).reverse(),
     note:

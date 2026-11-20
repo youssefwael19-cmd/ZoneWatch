@@ -338,6 +338,21 @@ async function sendSignal(signal) {
               inline: true,
             },
             { name: "RR", value: String(signal.riskReward), inline: true },
+            // A trade the app chose to half because the proof came from the
+            // next-door market condition has to say so, or it reads as an
+            // ordinary full-size call.
+            ...(Number(signal.riskMultiplier) > 0 && Number(signal.riskMultiplier) < 1
+              ? [
+                  {
+                    name: "⚠️ Half size",
+                    value:
+                      `No rule is proven in this market's current condition. The proof comes from ` +
+                      `${(signal.adjacentProof && signal.adjacentProof.provenIn) || "the next-door condition"}, ` +
+                      `so the risk is cut to ${Math.round(Number(signal.riskMultiplier) * 100)}%.`,
+                    inline: false,
+                  },
+                ]
+              : []),
             ...linkedField(signal.linked),
             ...(signal.sizing
               ? [

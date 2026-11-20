@@ -1952,6 +1952,7 @@ function renderSignals(signals, stats) {
         <strong style="font-size:16px;color:${colour}">${s.side} ${s.symbol}</strong>
         <span class="badge ${badge}">${s.confidence} confidence</span>
         <span class="sub">${s.score}/${s.maxScore} conditions</span>
+        ${s.riskMultiplier && s.riskMultiplier < 1 ? `<span class="badge b-approaching" title="Nothing is proven for this market's current condition; the proof comes from the next-door condition, so the risk is cut to ${Math.round(s.riskMultiplier * 100)}%.">half size</span>` : ""}
       </div>
       <div class="sub mono">entry ${s.entry} · stop ${s.stop} · target ${s.target}</div>
       <ul style="margin:8px 0 0;padding-left:18px;font-size:12px;color:var(--muted);line-height:1.7">
@@ -2258,6 +2259,7 @@ async function loadJournal() {
       journalSection("Zone freshness", d.byZoneFreshness),
       journalSection("Session", d.bySession),
       journalSection("Confluence checks passed", d.byConfluence),
+      journalSection("Position size", d.bySize),
       journalSection("Market condition", d.byCondition),
       journalSection("Market", d.byMarket),
     ].join("");
