@@ -61,6 +61,13 @@ const DEFAULT_STOPS = {
 
 const LIVE_MAX_AGE_MS = 15 * 60 * 1000;
 
+// A stop closer than this many spreads is not a trade, it is a donation: the
+// broker's own charge plus one ordinary tick reaches it before the setup has
+// had a chance to work. Four is a floor, not a target — the EURUSD signal of
+// 20 Nov risked 3.6 pips against a 1.2-pip spread and was stopped in three
+// minutes.
+const MIN_STOP_SPREAD_MULTIPLE = 4;
+
 // How far a market fill may slip, as a fraction of the spread. A quarter is a
 // deliberate middle: retail FX usually fills inside it, a stop order during a
 // news spike can blow well past it, and a model that is right on average is
@@ -105,6 +112,39 @@ function spreadInfo(symbol, config, live) {
 /** Spread in price units for a symbol. Kept for callers that want just the number. */
 function spreadFor(symbol, config, live) {
   return spreadInfo(symbol, config, live).units;
+}
+
+/**
+ * Is this stop too tight to survive the cost of opening the trade?
+ *
+ * Distance is measured from entry to stop, so it holds for both directions.
+ * When the spread is unknown nothing is refused — an unknown cost is not
+ * evidence of a thin stop.
+ */
+function thinStop({ symbol, entry, stop, config, live, multiple = MIN_STOP_SPREAD_MULTIPLE }) {
+  const spread = spreadInfo(symbol, config, live);
+  const distance = Math.abs(Number(stop) - Number(entry));
+  const spreadUnits = Number(spread.units);
+  if (!Number.isFinite(distance) || distance <= 0 || !Number.isFinite(spreadUnits) || spreadUnits <= 0) {
+    return {
+      thin: false,
+      distance: null,
+      spreadUnits: spread.units,
+      spreadSource: spread.source,
+      ratio: null,
+      required: null,
+      multiple,
+    };
+  }
+  return {
+    thin: distance < spreadUnits * multiple,
+    distance,
+    spreadUnits,
+    spreadSource: spread.source,
+    ratio: Number((distance / spreadUnits).toFixed(2)),
+    required: Number((spreadUnits * multiple).toFixed(8)),
+    multiple,
+  };
 }
 
 /**
@@ -306,8 +346,10 @@ module.exports = {
   DEFAULT_STOPS,
   LIVE_MAX_AGE_MS,
   SLIPPAGE_SPREAD_MULTIPLE,
+  MIN_STOP_SPREAD_MULTIPLE,
   spreadInfo,
   spreadFor,
+  thinStop,
   slippageInfo,
   entryCost,
   exitCost,

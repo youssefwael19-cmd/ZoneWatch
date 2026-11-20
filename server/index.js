@@ -885,6 +885,16 @@ async function buildSnapshot() {
   const brainGateOn = settings.getBrainGate();
   const gateCandleSymbols = new Map(market.instrumentList().map((i) => [i.symbol, i.candleSymbol]));
   const brainHeld = [];
+  // Markets the brain last measured as ranging-volatile. Scalp setups in that
+  // tape were the whole of the losing week (three for three), so a scalp is no
+  // longer offered there. The condition comes from the brain's own stored
+  // reading, so this costs no extra candle requests; a market with no reading
+  // is never blocked by it.
+  const chopSymbols = new Set(
+    (brainMod.summary().conditions || [])
+      .filter((c) => c.condition === "ranging-volatile")
+      .map((c) => c.symbol)
+  );
   // Returns the gate verdict, so callers can also journal the condition that
   // was in force when the decision was made.
   const brainVerdict = async (symbol, setup, side) => {
@@ -952,6 +962,50 @@ async function buildSnapshot() {
       signal.gateBypassed = listed.reason;
       gateHeldSignals.push({ signal, reason: listed.reason, condition: listed.condition || null });
       overrideSignals.push({ signal, gate });
+      continue;
+    }
+
+    // A stop that sits inside the spread is not a stop. Refuse it, and record
+    // the refusal so the shadow book can still measure whether refusing was the
+    // right call. These two checks come after the override branch on purpose:
+    // the override list is a delivery promise about the brain gate, and it is
+    // still kept.
+    const thin = costsMod.thinStop({
+      symbol: signal.symbol,
+      entry: signal.entry,
+      stop: signal.stop,
+      config: settings.getExecConfig(),
+      live: executor.liveSpreads(),
+    });
+    if (thin.thin) {
+      const stopPips = pipsMod.pipsOf(signal.symbol, thin.distance);
+      const spreadPips = pipsMod.pipsOf(signal.symbol, thin.spreadUnits);
+      const reason = `stop too tight: ${pipsMod.pipsLabel(signal.symbol, stopPips, { signed: false })} of risk against a ${pipsMod.pipsLabel(signal.symbol, spreadPips, { signed: false })} spread (needs ${thin.multiple}×)`;
+      learning.noteSuppressed(signal, { reason });
+      journal.record(signal, {
+        status: "held",
+        heldReason: reason,
+        regime: null,
+        newsNear: Boolean(blackout && blackout.active),
+      });
+      gateHeldSignals.push({ signal, reason, condition: null });
+      continue;
+    }
+
+    // Scalps belong to markets that are moving. In a ranging-volatile tape the
+    // 1:2 target needs the level to hold through noise that the app's own
+    // measurements say is above normal — every one of the week's three losses
+    // was exactly that trade.
+    if (signal.confidence === "scalp" && chopSymbols.has(signal.symbol)) {
+      const reason = "scalp setup refused in a ranging-volatile market";
+      learning.noteSuppressed(signal, { reason });
+      journal.record(signal, {
+        status: "held",
+        heldReason: reason,
+        regime: "ranging-volatile",
+        newsNear: Boolean(blackout && blackout.active),
+      });
+      gateHeldSignals.push({ signal, reason, condition: "ranging-volatile" });
       continue;
     }
 
