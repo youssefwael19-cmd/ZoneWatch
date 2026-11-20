@@ -17,8 +17,8 @@ const path = require("path");
 const { writeJson: atomicWriteJson } = require("./atomicWrite");
 const crypto = require("crypto");
 
-const ZONES_PATH = path.join(__dirname, "..", "zones.json");
-const ALERTS_PATH = path.join(__dirname, "..", "alerts.json");
+const ZONES_PATH = require("./stateDir").file("zones.json");
+const ALERTS_PATH = require("./stateDir").file("alerts.json");
 
 function readJson(file, fallback) {
   try {

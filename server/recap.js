@@ -11,7 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeJson } = require("./atomicWrite");
 
-const FILE = path.join(__dirname, "..", "recap.json");
+const FILE = require("./stateDir").file("recap.json");
 const SEND_HOUR_UTC = 8;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 

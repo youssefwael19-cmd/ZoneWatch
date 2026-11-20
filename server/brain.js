@@ -28,7 +28,7 @@ const candlesMod = require("./candles");
 const regime = require("./regime");
 const { FAMILIES, runFamily } = require("./strategies");
 
-const FILE = path.join(__dirname, "..", "brain.json");
+const FILE = require("./stateDir").file("brain.json");
 
 const FOLDS = 3;
 const MIN_TRADES = 20;

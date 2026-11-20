@@ -23,7 +23,7 @@ const { writeJson } = require("./atomicWrite");
 const candlesMod = require("./candles");
 const autozones = require("./autozones");
 
-const LAB_FILE = path.join(__dirname, "..", "lab.json");
+const LAB_FILE = require("./stateDir").file("lab.json");
 
 const WINDOW = 200;
 const MAX_HOLD = 72;

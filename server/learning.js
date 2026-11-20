@@ -23,7 +23,7 @@ const { writeJson } = require("./atomicWrite");
 
 const tracker = require("./signaltracker");
 
-const FILE = path.join(__dirname, "..", "learning.json");
+const FILE = require("./stateDir").file("learning.json");
 
 const MIN_JUDGE = 10; // below this, no verdict is offered
 const MIN_SUPPRESS = 15; // below this, the app will not mute anything

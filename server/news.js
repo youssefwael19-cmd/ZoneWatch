@@ -22,7 +22,7 @@ const CALENDAR_URL =
 const CALENDAR_READER_URL = process.env.CALENDAR_READER_URL || `https://r.jina.ai/${CALENDAR_URL}`;
 
 /** Last successful calendar, kept across restarts so a 429 cannot blind us. */
-const CALENDAR_FILE = require("path").join(__dirname, "..", "newscalendar.json");
+const CALENDAR_FILE = require("./stateDir").file("newscalendar.json");
 const CALENDAR_MAX_AGE_MS = 36 * 60 * 60 * 1000;
 const RETRY_AFTER_FAILURE_MS = 5 * 60 * 1000;
 

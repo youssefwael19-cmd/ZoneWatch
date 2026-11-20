@@ -21,7 +21,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeJson } = require("./atomicWrite");
 
-const FILE = path.join(__dirname, "..", "journal.json");
+const FILE = require("./stateDir").file("journal.json");
 const MAX_ENTRIES = 3000;
 
 function readJournal() {

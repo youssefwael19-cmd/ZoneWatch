@@ -4,19 +4,22 @@
  * Everything this app remembers is a JSON file next to its code. On a host that
  * rebuilds the code directory on every deploy — ProductEcho, or any buildpack
  * host — those files are part of the disposable build, so the ledger would be
- * wiped each time. Mounting a persistent folder and pointing the files at it is
- * the fix, and it is why this module exists: set STATE_DIR and each state file
- * becomes a symlink into that folder.
+ * wiped each time. A mounted folder is the fix, and this module is what every
+ * state file asks for its path:
  *
- *   STATE_DIR=/data
+ *   STATE_DIR=/data       name the folder
+ *   (nothing)             a mounted /data is found on its own
+ *   (no folder anywhere)  the files stay exactly where they are today
  *
- * is all a host needs; leave it unset and the files stay exactly where they are
- * today. server/atomicWrite.js already writes through symlinks (it resolves the
- * real target before renaming), so no other module has to know about this.
+ * The first version of this module linked each state file to the folder. That
+ * cannot work on a host where a volume makes the app run as the folder's owner:
+ * the code directory is read-only by then, so every link fails with EACCES while
+ * the folder itself is perfectly fine. Resolving the path instead needs no write
+ * to the code directory at all.
  *
- * The Dockerfile does the same thing with a RUN of `ln -sf`, for hosts where the
- * image is built ahead of time. This is that, at boot, for hosts that build the
- * code themselves.
+ * stateStore.js (the optional Supabase mirror) asks file() for the same paths,
+ * so both mechanisms can be on at once without disagreeing about where the
+ * ledger lives.
  */
 
 const fs = require("fs");
@@ -45,43 +48,53 @@ const FILES = [
 ];
 
 /*
+ * Where a host usually mounts the folder that outlives a release. STATE_DIR
+ * always wins; these are only tried when it is unset, so a provider that mounts
+ * the folder at the usual path needs no environment variable at all — and a
+ * machine without such a folder is untouched.
+ */
+const DEFAULT_MOUNTS = ["/data"];
+
+/*
  * What the last prepare() managed to do, so a host can be asked the one question
  * that matters after a redeploy: did the ledger actually land on the mounted
  * folder, or is this run writing to the disposable build directory? /api/health
  * reports it; a silent fallback is exactly the failure that looks like "the
  * settings reset themselves".
  */
-/*
- * Where a host usually mounts the folder that outlives a release. STATE_DIR
- * always wins; these are only tried when it is unset, so a provider that mounts
- * the folder at the usual path needs no environment variable at all -- and a
- * machine without such a folder is untouched.
- */
-const DEFAULT_MOUNTS = ["/data"];
+let last = { dir: null, requested: null, auto: false, files: 0, error: null };
 
-let last = { dir: null, requested: null, auto: false, linked: 0, error: null };
+function codeRoot() {
+  return path.join(__dirname, "..");
+}
+
+/**
+ * The path to read and write one state file. Ask at call time: prepare() runs
+ * before the app serves anything, and this is what makes the answer matter.
+ */
+function file(name) {
+  return path.join(last.dir || codeRoot(), name);
+}
 
 function status() {
   return {
-    // Half a set of links is not persistence: the files that lost their link are
-    // still on the disposable disk, so report it as local and say why.
-    mode: last.dir && last.linked === FILES.length ? "persistent" : "local",
+    mode: last.dir ? "persistent" : "local",
     dir: last.dir,
     requested: last.requested,
     auto: last.auto,
-    linked: last.linked,
+    files: last.files,
     error: last.error,
   };
 }
 
 /**
- * Point each state file at `dir`. Safe to run on every boot: an existing link is
- * left alone, and a plain file from an earlier run is moved into the folder
- * rather than deleted, so switching this on cannot lose a ledger.
+ * Point the state files at `dir` and carry over anything already on the
+ * disposable disk, so switching this on cannot lose a ledger. Safe to run on
+ * every boot: a file the folder already has is left exactly as it is.
  */
 function prepare(options = {}) {
   const dirOption = options.dir !== undefined ? options.dir : process.env.STATE_DIR;
-  const root = options.root ? path.resolve(options.root) : path.join(__dirname, "..");
+  const root = options.root ? path.resolve(options.root) : codeRoot();
 
   let dir = dirOption ? path.resolve(dirOption) : null;
   let auto = false;
@@ -95,14 +108,14 @@ function prepare(options = {}) {
       }
     });
     if (!mount) {
-      last = { dir: null, requested: null, auto: false, linked: 0, error: null };
+      last = { dir: null, requested: null, auto: false, files: 0, error: null };
       return null;
     }
     dir = path.resolve(mount);
     auto = true;
   }
 
-  last = { dir: null, requested: dir, auto, linked: 0, error: null };
+  last = { dir: null, requested: dir, auto, files: 0, error: null };
 
   try {
     fs.mkdirSync(dir, { recursive: true });
@@ -124,40 +137,28 @@ function prepare(options = {}) {
     return null;
   }
 
-  let linked = 0;
+  let present = 0;
   for (const name of FILES) {
     const target = path.join(dir, name);
-    const link = path.join(root, name);
-
-    let stat = null;
+    if (fs.existsSync(target)) {
+      present += 1;
+      continue;
+    }
+    // Nothing in the folder yet: bring over a file from an earlier run, or from
+    // an install that still has links. Reading the code directory is allowed
+    // even when writing to it is not.
     try {
-      stat = fs.lstatSync(link);
-    } catch {}
-
-    try {
-      if (stat && stat.isSymbolicLink()) {
-        let real = null;
-        try {
-          real = fs.realpathSync(link);
-        } catch {}
-        if (real && path.resolve(real) === target) {
-          linked += 1;
-          continue;
-        }
-        fs.unlinkSync(link);
-      } else if (stat) {
-        // A real file from a previous run (or a fresh checkout): keep its
-        // contents by moving it in, unless the folder already has a newer copy.
-        if (fs.existsSync(target)) fs.unlinkSync(link);
-        else fs.renameSync(link, target);
-      }
-      fs.symlinkSync(target, link);
-      linked += 1;
+      const local = path.join(root, name);
+      const stat = fs.lstatSync(local);
+      if (stat.isSymbolicLink()) fs.copyFileSync(fs.realpathSync(local), target);
+      else if (stat.isFile()) fs.copyFileSync(local, target);
+      else continue;
+      present += 1;
     } catch (err) {
-      // The code directory can be read-only once the app runs as the folder's
-      // owner, which is worth reporting rather than only logging.
-      if (!last.error) last.error = `could not link ${name} (${err.message})`;
-      console.error(`State folder: could not link ${name} into ${dir} (${err.message}).`);
+      if (err && err.code !== "ENOENT") {
+        if (!last.error) last.error = `could not copy ${name} (${err.message})`;
+        console.error(`State folder: could not copy ${name} into ${dir} (${err.message}).`);
+      }
     }
   }
 
@@ -168,12 +169,12 @@ function prepare(options = {}) {
   }
 
   last.dir = dir;
-  last.linked = linked;
+  last.files = present;
   console.log(
     `State folder: ${dir}${auto ? " (mounted folder found without STATE_DIR)" : ""} ` +
-      `(${linked} file${linked === 1 ? "" : "s"} linked)`
+      `(${present} of ${FILES.length} state files there)`
   );
   return dir;
 }
 
-module.exports = { prepare, status, FILES };
+module.exports = { prepare, status, file, FILES };

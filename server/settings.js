@@ -10,7 +10,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeJson, realTarget } = require("./atomicWrite");
 
-const FILE = path.join(__dirname, "..", "settings.json");
+const FILE = require("./stateDir").file("settings.json");
 
 function read() {
   try {

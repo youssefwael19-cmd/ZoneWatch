@@ -31,6 +31,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const stateDir = require("./stateDir");
 
 const ROOT = process.env.STATE_ROOT
   ? path.resolve(process.env.STATE_ROOT)
@@ -90,13 +91,15 @@ function sleep(ms) {
 }
 
 function localPath(name) {
-  return path.join(ROOT, name);
+  // STATE_ROOT pins the folder by hand; otherwise this is what stateDir resolved
+  // at boot, which already includes a mounted folder found on its own.
+  return process.env.STATE_ROOT ? path.join(ROOT, name) : stateDir.file(name);
 }
 
 /**
- * The real file to write. With STATE_DIR the state files are symlinks into the
- * mounted folder, and renaming over the link itself would replace it with a
- * plain file on the disposable disk — so resolve the link first.
+ * The real file to write. Installs that predate stateDir.file() linked the state
+ * files into the mounted folder, and renaming over such a link would replace it
+ * with a plain file on the disposable disk — so resolve a link first.
  */
 function localFile(name) {
   const file = localPath(name);

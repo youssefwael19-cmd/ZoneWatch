@@ -19,7 +19,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeJson } = require("./atomicWrite");
 
-const FILE = path.join(__dirname, "..", "health.json");
+const FILE = require("./stateDir").file("health.json");
 const REALERT_MS = 30 * 60 * 1000;
 const CONFIRM_CYCLES = 2;
 

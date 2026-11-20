@@ -19,7 +19,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeJson } = require("./atomicWrite");
 
-const FILE = path.join(__dirname, "..", "signals.json");
+const FILE = require("./stateDir").file("signals.json");
 const MAX_HISTORY = 200;
 const EXPIRY_MS = 24 * 60 * 60 * 1000; // a day without resolution = expired
 

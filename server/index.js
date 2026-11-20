@@ -5,6 +5,11 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
+// Before every module that resolves a state file: with a mounted folder the
+// paths have to point into it from their first use, not once the server starts.
+const stateDirMod = require("./stateDir");
+stateDirMod.prepare();
+
 const market = require("./market");
 const zonesStore = require("./zones");
 const news = require("./news");
@@ -28,7 +33,6 @@ const learning = require("./learning");
 const marketclock = require("./marketclock");
 const feedwatch = require("./feedwatch");
 const healthMod = require("./health");
-const stateDirMod = require("./stateDir");
 const brainMod = require("./brain");
 const journal = require("./journal");
 const executor = require("./executor");
@@ -45,7 +49,7 @@ const dailyRecapMod = require("./dailyrecap");
 const websearchMod = require("./websearch");
 const paperReviewMod = require("./paperreview");
 const ivbSent = new Set();
-const HEARTBEAT_FILE = path.join(__dirname, "..", "heartbeat.json");
+const HEARTBEAT_FILE = require("./stateDir").file("heartbeat.json");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -2453,10 +2457,6 @@ app.post("/api/analyze-json", async (req, res) => {
  * ------------------------------------------------------------------ */
 
 async function start() {
-  // A host that rebuilds the code directory on every deploy needs the state
-  // files on a mounted folder. No STATE_DIR means they stay where they are.
-  stateDirMod.prepare();
-
   // Before anything reads a state file: on a host with no disk this is the step
   // that puts the real ledger back after a wipe. With STATE_STORE unset it
   // returns immediately and the local files are used as they are.
@@ -2479,13 +2479,7 @@ async function start() {
 
   app.listen(PORT, () => {
     const info = fullInfo();
-    const where = stateDirMod.status();
     console.log(`Zone Watch v4 running on port ${PORT}`);
-    console.log(
-      where.mode === "persistent"
-        ? `State folder: ${where.dir} (${where.linked} files linked)`
-        : `State folder: local files only${where.requested ? ` — ${where.requested} unavailable (${where.error})` : " — STATE_DIR is not set"}`
-    );
     console.log(
       "Instruments: " +
         info.instruments.map((i) => `${i.symbol} via ${i.provider} (${i.providerSymbol})`).join(", ")

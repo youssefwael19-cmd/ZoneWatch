@@ -26,7 +26,7 @@ const settings = require("./settings");
 const costsMod = require("./costs");
 const executor = require("./executor");
 
-const FILE = path.join(__dirname, "..", "shadow.json");
+const FILE = require("./stateDir").file("shadow.json");
 // The smallest size the paper books use. Fractional on purpose: the live paper
 // book sizes in the same steps, so the two are comparable, and at a small
 // balance a 0.01 floor would decide the risk instead of the percentage.

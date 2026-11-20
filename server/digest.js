@@ -11,7 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeJson } = require("./atomicWrite");
 
-const FILE = path.join(__dirname, "..", "digest.json");
+const FILE = require("./stateDir").file("digest.json");
 const SEND_HOUR_UTC = 21;
 
 function readState() {

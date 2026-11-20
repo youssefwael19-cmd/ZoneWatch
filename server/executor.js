@@ -36,7 +36,7 @@ const costsMod = require("./costs");
 const market = require("./market");
 const brokers = require("./brokers");
 
-const FILE = path.join(__dirname, "..", "executor.json");
+const FILE = require("./stateDir").file("executor.json");
 
 // Rough value of one unit of price for one lot, per instrument family. Used to
 // convert a stop distance into a position size. Exness contract sizes vary by

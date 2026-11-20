@@ -865,10 +865,12 @@ told to keep its files there, which is what `STATE_DIR` is for.
    branch. Deploy it as a full-stack app; Node is detected and `npm start` is the
    command it runs. The app already listens on the `PORT` the host provides.
 2. On the app's Settings tab, add a **storage path** of `/data`. That is the
-   whole change: at boot the app finds that folder on its own and the 18 state
-   files become links into it, anything already on the disposable disk is moved
-   in rather than lost. `STATE_DIR` still works if you would rather name the
-   folder yourself, but it is not needed for the usual path.
+   whole change: at boot the app finds that folder on its own and reads and
+   writes all 18 state files there, carrying over anything already on the
+   disposable disk rather than losing it. `STATE_DIR` still works if you would
+   rather name the folder yourself, but it is not needed for the usual path.
+   Nothing is written next to the code, which matters because a volume makes the
+   app run as the folder's owner and leaves `/app` read-only.
 3. Redeploy so the app starts with the folder mounted. Every push to that branch
    now rebuilds and keeps the ledger, the journal and the dashboard password.
 4. Open the HTTPS address it gives you. It asks for a dashboard password, which
@@ -878,9 +880,10 @@ told to keep its files there, which is what `STATE_DIR` is for.
 
 Without step 2 everything still works — until the first restart, when the app
 comes back with an empty ledger, settings at their defaults and no password. Two
-ways to tell it worked: the log says `State folder: /data (18 files linked)`, and
-`/api/health` carries a `state` block whose `mode` reads `persistent` with the
-folder and the link count, or `local` with the reason the folder was rejected.
+ways to tell it worked: the log says `State folder: /data (18 of 18 state files
+there)`, and `/api/health` carries a `state` block whose `mode` reads
+`persistent` with the folder and how many state files it holds, or `local` with
+the reason the folder was rejected.
 Check it after any change here rather than trusting the log alone.
 
 Two things I could not confirm from their public pages: whether the Free plan

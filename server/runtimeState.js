@@ -10,7 +10,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeJson } = require("./atomicWrite");
 
-const FILE = path.join(__dirname, "..", "state.json");
+const FILE = require("./stateDir").file("state.json");
 
 function load() {
   try {

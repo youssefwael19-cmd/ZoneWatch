@@ -16,7 +16,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeJson } = require("./atomicWrite");
 
-const FILE = path.join(__dirname, "..", "paperreview.json");
+const FILE = require("./stateDir").file("paperreview.json");
 const MIN_TRADES_TO_REVIEW = 5;
 const MIN_TRADES_TO_JUDGE = 20;
 
