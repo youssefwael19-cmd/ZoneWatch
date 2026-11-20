@@ -63,7 +63,9 @@ let last = { dir: null, requested: null, auto: false, linked: 0, error: null };
 
 function status() {
   return {
-    mode: last.dir ? "persistent" : "local",
+    // Half a set of links is not persistence: the files that lost their link are
+    // still on the disposable disk, so report it as local and say why.
+    mode: last.dir && last.linked === FILES.length ? "persistent" : "local",
     dir: last.dir,
     requested: last.requested,
     auto: last.auto,
@@ -152,6 +154,9 @@ function prepare(options = {}) {
       fs.symlinkSync(target, link);
       linked += 1;
     } catch (err) {
+      // The code directory can be read-only once the app runs as the folder's
+      // owner, which is worth reporting rather than only logging.
+      if (!last.error) last.error = `could not link ${name} (${err.message})`;
       console.error(`State folder: could not link ${name} into ${dir} (${err.message}).`);
     }
   }
