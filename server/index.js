@@ -890,9 +890,18 @@ async function buildSnapshot() {
   // longer offered there. The condition comes from the brain's own stored
   // reading, so this costs no extra candle requests; a market with no reading
   // is never blocked by it.
+  const brainRows = brainMod.summary().conditions || [];
   const chopSymbols = new Set(
-    (brainMod.summary().conditions || [])
-      .filter((c) => c.condition === "ranging-volatile")
+    brainRows.filter((c) => c.condition === "ranging-volatile").map((c) => c.symbol)
+  );
+  // ...unless that market has had a rule measured to make money in that exact
+  // tape. The rule was written when nothing was proven there; a proof is the
+  // one thing that should be able to lift it, and it is measured rather than
+  // argued. Borrowed proofs do not count: the neighbouring condition is a
+  // different pace, and this rule is about the pace.
+  const chopProven = new Set(
+    brainRows
+      .filter((c) => c.condition === "ranging-volatile" && c.champion)
       .map((c) => c.symbol)
   );
   // A proof in the neighbouring condition buys a half-size trade, never a free
@@ -1015,7 +1024,11 @@ async function buildSnapshot() {
     // 1:2 target needs the level to hold through noise that the app's own
     // measurements say is above normal — every one of the week's three losses
     // was exactly that trade.
-    if (signal.confidence === "scalp" && chopSymbols.has(signal.symbol)) {
+    if (
+      signal.confidence === "scalp" &&
+      chopSymbols.has(signal.symbol) &&
+      !chopProven.has(signal.symbol)
+    ) {
       const reason = "scalp setup refused in a ranging-volatile market";
       learning.noteSuppressed(signal, { reason });
       journal.record(signal, {
