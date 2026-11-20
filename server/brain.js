@@ -36,6 +36,9 @@ const MIN_EXPECTANCY = 0.05;
 const MIN_TSTAT = 1.5;
 const MIN_GOOD_FOLDS = 2;
 const RUN_GAP_MS = 30 * 60 * 1000;
+// A proof in the condition next door is real evidence, but it is not evidence
+// about this condition. It buys a half-size trade, never a full one.
+const ADJACENT_MULTIPLE = 0.5;
 const TTL_MS = 24 * 60 * 60 * 1000;
 
 const state = { running: false, lastRunAt: 0, lastSymbol: null, error: null };
@@ -262,6 +265,39 @@ async function currentCondition(symbol, candleSymbol) {
 }
 
 /**
+ * The condition one step away: the same trend character, the other
+ * volatility reading. Trending-quiet sits next to trending-volatile, and
+ * ranging-quiet next to ranging-volatile.
+ *
+ * Only the volatility axis is treated as adjacent on purpose. Whether a
+ * strategy is a breakout or a reversion play follows from whether the market
+ * trends, so borrowing a proof across the trend axis would be borrowing a
+ * different strategy's result. Hour to hour, quiet and volatile describe the
+ * pace of the same tape.
+ */
+function adjacentCondition(condition) {
+  const match = /^(trending|ranging)-(quiet|volatile)$/.exec(String(condition || ""));
+  if (!match) return null;
+  return `${match[1]}-${match[2] === "quiet" ? "volatile" : "quiet"}`;
+}
+
+/**
+ * Which champion, if any, covers this condition — exactly or next door.
+ *
+ * Returns { champion, adjacent, provenCondition } or null. Purity here keeps
+ * the gate's one interesting decision testable without candles or a network.
+ */
+function proofFor(result, condition) {
+  if (!result || !result.champions) return null;
+  const exact = result.champions[condition] || null;
+  if (exact) return { champion: exact, adjacent: false, provenCondition: condition };
+  const near = adjacentCondition(condition);
+  const borrowed = near ? result.champions[near] || null : null;
+  if (borrowed) return { champion: borrowed, adjacent: true, provenCondition: near };
+  return null;
+}
+
+/**
  * Should a trade signal for this market be allowed out?
  *
  * The rule: yes only if some strategy has been measured to make money in this
@@ -284,14 +320,38 @@ async function gate(symbol, candleSymbol) {
     };
   }
 
-  const champion = result.champions ? result.champions[condition] : null;
-  if (!champion) {
+  const proof = proofFor(result, condition);
+  if (!proof) {
     return {
       allowed: false,
       condition,
       fresh: now.fresh,
       reason: `no rule is proven for ${symbol} in a ${condition} market`,
       untested: false,
+    };
+  }
+  const champion = proof.champion;
+
+  // The next-door case: allowed, but at ADJACENT_MULTIPLE of the risk, and it
+  // says so, because a trade the settings did not size is a trade the owner
+  // should be able to see and override.
+  if (proof.adjacent) {
+    return {
+      allowed: true,
+      adjacent: true,
+      sizeMultiplier: ADJACENT_MULTIPLE,
+      condition,
+      provenCondition: proof.provenCondition,
+      fresh: now.fresh,
+      champion: {
+        family: champion.family,
+        name: champion.familyName,
+        n: champion.n,
+        expectancy: champion.expectancy,
+        tStat: champion.tStat,
+        outsideUsualCondition: Boolean(champion.notes),
+      },
+      reason: `nothing is proven for ${symbol} in a ${condition} market; ${champion.familyName} is proven in ${proof.provenCondition} (${champion.n} trades, ${champion.expectancy}R each, t=${champion.tStat}) — taken at half size`,
     };
   }
 
@@ -350,6 +410,8 @@ function summary() {
 module.exports = {
   maybeRun,
   gate,
+  proofFor,
+  adjacentCondition,
   currentCondition,
   runFor,
   summary,
@@ -357,4 +419,5 @@ module.exports = {
   MIN_TRADES,
   MIN_EXPECTANCY,
   MIN_TSTAT,
+  ADJACENT_MULTIPLE,
 };

@@ -895,9 +895,24 @@ async function buildSnapshot() {
       .filter((c) => c.condition === "ranging-volatile")
       .map((c) => c.symbol)
   );
+  // A proof in the neighbouring condition buys a half-size trade, never a free
+  // pass. The multiplier rides on the signal, so the executor sizes it down and
+  // the order records why — the owner can always see that a trade was cut in
+  // half and by which proof.
+  function noteAdjacentProof(target, verdict) {
+    if (!target || !verdict || !verdict.adjacent) return false;
+    if (!(Number(verdict.sizeMultiplier) > 0)) return false;
+    target.riskMultiplier = Number(verdict.sizeMultiplier);
+    target.adjacentProof = {
+      provenIn: verdict.provenCondition || null,
+      current: verdict.condition || null,
+    };
+    return true;
+  }
+
   // Returns the gate verdict, so callers can also journal the condition that
   // was in force when the decision was made.
-  const brainVerdict = async (symbol, setup, side) => {
+  const brainVerdict = async (symbol, setup, side, target) => {
     if (!brainGateOn) return { blocked: false, condition: null, reason: "gate off" };
     let verdict;
     try {
@@ -908,7 +923,10 @@ async function buildSnapshot() {
       learning.noteSuppressed({ symbol, side, confidence: setup }, { reason });
       return { blocked: true, condition: null, reason };
     }
-    if (verdict.allowed) return { blocked: false, condition: verdict.condition, verdict };
+    if (verdict.allowed) {
+      noteAdjacentProof(target, verdict);
+      return { blocked: false, condition: verdict.condition, verdict };
+    }
     brainHeld.push({ symbol, condition: verdict.condition, reason: verdict.reason });
     learning.noteSuppressed({ symbol, side, confidence: setup }, { reason: verdict.reason });
     return { blocked: true, condition: verdict.condition, reason: verdict.reason };
@@ -956,6 +974,7 @@ async function buildSnapshot() {
       }
       const gate = { blocked: false, condition: listed.condition || null, verdict: listed, overridden: true };
       if (listed.allowed) {
+        noteAdjacentProof(signal, listed);
         approvedSignals.push({ signal, gate });
         continue;
       }
@@ -1011,7 +1030,12 @@ async function buildSnapshot() {
 
     // Proven-rule gate. This is the strict one: it can silence the app
     // completely, which is the point — an unproven setup is not news.
-    const gateVerdict = await brainVerdict(signal.symbol, signal.confidence || "signal", signal.side);
+    const gateVerdict = await brainVerdict(
+      signal.symbol,
+      signal.confidence || "signal",
+      signal.side,
+      signal
+    );
     if (gateVerdict.blocked) {
       // Still written down: a held signal is evidence about the filter too.
       journal.record(signal, {

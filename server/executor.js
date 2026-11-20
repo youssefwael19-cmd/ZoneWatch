@@ -344,7 +344,12 @@ function stopFill(pos, price, config, state) {
 /** Position size from the risk budget and the real stop distance. */
 function sizeFor(signal, equityNow) {
   const config = settings.getExecConfig();
-  const riskPct = Number(config.riskPct ?? 0.5);
+  // A signal can ask for a smaller share of the risk budget than the settings
+  // allow — the brain gate does this when its proof comes from the neighbouring
+  // condition rather than this one. It can never ask for more.
+  const multiplier = Number(signal.riskMultiplier);
+  const scale = multiplier > 0 && multiplier <= 1 ? multiplier : 1;
+  const riskPct = Number(((Number(config.riskPct ?? 0.5)) * scale).toFixed(3));
   const riskAmount = (equityNow * riskPct) / 100;
 
   const entry = Number(signal.entry ?? signal.price);
@@ -392,7 +397,14 @@ function sizeFor(signal, equityNow) {
   const riskMoney = Number((stopDistance * perUnit * lots).toFixed(2));
   const riskPctActual = Number(((riskMoney / equityNow) * 100).toFixed(2));
 
-  return { lots, riskAmount: Number(riskAmount.toFixed(2)), riskMoney, riskPctActual, stopDistance };
+  return {
+    lots,
+    riskAmount: Number(riskAmount.toFixed(2)),
+    riskMoney,
+    riskPctActual,
+    riskMultiplier: scale,
+    stopDistance,
+  };
 }
 
 /**
@@ -471,6 +483,7 @@ async function place(signal, priceBySymbol) {
     target: Number(signal.target),
     riskMoney: size.riskMoney,
     riskPct: size.riskPctActual,
+    riskMultiplier: size.riskMultiplier,
     notional: marginInfo ? marginInfo.notional : null,
     margin: marginInfo ? marginInfo.margin : null,
     leverage: marginInfo ? marginInfo.leverage : null,
