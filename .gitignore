@@ -39,3 +39,6 @@ venv/
 *.log
 .DS_Store
 Thumbs.db
+
+# ProductEcho API key for the headless MCP client
+.productecho-key
