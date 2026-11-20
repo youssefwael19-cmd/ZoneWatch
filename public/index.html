@@ -259,6 +259,15 @@
     #beTable th,#beTable td{font-size:11px;padding:7px 4px}
     nav button{min-height:38px}
     .panel{overflow-wrap:anywhere}
+    /* The source pill lists every market ("XAUUSD:demo · NASDAQ:yahoo · …"),
+       which is far wider than a phone and used to push the whole page
+       sideways. On phones it wraps and clamps to two lines instead; the full
+       list stays available in Settings and in the pill's tooltip. */
+    #providerPill{
+      white-space:normal; overflow-wrap:anywhere; max-width:100%;
+      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+      overflow:hidden; border-radius:10px; font-size:10.5px; line-height:1.45;
+    }
   }
 </style>
 </head>
@@ -2734,7 +2743,11 @@ function paintProvider(p) {
   const srcs = (p.instruments || []).map(i => `${i.symbol}:${i.provider}`).join(" · ");
   document.getElementById("setProvider").textContent = srcs || p.provider;
   document.getElementById("setKeyState").textContent = p.hasKey ? "key saved " + (p.keyHint || "") : "no key saved";
-  if (srcs) document.getElementById("providerPill").textContent = srcs;
+  if (srcs) {
+    const pp = document.getElementById("providerPill");
+    pp.textContent = srcs;
+    pp.title = srcs;
+  }
   if (p.discord) paintDiscord(p.discord);
   paintTrading(p.trading);
   paintMarkets(p);
