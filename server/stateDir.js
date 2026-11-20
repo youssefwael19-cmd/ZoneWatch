@@ -51,13 +51,22 @@ const FILES = [
  * reports it; a silent fallback is exactly the failure that looks like "the
  * settings reset themselves".
  */
-let last = { dir: null, requested: null, linked: 0, error: null };
+/*
+ * Where a host usually mounts the folder that outlives a release. STATE_DIR
+ * always wins; these are only tried when it is unset, so a provider that mounts
+ * the folder at the usual path needs no environment variable at all -- and a
+ * machine without such a folder is untouched.
+ */
+const DEFAULT_MOUNTS = ["/data"];
+
+let last = { dir: null, requested: null, auto: false, linked: 0, error: null };
 
 function status() {
   return {
     mode: last.dir ? "persistent" : "local",
     dir: last.dir,
     requested: last.requested,
+    auto: last.auto,
     linked: last.linked,
     error: last.error,
   };
@@ -70,11 +79,28 @@ function status() {
  */
 function prepare(options = {}) {
   const dirOption = options.dir !== undefined ? options.dir : process.env.STATE_DIR;
-  last = { dir: null, requested: dirOption ? path.resolve(dirOption) : null, linked: 0, error: null };
-  if (!dirOption) return null;
-
-  const dir = path.resolve(dirOption);
   const root = options.root ? path.resolve(options.root) : path.join(__dirname, "..");
+
+  let dir = dirOption ? path.resolve(dirOption) : null;
+  let auto = false;
+  if (!dir) {
+    const candidates = options.candidates || DEFAULT_MOUNTS;
+    const mount = candidates.find((candidate) => {
+      try {
+        return fs.statSync(candidate).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+    if (!mount) {
+      last = { dir: null, requested: null, auto: false, linked: 0, error: null };
+      return null;
+    }
+    dir = path.resolve(mount);
+    auto = true;
+  }
+
+  last = { dir: null, requested: dir, auto, linked: 0, error: null };
 
   try {
     fs.mkdirSync(dir, { recursive: true });
@@ -138,7 +164,10 @@ function prepare(options = {}) {
 
   last.dir = dir;
   last.linked = linked;
-  console.log(`State folder: ${dir} (${linked} file${linked === 1 ? "" : "s"} linked)`);
+  console.log(
+    `State folder: ${dir}${auto ? " (mounted folder found without STATE_DIR)" : ""} ` +
+      `(${linked} file${linked === 1 ? "" : "s"} linked)`
+  );
   return dir;
 }
 

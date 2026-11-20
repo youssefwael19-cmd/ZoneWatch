@@ -30,10 +30,11 @@ const stateDir = require(path.join(ROOT, "server", "stateDir.js"));
 const { writeJson } = require(path.join(ROOT, "server", "atomicWrite.js"));
 
 try {
-  // Off unless asked for.
+  // Off unless asked for, or unless the host mounted a folder at the usual path.
   delete process.env.STATE_DIR;
-  check("no STATE_DIR does nothing", stateDir.prepare({ root: CODE }), null);
+  check("no STATE_DIR does nothing", stateDir.prepare({ root: CODE, candidates: [] }), null);
   check("and touches no files", fs.readdirSync(CODE), []);
+  check("and reports local files", stateDir.status().mode, "local");
 
   // A ledger already on the disposable disk must survive the switch.
   fs.writeFileSync(path.join(CODE, "executor.json"), JSON.stringify({ balance: 200, closed: [{ pnl: 4 }] }));
@@ -105,6 +106,14 @@ try {
   check("status reports the folder after a good boot", stateDir.status().mode, "persistent");
   check("status counts every state file", stateDir.status().linked, 18);
   check("status has nothing to complain about", stateDir.status().error, null);
+
+  // A host that mounts the folder at the usual path needs no variable at all.
+  const mounted = path.join(TMP, "mounted");
+  fs.mkdirSync(mounted, { recursive: true });
+  const autoDir = stateDir.prepare({ root: rebuilt, candidates: [path.join(TMP, "nope"), mounted] });
+  check("a mounted folder is found without STATE_DIR", path.resolve(autoDir), path.resolve(mounted));
+  check("and is reported as found, not configured", stateDir.status().auto, true);
+  check("and points the state files at it", fs.readlinkSync(path.join(rebuilt, "executor.json")), path.join(mounted, "executor.json"));
 
   // A folder that exists but cannot be written is no better than no folder.
   const blocked = path.join(TMP, "blocked");

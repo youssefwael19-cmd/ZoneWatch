@@ -864,20 +864,24 @@ told to keep its files there, which is what `STATE_DIR` is for.
 1. Sign up, then in the console connect your GitHub repository and pick the
    branch. Deploy it as a full-stack app; Node is detected and `npm start` is the
    command it runs. The app already listens on the `PORT` the host provides.
-2. On the app's Settings tab, add a **storage path** of `/data`.
-3. On the Environment tab, add `STATE_DIR` with the value `/data`. That is the
-   whole change: at boot the 18 state files become links into the folder, and
-   anything already on the disposable disk is moved in rather than lost.
-4. Redeploy so the app starts with the folder mounted. Every push to that branch
+2. On the app's Settings tab, add a **storage path** of `/data`. That is the
+   whole change: at boot the app finds that folder on its own and the 18 state
+   files become links into it, anything already on the disposable disk is moved
+   in rather than lost. `STATE_DIR` still works if you would rather name the
+   folder yourself, but it is not needed for the usual path.
+3. Redeploy so the app starts with the folder mounted. Every push to that branch
    now rebuilds and keeps the ledger, the journal and the dashboard password.
-5. Open the HTTPS address it gives you. It asks for a dashboard password, which
+4. Open the HTTPS address it gives you. It asks for a dashboard password, which
    is the usual first-run page; then set paper balance **200**, leverage **2000**,
    stop-out **100%**, risk **0.5%**, max positions **2**, plus your Twelve Data key
    and Discord webhook.
 
-Without step 3 everything still works — until the first restart, when the app
-comes back with an empty ledger. The app prints `State folder: /data (18 files
-linked)` in its log when it is set up correctly, and nothing when it is not.
+Without step 2 everything still works — until the first restart, when the app
+comes back with an empty ledger, settings at their defaults and no password. Two
+ways to tell it worked: the log says `State folder: /data (18 files linked)`, and
+`/api/health` carries a `state` block whose `mode` reads `persistent` with the
+folder and the link count, or `local` with the reason the folder was rejected.
+Check it after any change here rather than trusting the log alone.
 
 Two things I could not confirm from their public pages: whether the Free plan
 can use persistent storage (I found no plan restriction in the docs, and the
