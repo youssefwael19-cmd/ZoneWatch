@@ -2390,6 +2390,19 @@ function renderMarketClock(data) {
 
   if (!note) return;
 
+  // The daily loss limit is the most common reason no new signal appears. The
+  // server sent the reason all along but nothing printed it, so a stopped day
+  // looked exactly like a broken signal engine.
+  if (data.guard && data.guard.stop) {
+    const today = data.guard.state || {};
+    note.style.display = "";
+    note.innerHTML = `<span style="color:var(--bad);font-weight:600">Signals paused</span>` +
+      `<span style="flex:1">${data.guard.reason || data.blockReason || "the daily loss limit was hit"}` +
+      (today.totalR != null ? ` (${today.totalR}R today)` : "") +
+      `. No new alerts until tomorrow; zones and prices are still tracked.</span>`;
+    return;
+  }
+
   if (open && !held.length) {
     note.style.display = "none";
     return;
@@ -2706,6 +2719,7 @@ document.getElementById("loadExample").addEventListener("click", async () => {
 document.getElementById("loadLog").addEventListener("click", async () => {
   try {
     const d = await api("/api/read-log");
+    if (!d.ok) throw new Error(d.error || "No saved log yet");
     document.getElementById("jsonInput").value = JSON.stringify(d.data, null, 2);
   } catch (e) { document.getElementById("journalMsg").textContent = e.message; }
 });
