@@ -156,6 +156,7 @@ app.get("/setup", (req, res) => {
  */
 const AUTH_ONLY_PREFIXES = [
   "/api/settings",
+  "/api/guard",
   "/api/exec",
   "/api/websearch",
   "/api/recap",
@@ -243,6 +244,8 @@ const lastPriceBySymbol = new Map();
 const lastMoveAt = new Map();
 const feedWarned = new Map();
 let guardSentDay = null;
+// Set when you forgive today's closed signals from the dashboard.
+let guardResetAt = null;
 let stateRestored = false;
 
 // Markets that move together, editable in Settings. Alerting on both is one
@@ -295,6 +298,7 @@ function restoreState() {
   for (const z of s.hotZones || []) hotZones.add(z);
   for (const z of s.brokenZones || []) brokenZones.add(z);
   if (s.guardSentDay) guardSentDay = s.guardSentDay;
+  if (s.guardResetAt) guardResetAt = s.guardResetAt;
 
   // These used to live only in memory, so every restart re-sent the same IVB,
   // news and market-open messages. A restart must be invisible to Discord.
@@ -312,6 +316,7 @@ function persistState() {
     hotZones: [...hotZones].slice(-400),
     brokenZones: [...brokenZones].slice(-400),
     guardSentDay,
+    guardResetAt,
     ivbSent: [...ivbSent].slice(-200),
     announcedNews: Object.fromEntries([...announcedNews.entries()].slice(-200)),
     marketOpenState: marketOpenState.value,
@@ -580,6 +585,7 @@ async function buildSnapshot() {
     history: tracker.load().history,
     maxLosses: trading.dailyMaxLosses,
     maxLossR: trading.dailyMaxLossR,
+    ignoredBefore: guardResetAt,
   });
 
   const blockSignals = blackout.active || guard.stop;
@@ -2165,6 +2171,23 @@ app.delete("/api/zones/:id", (req, res) => {
   zonesStore.saveZones(next);
   lastStates.delete(req.params.id);
   res.json({ ok: true, deleted: req.params.id });
+});
+
+/*
+ * Forgive today's closed signals and let alerts resume.
+ *
+ * The guard counts every signal the tracker closed today, so one bad morning
+ * blocked the rest of the day with no way back short of waiting for UTC
+ * midnight. This only ignores those already-closed signals: anything that
+ * closes after this instant counts again, so the limit still works.
+ */
+app.post("/api/guard/reset", (req, res) => {
+  guardResetAt = new Date().toISOString();
+  // Let a genuine limit hit later today send its Discord warning again.
+  guardSentDay = null;
+  snapshotAt = 0;
+  persistState();
+  res.json({ ok: true, resetAt: guardResetAt });
 });
 
 app.get("/api/news", async (_req, res) => {

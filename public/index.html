@@ -2399,7 +2399,8 @@ function renderMarketClock(data) {
     note.innerHTML = `<span style="color:var(--bad);font-weight:600">Signals paused</span>` +
       `<span style="flex:1">${data.guard.reason || data.blockReason || "the daily loss limit was hit"}` +
       (today.totalR != null ? ` (${today.totalR}R today)` : "") +
-      `. No new alerts until tomorrow; zones and prices are still tracked.</span>`;
+      `. No new alerts until tomorrow; zones and prices are still tracked.</span>` +
+      `<button class="ghost tiny" id="guardResetBtn" title="Forgive today's closed signals and resume alerts">Reset today</button>`;
     return;
   }
 
@@ -3906,6 +3907,10 @@ function paintSettingsGate() {
   if (!gate || !body) return;
   gate.style.display = settingsUnlocked ? "none" : "";
   body.style.display = settingsUnlocked ? "" : "none";
+  // Signing out only means something with a session. A public reader has none,
+  // so the button used to sit in the header doing nothing visible.
+  const out = document.getElementById("signOutBtn");
+  if (out) out.style.display = settingsUnlocked ? "" : "none";
   const title = document.getElementById("gateTitle");
   const btn = document.getElementById("gateLogin");
   if (title) title.textContent = gateConfigured ? "Settings are locked" : "Create the dashboard password";
@@ -3957,6 +3962,23 @@ document.getElementById("gateLogin").addEventListener("click", async () => {
 
 document.getElementById("gatePass").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("gateLogin").click();
+});
+
+document.addEventListener("click", async (event) => {
+  if (!event.target || event.target.id !== "guardResetBtn") return;
+  const btn = event.target;
+  event.preventDefault();
+  btn.disabled = true;
+  btn.textContent = "Resetting…";
+  try {
+    await api("/api/guard/reset", { method: "POST", body: "{}" });
+    refreshWatch();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = /unlock|password/i.test(err.message)
+      ? "Unlock Settings to reset"
+      : "Could not reset";
+  }
 });
 
 document.addEventListener("click", (event) => {

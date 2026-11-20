@@ -10,7 +10,8 @@
  *   alerts  - zone alerts, broken zones, guard/feed/heartbeat warnings
  *   signals - signal entries, approach warnings, IVB breakouts
  *   results - wins, losses and expiries
- *   news    - economic calendar warnings and session open/close
+ *   news    - economic calendar warnings and session open/close (falls back
+ *             to the default webhook; save a dedicated one to separate it)
  *   daily   - the daily recap sent every day at 21:00 UTC
  *   recap   - the weekly recap and the weekly paper review
  *
@@ -40,20 +41,20 @@ function defaultWebhook() {
 /**
  * Webhook for a purpose, falling back to the default one.
  *
- * News is the exception: it is a separate channel by request, so it never
- * inherits the default webhook. If no news webhook is saved, news stays home
- * instead of landing in the alerts channel.
+ * Every purpose falls back, news included. Treating news as the exception meant
+ * a calendar warning failed with "no webhook saved" while a perfectly good
+ * default webhook sat unused — and the test button reported news as broken for
+ * no useful reason. A dedicated news webhook still wins when one is saved.
  */
 function webhookFor(channel) {
   if (!channel) return defaultWebhook();
   const channels = settings.getDiscordChannels();
-  if (channel === "news") return channels.news || "";
   return channels[channel] || defaultWebhook();
 }
 
 /** Whether a purpose falls back to the default webhook when it has none. */
-function usesDefault(channel) {
-  return channel !== "news";
+function usesDefault(_channel) {
+  return true;
 }
 
 function channelConfigured(channel) {
@@ -342,7 +343,10 @@ async function sendSignal(signal) {
               ? [
                   {
                     name: "Size",
-                    value: `${signal.sizing.lots} lots · risk ${signal.sizing.riskMoney} (${signal.sizing.riskPercent}%)`,
+                    value:
+                      `${signal.sizing.lots} lots · risk ${signal.sizing.riskActual ?? signal.sizing.riskMoney} ` +
+                      `(${signal.sizing.riskPercentActual ?? signal.sizing.riskPercent}%)` +
+                      (signal.sizing.warning ? `\n⚠️ ${signal.sizing.warning}` : ""),
                     inline: false,
                   },
                 ]

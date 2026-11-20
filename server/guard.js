@@ -12,10 +12,17 @@ function dayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
 
-function todayState(history, now = new Date()) {
+function todayState(history, now = new Date(), ignoredBefore) {
   const key = dayKey(now);
+  // A manual reset sets the instant the day's history stops counting. Signals
+  // that close after it are counted again, so resetting does not disable the
+  // guard — it only forgives what happened before the reset.
+  const since = ignoredBefore ? Date.parse(ignoredBefore) : NaN;
   const todays = (history || []).filter(
-    (h) => typeof h.closedAt === "string" && h.closedAt.slice(0, 10) === key
+    (h) =>
+      typeof h.closedAt === "string" &&
+      h.closedAt.slice(0, 10) === key &&
+      (!Number.isFinite(since) || Date.parse(h.closedAt) >= since)
   );
 
   const wins = todays.filter((h) => h.outcome === "win").length;
@@ -34,8 +41,8 @@ function todayState(history, now = new Date()) {
 /**
  * @returns {{ stop: boolean, reason: string|null, state: object }}
  */
-function check({ history, maxLosses, maxLossR, now = new Date() }) {
-  const state = todayState(history, now);
+function check({ history, maxLosses, maxLossR, ignoredBefore, now = new Date() }) {
+  const state = todayState(history, now, ignoredBefore);
   const lossLimit = Number(maxLosses);
   const rLimit = Number(maxLossR);
 

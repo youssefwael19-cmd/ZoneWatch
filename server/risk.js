@@ -37,15 +37,31 @@ function sizePosition({ accountSize, riskPercent, entry, stop, valuePerPointPerL
 
   const riskMoney = (balance * riskPct) / 100;
   const perLotRisk = distance * perPoint;
-  const lots = riskMoney / perLotRisk;
+  const rawLots = riskMoney / perLotRisk;
+  const lots = roundLots(rawLots);
+
+  // The broker's 0.01 floor can put more on the line than the percentage asked
+  // for: on a $200 account a gold stop that sizes to 0.0076 lots becomes 0.01,
+  // which is 31% more risk. Say what the trade actually risks, rather than
+  // repeating the number that was requested.
+  const riskActual = Number((perLotRisk * lots).toFixed(2));
+  const riskPercentActual = Number((((perLotRisk * lots) / balance) * 100).toFixed(2));
+  const warning =
+    lots > 0 && riskActual > Number(riskMoney.toFixed(2)) + 0.005
+      ? `the smallest tradable size (${lots} lots) risks ${riskActual} ` +
+        `(${riskPercentActual}%), not the ${Number(riskMoney.toFixed(2))} (${riskPct}%) asked for`
+      : null;
 
   return {
     accountSize: Number(balance.toFixed(2)),
     riskPercent: riskPct,
     riskMoney: Number(riskMoney.toFixed(2)),
+    riskActual,
+    riskPercentActual,
+    warning,
     stopDistance: Number(distance.toFixed(4)),
-    lots: roundLots(lots),
-    rawLots: Number(lots.toFixed(4)),
+    lots,
+    rawLots: Number(rawLots.toFixed(4)),
     perLotRisk: Number(perLotRisk.toFixed(2)),
   };
 }

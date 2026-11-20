@@ -31,6 +31,7 @@ const FILES = [
   "zones.json",
   "alerts.json",
   "signals.json",
+  "market-budget.json",
   "recap.json",
   "heartbeat.json",
   "state.json",

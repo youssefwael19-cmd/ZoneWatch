@@ -18,7 +18,10 @@
  * how fresh the number is instead of pretending it just updated.
  */
 
+const fs = require("fs");
 const settings = require("./settings");
+const stateDir = require("./stateDir");
+const { writeJson } = require("./atomicWrite");
 
 const DEFAULTS = {
   XAUUSD: {
@@ -153,7 +156,40 @@ const demoState = {
 };
 
 const priceCache = new Map();
+
+/*
+ * Twelve Data's free plan allows roughly 800 calls a day. This counter used to
+ * live only in memory, so every redeploy handed the app a fresh allowance and
+ * it could burn a second day's calls on the same day. It is written to the
+ * state folder now, tagged with the day it belongs to, so a restart continues
+ * where the last run stopped.
+ */
 const budget = { day: "", twelve: 0 };
+let budgetLoaded = false;
+
+function budgetFile() {
+  return stateDir.file("market-budget.json");
+}
+
+function loadBudget() {
+  if (budgetLoaded) return;
+  budgetLoaded = true;
+  try {
+    const raw = fs.readFileSync(budgetFile(), "utf-8").trim();
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (saved && typeof saved.day === "string" && Number.isFinite(Number(saved.twelve))) {
+      budget.day = saved.day;
+      budget.twelve = Number(saved.twelve);
+    }
+  } catch {}
+}
+
+function saveBudget() {
+  try {
+    writeJson(budgetFile(), { day: budget.day, twelve: budget.twelve }, 0);
+  } catch {}
+}
 
 function apiKey() {
   return process.env.TWELVE_DATA_API_KEY || settings.getKey() || "";
@@ -362,9 +398,11 @@ async function getQuote(symbol) {
 
   if (provider === "twelvedata") {
     const today = new Date().toISOString().slice(0, 10);
+    loadBudget();
     if (budget.day !== today) {
       budget.day = today;
       budget.twelve = 0;
+      saveBudget();
     }
     if (budget.twelve >= TWELVE_DAILY_LIMIT) {
       const message =
@@ -375,6 +413,7 @@ async function getQuote(symbol) {
       return errorQuote(symbol, provider, message);
     }
     budget.twelve++;
+    saveBudget();
   }
 
   let quote;
@@ -405,6 +444,7 @@ async function getQuotes(symbols) {
 }
 
 function providerInfo() {
+  loadBudget();
   const key = apiKey();
   const today = new Date().toISOString().slice(0, 10);
   return {
