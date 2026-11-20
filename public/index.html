@@ -246,6 +246,9 @@
     .panel{padding:14px}
     .proxrow{grid-template-columns:58px 48px 1fr; font-size:12px}
     .proxrow .badge{display:none}
+    /* The provider list is one long unbroken string; nowrap made it stretch the
+       whole page sideways on the Settings tab. */
+    #setProvider, #setKeyState { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
     /* Phones: wide tables scroll inside their panel instead of stretching the
        page sideways, and 16px inputs stop iOS zooming when one is focused. */
     input,select,textarea{font-size:16px}
@@ -775,6 +778,20 @@
       <div class="row">
         <button class="ghost" id="signOutPanel">Sign out of this device</button>
         <span class="hint">The password is checked on the server; nothing is stored in the phone beyond a signed cookie.</span>
+      </div>
+      <div class="fields" style="margin-top:14px">
+        <div>
+          <label>Current password</label>
+          <input id="pwCurrent" type="password" autocomplete="current-password" placeholder="the password you use now" />
+        </div>
+        <div>
+          <label>New password</label>
+          <input id="pwNext" type="password" autocomplete="new-password" placeholder="at least 8 characters" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost" id="pwSave">Change password</button>
+        <span class="hint" id="pwMsg"></span>
       </div>
       <div class="hint">Forgot the password? Remove the <span class="mono">auth</span> block from settings.json on the server and reload to set a new one.</div>
     </div>
@@ -3957,6 +3974,30 @@ document.getElementById("gateLogin").addEventListener("click", async () => {
     msg.textContent = unreachable
       ? "Cannot reach the server. Check the address bar reads zonewatch.productecho.com — an old bookmark or home-screen icon can point at a dead address — and that you are online."
       : "Failed: " + err.message;
+  }
+});
+
+document.getElementById("pwSave").addEventListener("click", async () => {
+  const cur = document.getElementById("pwCurrent");
+  const nxt = document.getElementById("pwNext");
+  const msg = document.getElementById("pwMsg");
+  const current = cur ? cur.value : "";
+  const next = nxt ? nxt.value : "";
+  if (!current || !next) { msg.textContent = "fill in both boxes"; return; }
+  if (next.length < 8) { msg.textContent = "use at least 8 characters"; return; }
+  msg.textContent = "Saving…";
+  try {
+    await api("/api/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ current, next })
+    });
+    cur.value = "";
+    nxt.value = "";
+    // The signing key is rotated, so every other device is signed out and this
+    // one has already been handed a fresh cookie by the response.
+    msg.textContent = "Password changed. Other devices are signed out.";
+  } catch (err) {
+    msg.textContent = err.message;
   }
 });
 

@@ -132,6 +132,55 @@ app.post("/api/auth/logout", (req, res) => {
   res.json({ ok: true });
 });
 
+/*
+ * Change the dashboard password from the Settings tab.
+ *
+ * The current password is required, so a borrowed phone that is already signed
+ * in cannot lock the owner out. A new password rotates the session signing key,
+ * which signs other devices out; this one gets a fresh cookie.
+ */
+app.post("/api/auth/password", (req, res) => {
+  const record = settings.getAuth();
+  if (!record) {
+    res.status(400).json({ ok: false, error: "no password is set yet" });
+    return;
+  }
+  // This route is registered before the locked-route middleware, so check the
+  // session here instead of relying on the prefix list.
+  if (!auth.isSignedIn(req, record)) {
+    res.status(401).json({
+      ok: false,
+      error: "unlock the Settings tab with the dashboard password",
+      locked: true,
+    });
+    return;
+  }
+  if (!auth.allowAttempt(req)) {
+    res.status(429).json({ ok: false, error: "too many attempts; wait a few minutes" });
+    return;
+  }
+  const current = String((req.body && req.body.current) || "");
+  const next = String((req.body && req.body.next) || "");
+  if (!auth.verifyPassword(current, record)) {
+    auth.noteFailure(req);
+    res.status(401).json({ ok: false, error: "the current password is not right" });
+    return;
+  }
+  if (next.length < auth.MIN_PASSWORD) {
+    res.status(400).json({ ok: false, error: `use at least ${auth.MIN_PASSWORD} characters` });
+    return;
+  }
+  if (next === current) {
+    res.status(400).json({ ok: false, error: "the new password is the same as the old one" });
+    return;
+  }
+  const fresh = auth.createAuth(next);
+  settings.setAuth(fresh);
+  auth.noteSuccess(req);
+  res.setHeader("set-cookie", auth.sessionCookie(req, fresh));
+  res.json({ ok: true });
+});
+
 app.get("/login", (req, res) => {
   if (auth.isSignedIn(req, settings.getAuth())) {
     res.redirect("/");
@@ -165,6 +214,7 @@ const AUTH_ONLY_PREFIXES = [
   "/api/discord/command",
 ];
 const AUTH_ONLY_PATHS = new Set([
+  "/api/auth/password",
   "/api/ai/status",
   "/api/ai/config",
   "/api/ai/test",
