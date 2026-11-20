@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const { execFile } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -35,6 +34,7 @@ const feedwatch = require("./feedwatch");
 const healthMod = require("./health");
 const brainMod = require("./brain");
 const journal = require("./journal");
+const tradelog = require("./tradelog");
 const executor = require("./executor");
 const shadowMod = require("./shadow");
 const tvMod = require("./tradingview");
@@ -2389,24 +2389,15 @@ app.post("/api/discord/interactions", async (req, res) => {
 
 /* ---- journal ---- */
 
-function runPython(script, arg) {
-  return new Promise((resolve, reject) => {
-    const python = process.platform === "win32" ? "python" : "python3";
-    const args = arg ? [script, arg] : [script];
-    execFile(
-      python,
-      args,
-      { cwd: WORKSPACE, maxBuffer: 12 * 1024 * 1024, timeout: 30000 },
-      (error, stdout, stderr) => {
-        if (error) return reject(new Error(stderr || error.message));
-        resolve({ stdout, stderr });
-      }
-    );
-  });
-}
+/*
+ * The user's own trade log lives where every other state file lives, so it
+ * survives a redeploy and can be written at all: the code directory is read-only
+ * on a host with a mounted volume.
+ */
+const TRADES_FILE = require("./stateDir").file("trades.json");
 
 app.get("/api/read-log", (_req, res) => {
-  const logPath = path.join(WORKSPACE, "trades.json");
+  const logPath = fs.existsSync(TRADES_FILE) ? TRADES_FILE : path.join(WORKSPACE, "trades.json");
   try {
     if (!fs.existsSync(logPath)) return res.json({ ok: false, error: "No trades.json found" });
     res.json({ ok: true, data: JSON.parse(fs.readFileSync(logPath, "utf-8")) });
@@ -2419,7 +2410,7 @@ app.post("/api/save-log", (req, res) => {
   const jsonText = req.body.jsonText;
   if (!jsonText) return res.status(400).json({ ok: false, error: "No JSON text provided" });
   try {
-    writeJson(path.join(WORKSPACE, "trades.json"), JSON.parse(jsonText), 2);
+    writeJson(TRADES_FILE, JSON.parse(jsonText), 2);
     res.json({ ok: true, message: "Saved trades.json" });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -2435,20 +2426,20 @@ app.get("/api/read-example", (_req, res) => {
   }
 });
 
-app.post("/api/analyze-json", async (req, res) => {
-  const jsonText = req.body.jsonText;
+app.post("/api/analyze-json", (req, res) => {
+  const jsonText = (req.body && req.body.jsonText) || "";
   if (!jsonText) return res.status(400).json({ ok: false, error: "No JSON text provided" });
-  const tmp = path.join(WORKSPACE, "_tmp_trades.json");
+  let raw;
   try {
-    fs.writeFileSync(tmp, jsonText, "utf-8");
-    const result = await runPython("analyze.py", tmp);
-    res.json({ ok: true, text: result.stdout.replace(/\n{3,}/g, "\n\n").trim() });
+    raw = JSON.parse(jsonText);
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  } finally {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {}
+    return res.status(400).json({ ok: false, error: `That is not valid JSON: ${err.message}` });
+  }
+  try {
+    // No temp file and no python3: both were impossible on the deployed image.
+    res.json({ ok: true, text: tradelog.review(raw, "pasted log") });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
   }
 });
 
