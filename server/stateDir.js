@@ -44,6 +44,25 @@ const FILES = [
   "newscalendar.json",
 ];
 
+/*
+ * What the last prepare() managed to do, so a host can be asked the one question
+ * that matters after a redeploy: did the ledger actually land on the mounted
+ * folder, or is this run writing to the disposable build directory? /api/health
+ * reports it; a silent fallback is exactly the failure that looks like "the
+ * settings reset themselves".
+ */
+let last = { dir: null, requested: null, linked: 0, error: null };
+
+function status() {
+  return {
+    mode: last.dir ? "persistent" : "local",
+    dir: last.dir,
+    requested: last.requested,
+    linked: last.linked,
+    error: last.error,
+  };
+}
+
 /**
  * Point each state file at `dir`. Safe to run on every boot: an existing link is
  * left alone, and a plain file from an earlier run is moved into the folder
@@ -51,6 +70,7 @@ const FILES = [
  */
 function prepare(options = {}) {
   const dirOption = options.dir !== undefined ? options.dir : process.env.STATE_DIR;
+  last = { dir: null, requested: dirOption ? path.resolve(dirOption) : null, linked: 0, error: null };
   if (!dirOption) return null;
 
   const dir = path.resolve(dirOption);
@@ -59,7 +79,20 @@ function prepare(options = {}) {
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch (err) {
+    last.error = err.message;
     console.error(`State folder: could not create ${dir} (${err.message}). Using local files.`);
+    return null;
+  }
+
+  // A folder that exists but cannot be written is no better than no folder, and
+  // mkdir succeeding does not prove the mount is there and ours.
+  try {
+    const probe = path.join(dir, ".write-probe");
+    fs.writeFileSync(probe, String(Date.now()));
+    fs.unlinkSync(probe);
+  } catch (err) {
+    last.error = `not writable (${err.message})`;
+    console.error(`State folder: ${dir} is not writable (${err.message}). Using local files.`);
     return null;
   }
 
@@ -79,7 +112,10 @@ function prepare(options = {}) {
         try {
           real = fs.realpathSync(link);
         } catch {}
-        if (real && path.resolve(real) === target) continue;
+        if (real && path.resolve(real) === target) {
+          linked += 1;
+          continue;
+        }
         fs.unlinkSync(link);
       } else if (stat) {
         // A real file from a previous run (or a fresh checkout): keep its
@@ -100,8 +136,10 @@ function prepare(options = {}) {
     } catch {}
   }
 
+  last.dir = dir;
+  last.linked = linked;
   console.log(`State folder: ${dir} (${linked} file${linked === 1 ? "" : "s"} linked)`);
   return dir;
 }
 
-module.exports = { prepare, FILES };
+module.exports = { prepare, status, FILES };

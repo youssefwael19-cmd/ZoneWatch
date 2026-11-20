@@ -28,6 +28,7 @@ const learning = require("./learning");
 const marketclock = require("./marketclock");
 const feedwatch = require("./feedwatch");
 const healthMod = require("./health");
+const stateDirMod = require("./stateDir");
 const brainMod = require("./brain");
 const journal = require("./journal");
 const executor = require("./executor");
@@ -1293,7 +1294,9 @@ async function getSnapshot({ maxAgeMs = 3000 } = {}) {
  * Routes
  * ------------------------------------------------------------------ */
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, version: "4.0.0", ...fullInfo() }));
+app.get("/api/health", (_req, res) =>
+  res.json({ ok: true, version: "4.0.0", state: stateDirMod.status(), ...fullInfo() })
+);
 app.get("/api/instruments", (_req, res) => res.json({ ok: true, ...fullInfo() }));
 
 app.get("/api/watch", async (_req, res) => {
@@ -2452,7 +2455,7 @@ app.post("/api/analyze-json", async (req, res) => {
 async function start() {
   // A host that rebuilds the code directory on every deploy needs the state
   // files on a mounted folder. No STATE_DIR means they stay where they are.
-  require("./stateDir").prepare();
+  stateDirMod.prepare();
 
   // Before anything reads a state file: on a host with no disk this is the step
   // that puts the real ledger back after a wipe. With STATE_STORE unset it
@@ -2476,7 +2479,13 @@ async function start() {
 
   app.listen(PORT, () => {
     const info = fullInfo();
+    const where = stateDirMod.status();
     console.log(`Zone Watch v4 running on port ${PORT}`);
+    console.log(
+      where.mode === "persistent"
+        ? `State folder: ${where.dir} (${where.linked} files linked)`
+        : `State folder: local files only${where.requested ? ` — ${where.requested} unavailable (${where.error})` : " — STATE_DIR is not set"}`
+    );
     console.log(
       "Instruments: " +
         info.instruments.map((i) => `${i.symbol} via ${i.provider} (${i.providerSymbol})`).join(", ")

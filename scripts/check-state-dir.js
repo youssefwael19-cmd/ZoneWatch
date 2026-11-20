@@ -98,6 +98,22 @@ try {
     JSON.parse(fs.readFileSync(path.join(rebuilt, "executor.json"), "utf8")).balance,
     612.5
   );
+
+  // The host has to be able to ask, from outside, whether the folder took
+  // effect -- a silent fallback is the failure that looks like settings resetting
+  // themselves after a redeploy.
+  check("status reports the folder after a good boot", stateDir.status().mode, "persistent");
+  check("status counts every state file", stateDir.status().linked, 18);
+  check("status has nothing to complain about", stateDir.status().error, null);
+
+  // A folder that exists but cannot be written is no better than no folder.
+  const blocked = path.join(TMP, "blocked");
+  fs.writeFileSync(blocked, "a file, not a folder");
+  const blockedResult = stateDir.prepare({ root: rebuilt, dir: path.join(blocked, "data") });
+  check("an unusable folder falls back to local files", blockedResult, null);
+  check("and is not reported as persistent", stateDir.status().mode, "local");
+  check("and says why", typeof stateDir.status().error, "string");
+  check("and linked nothing", stateDir.status().linked, 0);
 } catch (err) {
   console.log(`FAIL  harness threw: ${err.stack}`);
   failed++;
