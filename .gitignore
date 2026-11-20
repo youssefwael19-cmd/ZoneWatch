@@ -21,6 +21,7 @@ shadow.json
 digest.json
 newscalendar.json
 paperreview.json
+dailyrecap.json
 state-backup/
 
 # Secrets

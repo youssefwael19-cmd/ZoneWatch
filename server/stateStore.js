@@ -93,9 +93,24 @@ function localPath(name) {
   return path.join(ROOT, name);
 }
 
+/**
+ * The real file to write. With STATE_DIR the state files are symlinks into the
+ * mounted folder, and renaming over the link itself would replace it with a
+ * plain file on the disposable disk — so resolve the link first.
+ */
+function localFile(name) {
+  const file = localPath(name);
+  try {
+    if (fs.lstatSync(file).isSymbolicLink()) {
+      return path.resolve(path.dirname(file), fs.readlinkSync(file));
+    }
+  } catch {}
+  return file;
+}
+
 /** settings.json holds credentials, so every copy of it is owner-only. */
 function writeLocal(name, value) {
-  const file = localPath(name);
+  const file = localFile(name);
   const tmp = `${file}.${process.pid}.storetmp`;
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2), "utf-8");
   fs.renameSync(tmp, file);

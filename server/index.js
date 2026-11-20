@@ -2450,6 +2450,10 @@ app.post("/api/analyze-json", async (req, res) => {
  * ------------------------------------------------------------------ */
 
 async function start() {
+  // A host that rebuilds the code directory on every deploy needs the state
+  // files on a mounted folder. No STATE_DIR means they stay where they are.
+  require("./stateDir").prepare();
+
   // Before anything reads a state file: on a host with no disk this is the step
   // that puts the real ledger back after a wipe. With STATE_STORE unset it
   // returns immediately and the local files are used as they are.

@@ -846,6 +846,45 @@ What this does **not** fix, on Render Free specifically:
 If you have a host with real disk, leave all of this switched off — local files
 are faster and have no network in the path.
 
+### ProductEcho: free, no card, no SSH
+
+**ProductEcho** (<https://app.productecho.com/signup>) is the least work of all
+of them, and it is free forever with no card: an app runs there as an ordinary
+server process that stays up, gets a public HTTPS address on
+`your-app.productecho.com`, and is deployed from a GitHub repository — private
+ones included — with a rebuild on every push. The Free plan allows 10 apps, a
+1 GB PostgreSQL database, and unlimited build time on a shared cluster.
+
+Its one trap is the same one Render has, with a fix that Render does not: a
+full-stack app's own disk starts empty on every restart or redeploy. ProductEcho
+sells the fix as **persistent storage** — one folder, here `/data`, that survives
+restarts, redeploys and pauses, shared by every copy of the app. The app has to be
+told to keep its files there, which is what `STATE_DIR` is for.
+
+1. Sign up, then in the console connect your GitHub repository and pick the
+   branch. Deploy it as a full-stack app; Node is detected and `npm start` is the
+   command it runs. The app already listens on the `PORT` the host provides.
+2. On the app's Settings tab, add a **storage path** of `/data`.
+3. On the Environment tab, add `STATE_DIR` with the value `/data`. That is the
+   whole change: at boot the 18 state files become links into the folder, and
+   anything already on the disposable disk is moved in rather than lost.
+4. Redeploy so the app starts with the folder mounted. Every push to that branch
+   now rebuilds and keeps the ledger, the journal and the dashboard password.
+5. Open the HTTPS address it gives you. It asks for a dashboard password, which
+   is the usual first-run page; then set paper balance **200**, leverage **2000**,
+   stop-out **100%**, risk **0.5%**, max positions **2**, plus your Twelve Data key
+   and Discord webhook.
+
+Without step 3 everything still works — until the first restart, when the app
+comes back with an empty ledger. The app prints `State folder: /data (18 files
+linked)` in its log when it is set up correctly, and nothing when it is not.
+
+Two things I could not confirm from their public pages: whether the Free plan
+can use persistent storage (I found no plan restriction in the docs, and the
+console will say if it wants an upgrade — if it does, the Supabase store above is
+the way to keep the data instead), and how many copies of a single free app run,
+since two copies would both watch the same markets. Run one.
+
 ### If you have a card: Oracle Cloud Always Free
 
 A card buys something better — a real VM with root, 1 GB of RAM and no shared
