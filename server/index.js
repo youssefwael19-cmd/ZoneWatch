@@ -1028,6 +1028,24 @@ async function buildSnapshot() {
       continue;
     }
 
+    // A zone is only a setup once price has shown a reaction in it. Entering
+    // while the latest bar is still closing through the zone is how a level
+    // that is breaking gets bought — the losing EURUSD trade of 20 Nov was
+    // exactly that entry. Held rather than dropped, so the shadow book can
+    // price the wait.
+    if (signal.confirmation && signal.confirmation.ok === false) {
+      const reason = `waiting for a reaction: ${signal.confirmation.reason}`;
+      learning.noteSuppressed(signal, { reason });
+      journal.record(signal, {
+        status: "held",
+        heldReason: reason,
+        regime: null,
+        newsNear: Boolean(blackout && blackout.active),
+      });
+      gateHeldSignals.push({ signal, reason, condition: null });
+      continue;
+    }
+
     // Proven-rule gate. This is the strict one: it can silence the app
     // completely, which is the point — an unproven setup is not news.
     const gateVerdict = await brainVerdict(

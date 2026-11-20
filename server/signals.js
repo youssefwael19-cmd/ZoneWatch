@@ -83,6 +83,54 @@ function confluence({ side, htfTrend, dayBias, volExpanded, inSession, touches }
   return { score: checks.filter((c) => c.ok).length, total: checks.length, checks };
 }
 
+/**
+ * Has the zone actually been rejected, or is price just passing through it?
+ *
+ * The signal used to fire the moment price sat inside the zone, which cannot
+ * tell a bounce from a level breaking: on a demand zone, a bar still closing
+ * lower is price selling through the level, not defending it. Waiting for the
+ * latest bar to close with the trade is the smallest rule that separates the
+ * two, and it has no number to tune — a bar closing against the trade is
+ * evidence against it.
+ *
+ * The signal is still returned when this fails, marked unconfirmed, so the
+ * caller can hold it and the shadow book can measure what the wait was worth.
+ */
+function latestBarConfirmation({ side, candles }) {
+  if (!Array.isArray(candles) || !candles.length) {
+    return { ok: false, reason: "no bar to confirm the reaction" };
+  }
+
+  // Judge a bar that has finished. Reading the bar still forming makes the
+  // answer flicker with every tick, so the same zone would be refused and
+  // accepted again within one candle. The interval is read off the series
+  // instead of assumed, so this works for every timeframe the app fetches.
+  const last = candles[candles.length - 1];
+  const prev = candles.length > 1 ? candles[candles.length - 2] : null;
+  let bar = last;
+  if (prev && Number(last.t) && Number(prev.t)) {
+    const span = Number(last.t) - Number(prev.t);
+    if (span > 0 && Number(last.t) + span > Date.now()) bar = prev;
+  }
+
+  const open = Number(bar.o);
+  const close = Number(bar.c);
+  if (!Number.isFinite(open) || !Number.isFinite(close)) {
+    return { ok: false, reason: "no bar to confirm the reaction" };
+  }
+
+  const withTrade = side === "BUY" ? close > open : close < open;
+  return {
+    ok: withTrade,
+    open,
+    close,
+    barAt: Number(bar.t) || null,
+    reason: withTrade
+      ? "the last closed bar finished with the trade"
+      : "the last closed bar finished against the trade — the zone is being traded through, not reacted from",
+  };
+}
+
 function trendOf(bars) {
   if (!Array.isArray(bars) || bars.length < 55) return null;
   const closes = bars.map((b) => b.c);
@@ -137,6 +185,8 @@ function evaluateSignal({
 
   if (minConfluence > 0 && conf.score < minConfluence) return null;
 
+  const confirmation = latestBarConfirmation({ side, candles });
+
   const reasons = [];
   reasons.push(`Price is INSIDE ${zone.type} zone ${zone.low.toFixed(decimals)}–${zone.high.toFixed(decimals)}`);
   for (const c of conf.checks) {
@@ -150,6 +200,7 @@ function evaluateSignal({
   if (Number(zone.strength) >= 1.5) {
     reasons.push(`Zone formed from ${zone.strength}× ATR displacement`);
   }
+  reasons.push(confirmation.reason);
 
   // Structure used by the configuration that survived walk-forward testing:
   // stop placed half a zone-width beyond the far edge, target at 2R.
@@ -162,8 +213,11 @@ function evaluateSignal({
     symbol,
     side,
     confidence: "scalp",
-    score: 1,
-    maxScore: 1,
+    // The checklist result, not a placeholder: the dashboard shows this as
+    // "n/5 conditions", and the journal groups closed trades by it.
+    score: conf.score,
+    maxScore: conf.total,
+    confirmation,
     price,
     zone: { type: zone.type, low: zone.low, high: zone.high, label: zone.label, source: zone.source || "manual" },
     entry: Number(price.toFixed(decimals)),
@@ -232,6 +286,7 @@ function evaluateApproach({ symbol, price, zones, candles, decimals = 2, atrMult
 module.exports = {
   evaluateSignal,
   evaluateApproach,
+  latestBarConfirmation,
   trendOf,
   dailyBias,
   volatilityExpanded,
