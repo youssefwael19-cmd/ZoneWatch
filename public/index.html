@@ -3931,7 +3931,13 @@ document.getElementById("gateLogin").addEventListener("click", async () => {
     loadAuth();
     msg.textContent = "";
   } catch (err) {
-    msg.textContent = "Failed: " + err.message;
+    // A cached page from a dead address (an old bookmark or home-screen icon)
+    // throws "Failed to fetch" here. Say what that actually means instead of
+    // showing the browser's wording, which sounds like a bug in the app.
+    const unreachable = /failed to fetch|networkerror|load failed|network request failed/i.test(err.message || "");
+    msg.textContent = unreachable
+      ? "Cannot reach the server. Check the address bar reads zonewatch.productecho.com — an old bookmark or home-screen icon can point at a dead address — and that you are online."
+      : "Failed: " + err.message;
   }
 });
 
