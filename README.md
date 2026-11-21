@@ -682,10 +682,16 @@ Sign in, change the password in Settings if you want a different one, then remov
 the variable — while it is set it wins over the hash in `settings.json` on every
 start. It is a server variable rather than a reset form on the site precisely
 because anyone who found the URL could otherwise use a reset form to lock you out.
-`/api/auth/status` reports `envManaged: true` while it is in force, and the login
-page says so. If the variable cannot be saved (a read-only or full disk) the app
-still starts — locked, with the password already on file — and logs the reason
-instead of failing to boot.
+The variable's **value** is the password; its name, `ZW_DASH_PASSWORD`, is only
+the label. A value shorter than 8 characters is ignored (and logged).
+`/api/auth/status` reports `envManaged: true` while it is in force, and
+`envAdopted: true` only when that value really is the hash on file — that is the
+field to read when a password that "should" work is refused, because it separates
+a wrong string from a value the server never took. The value is also accepted at
+sign-in and as the current password when changing it, so recovery does not depend
+on the start-up write to `settings.json` succeeding. If that write fails anyway
+(a read-only or full disk) the app still starts — locked, with the password
+already on file — and logs the reason instead of failing to boot.
 
 On a host you can reach, the other way is to remove the `auth` object from
 `settings.json` (`~/zone-watch/settings.json` in Serv00's file manager or over SSH,

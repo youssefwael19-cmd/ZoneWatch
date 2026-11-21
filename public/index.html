@@ -4025,7 +4025,8 @@ function paintRecoveryHint() {
   el.style.display = show ? "" : "none";
   el.innerHTML = show
     ? "Signed out on this device. If you cannot get into Settings, set <code>ZW_DASH_PASSWORD</code> in this app's " +
-      "environment on ProductEcho, let it restart, and sign in with that password — <a href=\"/login\">sign in</a>."
+      "environment on ProductEcho, let it restart, and sign in with the value you gave it (the variable's name is " +
+      "not the password) — <a href=\"/login\">sign in</a>."
     : "";
 }
 

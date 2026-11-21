@@ -93,12 +93,18 @@ if (envPasswordAdopted) console.log("[auth] the server variable is now the dashb
 app.get("/api/auth/status", (req, res) => {
   const record = settings.getAuth();
   const expires = auth.sessionExpiry(req, record);
+  const envValue = auth.envPassword();
   res.json({
     ok: true,
     configured: Boolean(record),
     signedIn: auth.isSignedIn(req, record),
     expiresAt: expires ? new Date(expires).toISOString() : null,
-    envManaged: Boolean(auth.envPassword()),
+    envManaged: Boolean(envValue),
+    // Whether the variable really is the password on file. `envManaged` only
+    // says a value was supplied; this says the lock compares against it, which
+    // is what tells a locked-out owner whether they are typing the wrong string
+    // or the server never took the value.
+    envAdopted: Boolean(envValue) && auth.verifyPassword(envValue, record),
   });
 });
 
@@ -122,14 +128,19 @@ app.post("/api/auth/login", (req, res) => {
     res.status(429).json({ ok: false, error: "too many attempts; wait a few minutes" });
     return;
   }
-  const record = settings.getAuth();
+  const stored = settings.getAuth();
   const password = String((req.body && req.body.password) || "");
-  if (!auth.verifyPassword(password, record)) {
+  // The variable counts as a password too, so a failed adoption write or a
+  // missing restart cannot leave the owner with a form that keeps saying no.
+  if (!auth.verifyPassword(password, stored) && !auth.envAccepted(password)) {
     auth.noteFailure(req);
     res.status(401).json({ ok: false, error: "that password is not right" });
     return;
   }
   auth.noteSuccess(req);
+  // No record at all means every write to settings.json failed; sign this
+  // process in anyway rather than refuse the one password the server knows.
+  const record = stored || auth.createAuth(password);
   res.setHeader("set-cookie", auth.sessionCookie(req, record));
   res.json({ ok: true });
 });
@@ -168,7 +179,9 @@ app.post("/api/auth/password", (req, res) => {
   }
   const current = String((req.body && req.body.current) || "");
   const next = String((req.body && req.body.next) || "");
-  if (!auth.verifyPassword(current, record)) {
+  // Someone signed in on a long-lived cookie who has forgotten the old password
+  // can still replace it with the variable they control on the server.
+  if (!auth.verifyPassword(current, record) && !auth.envAccepted(current)) {
     auth.noteFailure(req);
     res.status(401).json({ ok: false, error: "the current password is not right" });
     return;

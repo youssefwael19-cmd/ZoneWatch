@@ -50,6 +50,29 @@ function envPassword() {
   return value.length >= MIN_PASSWORD ? value : "";
 }
 
+/** Constant-time string comparison, so a wrong guess cannot be timed. */
+function sameSecret(a, b) {
+  const left = crypto.createHash("sha256").update(String(a)).digest();
+  const right = crypto.createHash("sha256").update(String(b)).digest();
+  return crypto.timingSafeEqual(left, right);
+}
+
+/**
+ * Is `password` the value of `ZW_DASH_PASSWORD`? The variable is a password in
+ * its own right, not only a boot-time copy of one.
+ *
+ * Adoption rewrites settings.json on start-up, and that write can fail (a
+ * read-only disk) or never happen (the app was not restarted after the value
+ * was added). Treating the variable as an accepted credential means the way
+ * back in works on the first try instead of depending on a file write: whoever
+ * can set the server's environment is the owner.
+ */
+function envAccepted(password) {
+  const value = envPassword();
+  if (!value) return false;
+  return sameSecret(password, value);
+}
+
 /**
  * Adopt `ZW_DASH_PASSWORD` as the dashboard password, keeping the cookie-signing
  * secret so a restart does not sign every device out. Returns true when it wrote
@@ -254,7 +277,7 @@ function page({ mode, envManaged = false }) {
     setup
       ? "At least 8 characters. Nothing is stored in the phone; the password is checked on the server."
       : envManaged
-        ? "This password comes from <code>ZW_DASH_PASSWORD</code> on the server, so it survives restarts. Change it there."
+        ? "This password comes from <code>ZW_DASH_PASSWORD</code> on the server, so it survives restarts. Type the <em>value</em> you gave that variable — its name is not the password."
         : "Forgot it? Set <code>ZW_DASH_PASSWORD</code> on the server, or remove the <code>auth</code> block from settings.json, and restart."
   }</div>
 </main>
@@ -298,6 +321,7 @@ module.exports = {
   MIN_PASSWORD,
   createAuth,
   envPassword,
+  envAccepted,
   adoptEnvPassword,
   hashPassword,
   verifyPassword,
