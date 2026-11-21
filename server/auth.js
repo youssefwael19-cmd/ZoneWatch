@@ -67,7 +67,18 @@ function adoptEnvPassword(getAuth, setAuth, out = console) {
   if (current && verifyPassword(value, current)) return false;
   const fresh = createAuth(value);
   if (current && current.secret) fresh.secret = current.secret;
-  setAuth(fresh);
+  try {
+    setAuth(fresh);
+  } catch (err) {
+    // Starting beats recovering. A read-only disk, a full disk or a missing
+    // state folder must not stop the process from booting: the app comes up
+    // exactly as locked as it already was, and the reason is in the log rather
+    // than in a crash loop nobody can reach to read.
+    out.warn(
+      `[auth] could not save ZW_DASH_PASSWORD (${(err && err.message) || err}); starting locked with the password already on file`
+    );
+    return false;
+  }
   out.log(
     "[auth] dashboard password adopted from ZW_DASH_PASSWORD — change it in Settings (and unset the variable) when you are back in"
   );

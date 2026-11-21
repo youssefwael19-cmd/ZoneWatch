@@ -311,6 +311,7 @@
         Paper only — no real order is placed. The full account, shadow ledger and every setting live on the
         <strong>Trading</strong> tab.
       </div>
+      <div class="hint" id="recoverHint" style="display:none;margin-top:8px"></div>
     </div>
 
     <div class="panel">
@@ -1191,6 +1192,9 @@ let pollMs = 30000;
 let timer = null;
 // Settings are the only locked part of the page; the rest reads without a password.
 let settingsUnlocked = false;
+// Whether the server holds ZW_DASH_PASSWORD, which decides what the recovery
+// hint on the Watch tab can honestly offer.
+let authEnvManaged = false;
 let gateConfigured = false;
 let soundOn = true;
 let instruments = [];
@@ -3974,6 +3978,7 @@ async function loadAuth() {
     const d = await api("/api/auth/status");
     settingsUnlocked = Boolean(d.signedIn);
     gateConfigured = Boolean(d.configured);
+    authEnvManaged = Boolean(d.envManaged);
     const state = document.getElementById("authState");
     const expiry = document.getElementById("authExpiry");
     if (state) {
@@ -4004,6 +4009,24 @@ function paintSettingsGate() {
   const btn = document.getElementById("gateLogin");
   if (title) title.textContent = gateConfigured ? "Settings are locked" : "Create the dashboard password";
   if (btn) btn.textContent = gateConfigured ? "Unlock" : "Set password";
+  paintRecoveryHint();
+}
+
+/**
+ * One line on the front page for the state that actually needs the owner: the
+ * password is set, this device is signed out, and the server has no fallback
+ * variable. Without it, someone who has forgotten the password meets a form
+ * that keeps saying no and has no way to learn there is a way back in.
+ */
+function paintRecoveryHint() {
+  const el = document.getElementById("recoverHint");
+  if (!el) return;
+  const show = !settingsUnlocked && gateConfigured && !authEnvManaged;
+  el.style.display = show ? "" : "none";
+  el.innerHTML = show
+    ? "Signed out on this device. If you cannot get into Settings, set <code>ZW_DASH_PASSWORD</code> in this app's " +
+      "environment on ProductEcho, let it restart, and sign in with that password — <a href=\"/login\">sign in</a>."
+    : "";
 }
 
 /** Everything behind the password: settings, keys, execution, deliveries. */

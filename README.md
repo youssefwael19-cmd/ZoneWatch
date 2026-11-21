@@ -683,7 +683,9 @@ the variable — while it is set it wins over the hash in `settings.json` on eve
 start. It is a server variable rather than a reset form on the site precisely
 because anyone who found the URL could otherwise use a reset form to lock you out.
 `/api/auth/status` reports `envManaged: true` while it is in force, and the login
-page says so.
+page says so. If the variable cannot be saved (a read-only or full disk) the app
+still starts — locked, with the password already on file — and logs the reason
+instead of failing to boot.
 
 On a host you can reach, the other way is to remove the `auth` object from
 `settings.json` (`~/zone-watch/settings.json` in Serv00's file manager or over SSH,
