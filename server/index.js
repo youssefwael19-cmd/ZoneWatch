@@ -2034,8 +2034,11 @@ app.post("/api/brain/run", async (req, res) => {
  */
 app.get("/api/performance", (_req, res) => {
   const { history } = tracker.load();
+  // Break-even is a closed trade worth 0R: it belongs in the sample and in the
+  // equity curve, but not in the win count. Leaving it out would make the
+  // average R describe only the trades that moved, which is the flattering half.
   const closed = history
-    .filter((h) => h.outcome === "win" || h.outcome === "loss")
+    .filter((h) => h.outcome === "win" || h.outcome === "loss" || h.outcome === "breakeven")
     .sort((a, b) => new Date(a.closedAt) - new Date(b.closedAt));
 
   let running = 0;
@@ -2053,27 +2056,33 @@ app.get("/api/performance", (_req, res) => {
     maxDrawdown = Math.min(maxDrawdown, running - peak);
 
     if (r > 0) streak = 0;
-    else {
+    else if (r < 0) {
+      // A zero neither extends a losing run nor ends one: it is not a loss, and
+      // it is not the win that would have broken the run.
       streak += 1;
       worstStreak = Math.max(worstStreak, streak);
     }
 
     series.push({ at: t.closedAt, r, cumulative: Number(running.toFixed(3)), symbol: t.symbol });
 
-    const row = byMarket.get(t.symbol) || { symbol: t.symbol, n: 0, wins: 0, totalR: 0 };
+    const row = byMarket.get(t.symbol) || { symbol: t.symbol, n: 0, wins: 0, breakevens: 0, totalR: 0 };
     row.n += 1;
     if (r > 0) row.wins += 1;
+    if (r === 0) row.breakevens += 1;
     row.totalR += r;
     byMarket.set(t.symbol, row);
   }
 
   const wins = closed.filter((h) => h.outcome === "win").length;
+  const losses = closed.filter((h) => h.outcome === "loss").length;
+  const breakevens = closed.filter((h) => h.outcome === "breakeven").length;
 
   res.json({
     ok: true,
     count: closed.length,
     wins,
-    losses: closed.length - wins,
+    losses,
+    breakevens,
     winrate: closed.length ? Number(((wins / closed.length) * 100).toFixed(1)) : null,
     totalR: Number(running.toFixed(2)),
     avgR: closed.length ? Number((running / closed.length).toFixed(3)) : null,
@@ -2099,7 +2108,10 @@ app.get("/api/export/signals.csv", (_req, res) => {
   ];
   const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const rows = history
-    .filter((h) => h.outcome === "win" || h.outcome === "loss" || h.outcome === "expired")
+    .filter(
+      (h) =>
+        h.outcome === "win" || h.outcome === "loss" || h.outcome === "breakeven" || h.outcome === "expired"
+    )
     .map((h) =>
       [
         h.closedAt, h.symbol, h.side, h.confidence || "standard", h.entry, h.stop,

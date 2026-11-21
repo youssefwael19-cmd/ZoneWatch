@@ -275,11 +275,6 @@ function setIvbAlerts(enabled) {
 }
 
 /**
- * Markets allowed to send signals even though the lab blocked them. These
- * alerts are labelled unproven so the override is never mistaken for an edge.
- * Gold is here by request.
- */
-/**
  * Markets that move together. Only one alert is sent per group, so this is the
  * list that decides what counts as "the same trade".
  */
@@ -388,6 +383,18 @@ function setCorrelationGroups(groups) {
   return stored.correlationGroups;
 }
 
+/**
+ * Markets allowed to send signals even though the lab blocked them. These
+ * alerts are labelled unproven so the override is never mistaken for an edge.
+ * Gold is here by request.
+ *
+ * BTCUSD is deliberately not on the list. Its latest measurement was 974 unseen
+ * trades at 0.068R each with a t-statistic of 1.75 — below the 0.08R and 2 the
+ * app asks of itself, and that is before bitcoin's spread, the widest of the
+ * eleven markets. Adding it would put an UNPROVEN label on noise rather than a
+ * market the app believes in. It is one field in Settings if that call should
+ * change, and the zones for it still show on the dashboard either way.
+ */
 function getUnprovenMarkets() {
   const stored = read();
   const list = stored.unprovenMarkets;
