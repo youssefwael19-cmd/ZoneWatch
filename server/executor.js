@@ -1074,6 +1074,10 @@ async function reconcile(priceBySymbol) {
       pos.stopMismatch = mismatch;
       dirty = true;
     }
+    // A difference is not left standing as a warning. The app's stop is sent
+    // again here, so by the end of the cycle the account holds the protection
+    // the app reports instead of the two disagreeing until someone looks.
+    if (pos.stopMismatch && (await fixStop(state, pos, pos.stopMismatch, config))) dirty = true;
     stillOpen.push(pos);
   }
 
@@ -1261,6 +1265,73 @@ function stopCheck(pos, trade) {
   };
 }
 
+/**
+ * Make the broker's stop agree with the app's, instead of only reporting it.
+ *
+ * A stop behind the app's is the dangerous direction: the trade would close
+ * later than designed, at a worse price than the app's bookkeeping says. So the
+ * app's stop is sent to the broker again, and the position only counts as
+ * protected once the broker confirms holding it.
+ *
+ * A stop ahead of the app's is adopted rather than pushed back. The broker's
+ * number is the one that will actually close the trade, and replacing a tighter
+ * stop with a looser one would give away protection to make two records match.
+ *
+ * Returns true when it wrote anything to the position.
+ */
+async function fixStop(state, pos, mismatch, config) {
+  const at = new Date().toISOString();
+
+  if (mismatch.direction === "ahead") {
+    const previous = pos.stop;
+    pos.stop = mismatch.broker;
+    pos.trail = [
+      ...(pos.trail || []),
+      { at, stop: pos.stop, via: "broker", note: `broker held a tighter stop than ${previous}` },
+    ];
+    pos.stopMismatch = null;
+    pos.stopFixError = null;
+    pos.stopRepair = { at, action: "adopted", from: previous, to: pos.stop };
+    rememberRepair(state, { symbol: pos.symbol, side: pos.side, ...pos.stopRepair });
+    return true;
+  }
+
+  // Nothing to send when the app has no stop of its own: the trade was opened
+  // without one, so the mismatch stands and says so.
+  if (!Number.isFinite(Number(pos.stop)) || Number(pos.stop) <= 0) return false;
+
+  const sent = config.mode === "bridge" ? await modifyAtBridge(pos, pos.stop) : await modifyAtBroker(pos, pos.stop);
+  const repair = {
+    at,
+    action: "resent",
+    from: mismatch.broker,
+    to: Number(pos.stop),
+    ok: Boolean(sent.ok),
+    reason: sent.ok ? null : sent.reason,
+  };
+  pos.stopRepair = repair;
+  rememberRepair(state, { symbol: pos.symbol, side: pos.side, ...repair });
+
+  if (!sent.ok) {
+    // The broker still holds the old stop, so the mismatch stays on the panel —
+    // now with the reason the correction did not land. The next cycle tries
+    // again; nothing here records a stop the broker refused.
+    pos.stopFixError = sent.reason;
+    pos.stopMismatch = { ...mismatch, at, repairError: sent.reason };
+    return true;
+  }
+
+  pos.brokerStop = Number.isFinite(Number(sent.stop)) ? Number(sent.stop) : pos.stop;
+  pos.stopMismatch = null;
+  pos.stopFixError = null;
+  return true;
+}
+
+/** Today's stop corrections, for the recap: the last 50 are kept. */
+function rememberRepair(state, record) {
+  state.stopRepairs = [...(state.stopRepairs || []), record].slice(-50);
+}
+
 function rollDay(state) {
   const key = todayKey();
   if (state.dayKey !== key) {
@@ -1363,7 +1434,11 @@ function status(priceBySymbol) {
         direction: pos.stopMismatch.direction,
         checkedAt: pos.stopMismatch.at,
         trailError: pos.trailError || null,
+        repairError: pos.stopFixError || pos.stopMismatch.repairError || null,
       })),
+    // Stops the app re-sent to the broker today, so the daily recap can say the
+    // correction happened instead of only listing what is still wrong.
+    stopRepairs: (state.stopRepairs || []).filter((r) => String(r.at || "").slice(0, 10) === todayKey()),
     openCount: state.open.length,
     closedCount: state.closed.length,
     closed: state.closed.slice(-20).reverse(),

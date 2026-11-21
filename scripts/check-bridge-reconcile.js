@@ -51,6 +51,7 @@ let orderTicket = 50000;
 let positionTicket = 777000;
 let amendBodies = [];
 let closedCalls = 0;
+let rejectModify = false;
 
 const server = http.createServer((req, res) => {
   let raw = "";
@@ -94,6 +95,10 @@ const server = http.createServer((req, res) => {
     if (url.pathname === "/modify") {
       const body = JSON.parse(raw || "{}");
       amendBodies.push(body);
+      if (rejectModify) {
+        send(409, { ok: false, error: "trade disabled" });
+        return;
+      }
       const held = positions.find((p) => String(p.ticket) === String(body.ticket));
       if (!held) {
         send(404, { ok: false, error: "no open position for that ticket" });
@@ -236,37 +241,72 @@ async function run() {
   check("1.5R on a 10-point risk holds +1R", trailed.moved[0].stop, 2390);
   check("the app records the broker's stop", executor.status().open[0].stop, 2390);
 
-  console.log("--- the broker's stop drifts away from the app's ---");
+  console.log("--- the broker's stop drifts behind the app's, and the next pass re-sends it ---");
   // The trail was recorded at 2390, and then the terminal put its old stop back
-  // (or the amendment never landed). The app must not keep believing 2390.
+  // (or the amendment never landed). Reporting it is not enough: the app sends
+  // its own stop again so the account holds what the app reports.
   positions = [{ ticket: 777003, symbol: "XAUUSDm", side: "SELL", lots, entry: 2400, sl: 2410, tp: 2380, profit: 0 }];
+  amendBodies = [];
   rec = await executor.reconcile({ XAUUSD: 2385 });
   check("the drift does not close the position", rec.closed.length, 0);
-  check("one stop mismatch is reported", rec.stopDrift, 1);
+  check("one amendment goes out to fix it", amendBodies.length, 1);
+  check("it re-sends the app's stop, not the broker's", amendBodies[0].sl, 2390);
+  check("to the position ticket the terminal knows", String(amendBodies[0].ticket), "777003");
+  check("the terminal now holds the app's stop", positions[0].sl, 2390);
+  check("nothing is left mismatched", rec.stopDrift, 0);
+  check("the panel is clear", executor.status().stopDrift.length, 0);
+  check("the app records the broker's stop", executor.status().open[0].brokerStop, 2390);
+  let onDisk = JSON.parse(fs.readFileSync(ledgerFile, "utf8"));
+  check("the repair is written to the ledger", onDisk.open[0].stopRepair.to, 2390);
+  check("recorded as a re-send", onDisk.open[0].stopRepair.action, "resent");
+  check("today's repairs are reported", executor.status().stopRepairs.length, 1);
+
+  console.log("--- the broker refuses the re-send, so the mismatch stays and says why ---");
+  positions[0].sl = 2410;
+  rejectModify = true;
+  rec = await executor.reconcile({ XAUUSD: 2385 });
+  check("the mismatch survives a refused correction", rec.stopDrift, 1);
   let drift = executor.status().stopDrift;
   check("the panel lists it", drift.length, 1);
   check("the app's stop is kept", drift[0].appStop, 2390);
   check("the broker's stop is kept", drift[0].brokerStop, 2410);
   check("a looser broker stop reads as behind", drift[0].direction, "behind");
-  check("the open position carries the broker's stop", executor.status().open[0].brokerStop, 2410);
-  const onDisk = JSON.parse(fs.readFileSync(ledgerFile, "utf8"));
+  check("the refusal is reported, not swallowed", drift[0].repairError, "bridge refused: trade disabled");
+  onDisk = JSON.parse(fs.readFileSync(ledgerFile, "utf8"));
   check("the mismatch is written to the ledger, not just held in memory", onDisk.open[0].stopMismatch.broker, 2410);
+  check("so is the refusal", onDisk.open[0].stopFixError, "bridge refused: trade disabled");
+  check("the broker's stop was never overwritten in the app", executor.status().open[0].stop, 2390);
 
-  console.log("--- the broker takes the stop, and the mismatch clears ---");
-  positions[0].sl = 2390;
+  console.log("--- the next pass sends it again and the drift clears ---");
+  rejectModify = false;
+  amendBodies = [];
   rec = await executor.reconcile({ XAUUSD: 2385 });
-  check("no drift once the broker holds the app's stop", executor.status().stopDrift.length, 0);
+  check("the retry goes out", amendBodies.length, 1);
+  check("with the app's stop", amendBodies[0].sl, 2390);
+  check("no drift once the broker holds it", rec.stopDrift, 0);
   check("the broker's stop is still recorded", executor.status().open[0].brokerStop, 2390);
+  check("the failure is no longer reported", executor.status().open[0].stopFixError, null);
+
+  console.log("--- the broker holds a stop tighter than the app's ---");
+  // Someone tightened the stop in the terminal, or an amendment overshot. The
+  // broker is the one that will close the trade, so its stop is adopted; pushing
+  // the app's looser stop back would give away protection to match two records.
+  const before = amendBodies.length;
+  positions[0].sl = 2385;
+  rec = await executor.reconcile({ XAUUSD: 2385 });
+  check("a tighter broker stop is not a mismatch", rec.stopDrift, 0);
+  check("nothing is sent that would loosen it", amendBodies.length, before);
+  check("the app takes the broker's tighter stop", executor.status().open[0].stop, 2385);
+  check("and the adoption is recorded", executor.status().open[0].stopRepair.action, "adopted");
 
   console.log("--- a position the broker holds with no stop ---");
   positions[0].sl = 0;
+  amendBodies = [];
   await executor.reconcile({ XAUUSD: 2385 });
-  drift = executor.status().stopDrift;
-  check("a missing broker stop is a mismatch", drift.length, 1);
-  check("it reads as no stop at all", drift[0].direction, "none");
-  positions[0].sl = 2390;
-  await executor.reconcile({ XAUUSD: 2385 });
-  check("and clears when the stop is back", executor.status().stopDrift.length, 0);
+  check("the missing stop is sent again", amendBodies.length, 1);
+  check("with the app's stop", amendBodies[0].sl, 2385);
+  check("so the terminal holds a stop again", positions[0].sl, 2385);
+  check("and the panel is clear", executor.status().stopDrift.length, 0);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exitCode = 1;

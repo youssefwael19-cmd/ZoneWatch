@@ -145,6 +145,35 @@ function buildRecap({
     lines.push("Auto-trading: off.");
   }
 
+  // Stops that disagree between the app and the broker. This is the one thing
+  // that is invisible in the money: a trade can look protected in the app while
+  // the account holds nothing, so it belongs in the daily record next to the
+  // equity rather than only in the Trading panel.
+  const drift = Array.isArray(exec.stopDrift) ? exec.stopDrift : [];
+  const repairs = Array.isArray(exec.stopRepairs) ? exec.stopRepairs : [];
+  if (drift.length || repairs.length) {
+    const parts = [];
+    if (drift.length) {
+      const shown = drift.slice(0, 3).map((d) => {
+        const broker = d.brokerStop == null ? "no stop" : d.brokerStop;
+        return `${d.symbol} ${d.side} (broker ${broker}, app ${d.appStop})`;
+      });
+      const more = drift.length > shown.length ? ` +${drift.length - shown.length} more` : "";
+      parts.push(`**${drift.length} mismatch${drift.length === 1 ? "" : "es"}** — ${shown.join(", ")}${more}`);
+    }
+    const fixed = repairs.filter((r) => r.ok).length;
+    const refused = repairs.filter((r) => !r.ok);
+    if (fixed) parts.push(`${fixed} stop${fixed === 1 ? "" : "s"} re-sent to the broker`);
+    if (refused.length) {
+      parts.push(
+        `**${refused.length} re-send${refused.length === 1 ? "" : "s"} refused** (${refused[0].symbol || "?"}: ${
+          refused[0].reason || "no reason given"
+        })`
+      );
+    }
+    lines.push(`Stops: ${parts.join(" · ")}.`);
+  }
+
   // The experiment on the other side of the gate, in the same money and the
   // same units, so holding a setup back can be judged rather than assumed.
   if (shadow && shadow.enabled && (shadow.closedCount || shadow.openCount || shadow.refusedToday)) {

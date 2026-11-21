@@ -2252,8 +2252,8 @@ async function loadExec() {
           const gap = s.diff == null || s.brokerStop == null
             ? `the broker holds no stop, the app thinks it is ${s.appStop}`
             : `broker ${s.brokerStop}, app ${s.appStop} (${Math.abs(s.diff).toFixed(2)} ${s.direction === "behind" ? "behind — less protected" : "ahead of the app"})`;
-          return `<div><strong>Stop mismatch · ${s.symbol} ${s.side}</strong> — ${gap}${s.trailError ? ` · last trail attempt: ${s.trailError}` : ""}</div>`;
-        }).join("") + `<div class="hint" style="margin-top:2px">The broker owns the stop, so its number is the one that will close the trade. The app does not trail against a stop the broker does not hold; check the position in MetaTrader if this does not clear within a few cycles.</div></div>`;
+          return `<div><strong>Stop mismatch · ${s.symbol} ${s.side}</strong> — ${gap}${s.trailError ? ` · last trail attempt: ${s.trailError}` : ""}${s.repairError ? ` · re-sending the stop failed: ${s.repairError}` : ""}</div>`;
+        }).join("") + `<div class="hint" style="margin-top:2px">The broker owns the stop, so its number is the one that will close the trade. The app re-sends its own stop every cycle until the broker holds it, so this clears on its own; it stays here only while the broker keeps refusing, and the reason is shown above.</div></div>`;
       })()}`;
 
     const acct = d.account;

@@ -68,6 +68,16 @@ what the ledger books, so the journal and the account agree on both the exit and
 its price. `POST /order` answers with both the order ticket and the position
 ticket, because MT5 uses different numbers for the two.
 
+Every reconciliation pass also compares the stop the terminal holds for each
+position with the stop the app believes it set. When the terminal's stop is
+behind the app's (or the position has none at all), the app sends its own stop
+through `POST /modify` in the same pass, so a trail that did not land corrects
+itself within one cycle instead of leaving the account less protected than the
+panel says. When the terminal holds a *tighter* stop — someone changed it by
+hand — the app adopts the broker's number instead of loosening it, because the
+bridge refuses to move a stop the wrong way. A correction the bridge refuses
+stays on the Trading panel with the reason, and the next cycle sends it again.
+
 **Trailing stops** use `POST /modify` with `{"symbol": "XAUUSDm", "ticket": 123456,
 "sl": 2401.5, "tp": 2420.0}`, which sends `TRADE_ACTION_SLTP` for that position and
 answers with the stop the terminal actually holds. The app's stop ladder (break-even
