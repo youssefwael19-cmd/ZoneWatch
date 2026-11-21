@@ -40,6 +40,7 @@ const FILES = [
   "health.json",
   "brain.json",
   "journal.json",
+  "botjournal.json",
   "executor.json",
   "shadow.json",
   "digest.json",

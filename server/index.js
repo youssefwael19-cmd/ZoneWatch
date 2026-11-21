@@ -37,6 +37,7 @@ const gateMod = require("./gate");
 const explorationMod = require("./exploration");
 const ledgerMod = require("./ledger");
 const journal = require("./journal");
+const botNotes = require("./botjournal");
 const locksMod = require("./locks");
 const tradelog = require("./tradelog");
 const executor = require("./executor");
@@ -286,6 +287,19 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, "..", "public")));
+
+/**
+ * Journal a decision and let that market's bot say it in the Journal tab.
+ *
+ * The entry is the record; the post is the bot explaining itself in the same
+ * moment. A delivery upgrade (held → sent) goes through journal.record directly,
+ * because the decision was already explained and a second copy would be noise.
+ */
+function recordDecision(signal, extras = {}) {
+  const written = journal.record(signal, extras);
+  if (written) botNotes.decision(signal, extras);
+  return written;
+}
 
 function fullInfo() {
   return {
@@ -1120,7 +1134,7 @@ async function buildSnapshot() {
       const spreadPips = pipsMod.pipsOf(signal.symbol, thin.spreadUnits);
       const reason = `stop too tight: ${pipsMod.pipsLabel(signal.symbol, stopPips, { signed: false })} of risk against a ${pipsMod.pipsLabel(signal.symbol, spreadPips, { signed: false })} spread (needs ${thin.multiple}×)`;
       learning.noteSuppressed(signal, { reason });
-      journal.record(signal, {
+      recordDecision(signal, {
         status: "held",
         heldReason: reason,
         regime: null,
@@ -1141,7 +1155,7 @@ async function buildSnapshot() {
     ) {
       const reason = "scalp setup refused in a ranging-volatile market";
       learning.noteSuppressed(signal, { reason });
-      journal.record(signal, {
+      recordDecision(signal, {
         status: "held",
         heldReason: reason,
         regime: "ranging-volatile",
@@ -1159,7 +1173,7 @@ async function buildSnapshot() {
     if (signal.confirmation && signal.confirmation.ok === false) {
       const reason = `waiting for a reaction: ${signal.confirmation.reason}`;
       learning.noteSuppressed(signal, { reason });
-      journal.record(signal, {
+      recordDecision(signal, {
         status: "held",
         heldReason: reason,
         regime: null,
@@ -1179,7 +1193,7 @@ async function buildSnapshot() {
     );
     if (gateVerdict.blocked) {
       // Still written down: a held signal is evidence about the filter too.
-      journal.record(signal, {
+      recordDecision(signal, {
         status: "held",
         heldReason: gateVerdict.reason,
         regime: gateVerdict.condition,
@@ -1201,7 +1215,7 @@ async function buildSnapshot() {
   // fewer trades than the tracker had scored and the two could never agree.
   // Delivery below upgrades the same row to "sent".
   for (const { signal, gate } of [...approvedSignals, ...overrideSignals]) {
-    journal.record(signal, {
+    recordDecision(signal, {
       status: "approved",
       regime: gate.condition,
       newsNear: Boolean(blackout && blackout.active),
@@ -1455,7 +1469,10 @@ async function buildSnapshot() {
   // Delivery is over. Bookkeeping and orders are the app's own work, so they
   // run whether or not Discord is configured, and whether or not a message got
   // through: an alert the webhook rejected must not silently cancel a trade.
-  if (tracked.resolved && tracked.resolved.length) journal.resolve(tracked.resolved);
+  if (tracked.resolved && tracked.resolved.length) {
+    journal.resolve(tracked.resolved);
+    botNotes.results(tracked.resolved);
+  }
 
   try {
     // A real broker closes stops and targets itself, so ask it before assuming
@@ -1637,7 +1654,19 @@ function runWatchCycle() {
     inFlight = null;
     // The app keeps testing itself in the background, one market at a time.
     labMod.maybeRun(market.instrumentList()).catch(() => {});
-    brainMod.maybeRun(market.instrumentList()).catch(() => {});
+    // A finished measurement is worth a word from the bot that ran it: it is
+    // the one moment the app has something new to say about a market.
+    brainMod
+      .maybeRun(market.instrumentList())
+      .then((result) => {
+        if (result) botNotes.measured(result, {
+          trades: brainMod.MIN_TRADES,
+          expectancy: brainMod.MIN_EXPECTANCY,
+          tStat: brainMod.MIN_TSTAT,
+          folds: brainMod.MIN_GOOD_FOLDS,
+        });
+      })
+      .catch(() => {});
     // And keeps the Exness balance fresh, if the bridge is set up.
     executor.maybeSyncAccount().catch(() => {});
   });
@@ -2156,6 +2185,8 @@ app.get("/api/journal", (_req, res) => {
   res.json({
     ok: true,
     ...journal.summary(),
+    // What the bots themselves posted: measurements, refusals, sends, results.
+    notes: botNotes.list({ limit: 60 }),
     ledger: ledgerMod.reconcile({
       tracker: tracker.load(),
       journal: journal.readJournal().entries,
@@ -2180,6 +2211,12 @@ app.post("/api/brain/run", async (req, res) => {
   if (!inst) return res.status(400).json({ ok: false, error: "Unknown market." });
   const result = await brainMod.runFor(inst.symbol, inst.candleSymbol);
   if (!result) return res.status(500).json({ ok: false, error: brainMod.summary().error });
+  botNotes.measured(result, {
+    trades: brainMod.MIN_TRADES,
+    expectancy: brainMod.MIN_EXPECTANCY,
+    tStat: brainMod.MIN_TSTAT,
+    folds: brainMod.MIN_GOOD_FOLDS,
+  });
   res.json({ ok: true, symbol, condition: result.current.label, champions: result.champions });
 });
 
@@ -2278,38 +2315,6 @@ app.get("/api/export/signals.csv", (_req, res) => {
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", 'attachment; filename="zone-watch-signals.csv"');
   res.send([cols.join(","), ...rows].join("\n"));
-});
-
-/**
- * Every recorded signal, in the shape a chart tool needs.
- *
- * The CSV stays as it was (closed trades, for a spreadsheet). This is the same
- * journal in JSON with the open time and the levels, which scripts/make-pine-data.js
- * turns into the block the TradingView indicator draws.
- */
-app.get("/api/export/signals.json", (_req, res) => {
-  const { entries } = journal.readJournal();
-  res.json({
-    ok: true,
-    generatedAt: new Date().toISOString(),
-    signals: entries.map((e) => ({
-      id: e.id,
-      at: e.at,
-      symbol: e.symbol,
-      side: e.side,
-      setup: e.setup || null,
-      status: e.status,
-      entry: e.entry,
-      stop: e.stop,
-      target: e.target,
-      outcome: e.outcome || null,
-      rMultiple: e.rMultiple == null ? null : e.rMultiple,
-      closedAt: e.closedAt || null,
-      // A result recovered from the tracker has no recorded context. Marked so
-      // nobody reads it as a signal the app measured at the time.
-      backfilled: Boolean(e.features && e.features.backfilled),
-    })),
-  });
 });
 
 /** The learner: what the app has judged about its own past calls. */
@@ -2926,6 +2931,26 @@ async function start() {
     if (backfilled) console.log(`[journal] back-filled ${backfilled} tracked result(s) with no entry`);
   } catch (err) {
     console.error(`[journal] back-fill failed: ${err.message}`);
+  }
+
+  // Roll call: every market's bot says what it watches and where it stands,
+  // once per day. Built from today's measurements, so a restart cannot flood
+  // the journal, and a bot with no measurement says so instead of pretending.
+  try {
+    const posted = botNotes.rollCall({
+      instruments: market.instrumentList(),
+      rows: brainMod.summary().conditions || [],
+      history: tracker.load().history,
+      bar: {
+        trades: brainMod.MIN_TRADES,
+        expectancy: brainMod.MIN_EXPECTANCY,
+        tStat: brainMod.MIN_TSTAT,
+        folds: brainMod.MIN_GOOD_FOLDS,
+      },
+    });
+    if (posted) console.log(`[bots] ${posted} market bot(s) posted their roll call in the journal`);
+  } catch (err) {
+    console.error(`[bots] roll call failed: ${err.message}`);
   }
 
   app.listen(PORT, () => {

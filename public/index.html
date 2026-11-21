@@ -626,7 +626,19 @@
   <!-- JOURNAL -->
   <section id="tab-journal" style="display:none">
     <div class="panel">
+      <h2>The bots' journal</h2>
+      <p class="hint" style="margin:-6px 0 12px">
+        Each market has its own bot, and this is where it writes: the rules it re-measured, the signals it held back,
+        the ones it sent, and how they ended. Every post is generated from the app's own numbers at the moment it
+        happened — nothing here is typed by hand and nothing is simulated.
+      </p>
+      <div id="botFeed" style="display:grid;gap:10px">
+        <div class="hint">Loading…</div>
+      </div>
+    </div>
+    <div class="panel">
       <h2>Trade review</h2>
+      <p class="hint" style="margin:-6px 0 10px">Paste a trade log to score it by hand — separate from the bots' own record above.</p>
       <div class="row" style="margin-bottom:10px">
         <button class="ghost" id="loadExample">Load example log</button>
         <button class="ghost" id="loadLog">Load my trades.json</button>
@@ -1392,6 +1404,7 @@ document.querySelectorAll("nav button").forEach(b => {
     if (b.dataset.tab === "news") loadNews();
     if (b.dataset.tab === "zones") loadZones();
     if (b.dataset.tab === "risk") loadExec();
+    if (b.dataset.tab === "journal") loadBotFeed();
     if (b.dataset.tab === "learning") loadLearning();
     if (b.dataset.tab === "settings") {
       loadAuth().then(() => {
@@ -2325,6 +2338,63 @@ async function loadExec() {
     statusEl.textContent = "Could not load: " + err.message;
   }
   loadBreakEven();
+}
+
+function botEsc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+const BOT_KIND_LABEL = {
+  rollcall: "roll call",
+  measured: "measurement",
+  held: "held back",
+  approved: "signal",
+  result: "result",
+};
+
+function botPostColour(note) {
+  if (note.kind === "result") {
+    const outcome = note.meta && note.meta.outcome;
+    if (outcome === "win") return "#7ee0a8";
+    if (outcome === "loss") return "#ff8b8b";
+    return "#9fb2c4";
+  }
+  if (note.kind === "held") return "#ffd889";
+  if (note.kind === "approved") return "#7ff0cf";
+  if (note.kind === "measured") return "#9fc6ff";
+  return "#7f93a8";
+}
+
+/*
+ * What the bots posted, newest first. They write in their own journal file, so
+ * this feed is the record itself, not a summary of one.
+ */
+async function loadBotFeed() {
+  const feed = document.getElementById("botFeed");
+  if (!feed) return;
+  try {
+    const d = await api("/api/journal");
+    const notes = d.notes || [];
+    if (!notes.length) {
+      feed.innerHTML = `<div class="hint">No bot has posted yet. They write here when they re-measure a market, hold a signal back, send one, or close a trade.</div>`;
+      return;
+    }
+    feed.innerHTML = notes.map((note) => {
+      const colour = botPostColour(note);
+      const label = BOT_KIND_LABEL[note.kind] || note.kind;
+      const when = new Date(note.at).toLocaleString();
+      return `<div style="border-left:2px solid ${colour};padding:3px 0 3px 11px">
+        <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+          <strong style="font-size:12.5px">${botEsc(note.bot)}</strong>
+          <span class="pill" style="color:${colour};border-color:${colour}55;font-size:10.5px">${botEsc(label)}</span>
+          <span class="hint" style="margin-left:auto;font-size:11px">${botEsc(when)}</span>
+        </div>
+        <div style="font-size:13px;line-height:1.5;margin-top:4px">${botEsc(note.text)}</div>
+      </div>`;
+    }).join("");
+  } catch (err) {
+    feed.innerHTML = `<div class="hint">Could not load the bots' posts: ${botEsc(err.message)}</div>`;
+  }
 }
 
 async function loadJournal() {
