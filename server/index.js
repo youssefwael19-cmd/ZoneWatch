@@ -33,6 +33,9 @@ const marketclock = require("./marketclock");
 const feedwatch = require("./feedwatch");
 const healthMod = require("./health");
 const brainMod = require("./brain");
+const gateMod = require("./gate");
+const explorationMod = require("./exploration");
+const ledgerMod = require("./ledger");
 const journal = require("./journal");
 const locksMod = require("./locks");
 const tradelog = require("./tradelog");
@@ -298,6 +301,10 @@ function fullInfo() {
     correlationEnabled: settings.getCorrelationEnabled(),
     alertOnlyWhenOpen: settings.getAlertOnlyWhenOpen(),
     brainGate: settings.getBrainGate(),
+    // The two lanes a refused signal can still trade through, and how small
+    // they are. Shown in Settings so they are never invisible behaviour.
+    exploration: settings.getExecConfig().exploration,
+    liveEvidence: settings.getExecConfig().liveEvidence,
     statusPingHint: settings.getStatusPingHint(),
     statusPingConfigured: Boolean(settings.getStatusPingUrl()),
     statusPing: statusPingInfo(),
@@ -950,11 +957,43 @@ async function buildSnapshot() {
     if (!target || !verdict || !verdict.adjacent) return false;
     if (!(Number(verdict.sizeMultiplier) > 0)) return false;
     target.riskMultiplier = Number(verdict.sizeMultiplier);
+    target.proofSource = "adjacent";
     target.adjacentProof = {
       provenIn: verdict.provenCondition || null,
       current: verdict.condition || null,
     };
     return true;
+  }
+
+  // The market's own results, read once per cycle: whether a refusal may still
+  // be taken at half size because the live book is positive. Reading it here
+  // keeps a 10-second cycle from re-reading the tracker for every signal.
+  const execConfig = settings.getExecConfig();
+  const liveCfg = execConfig.liveEvidence || {};
+  const exploreCfg = execConfig.exploration || {};
+  const liveEvidence = liveCfg.enabled
+    ? learning.liveEvidenceAll(tracker.load().history, liveCfg)
+    : {};
+
+  /**
+   * Attach how a signal was allowed and at what fraction of the risk. The
+   * journal reads these, so a half-size or exploration trade is scored apart
+   * from a fully proven one instead of blending into one number.
+   */
+  function applyDecision(target, decision) {
+    if (!target || !decision) return;
+    const m = Number(decision.sizeMultiplier);
+    if (Number.isFinite(m) && m > 0 && m < 1) target.riskMultiplier = m;
+    if (decision.exploration) {
+      target.proofSource = "exploration";
+    } else if (decision.live) {
+      target.proofSource = "live";
+    } else if (decision.adjacent) {
+      noteAdjacentProof(target, decision);
+    } else {
+      target.proofSource = "proven";
+    }
+    if (decision.reason) target.proofReason = decision.reason;
   }
 
   // Returns the gate verdict, so callers can also journal the condition that
@@ -970,10 +1009,43 @@ async function buildSnapshot() {
       learning.noteSuppressed({ symbol, side, confidence: setup }, { reason });
       return { blocked: true, condition: null, reason };
     }
-    if (verdict.allowed) {
-      noteAdjacentProof(target, verdict);
-      return { blocked: false, condition: verdict.condition, verdict };
+
+    // Softening a refusal is only possible where a position can be sized. A
+    // zone-touch alert has nothing behind it, so it must not spend the budget.
+    const decision = gateMod.decide({
+      symbol,
+      verdict,
+      live: liveEvidence[symbol] || null,
+      explorationAllowed:
+        Boolean(target) &&
+        exploreCfg.enabled !== false &&
+        explorationMod.hasBudget({ symbol, config: exploreCfg }),
+      liveMultiple: liveCfg.sizeMultiplier,
+      exploreMultiple: exploreCfg.sizeMultiplier,
+    });
+
+    if (decision.allowed) {
+      if (decision.exploration) {
+        // Spent here, not after delivery: the same signal is re-evaluated every
+        // cycle, and a budget that is only spent on delivery would be spent over
+        // and over by the same setup.
+        const took = explorationMod.take({ symbol, condition: decision.condition, config: exploreCfg });
+        if (!took.ok) {
+          learning.noteSuppressed({ symbol, side, confidence: setup }, { reason: verdict.reason });
+          return { blocked: true, condition: verdict.condition, reason: verdict.reason };
+        }
+        brainHeld.push({ symbol, condition: verdict.condition, reason: decision.reason, exploration: true });
+      }
+      applyDecision(target, decision);
+      return {
+        blocked: false,
+        condition: decision.condition,
+        verdict: decision,
+        exploration: Boolean(decision.exploration),
+        live: Boolean(decision.live),
+      };
     }
+
     brainHeld.push({ symbol, condition: verdict.condition, reason: verdict.reason });
     learning.noteSuppressed({ symbol, side, confidence: setup }, { reason: verdict.reason });
     return { blocked: true, condition: verdict.condition, reason: verdict.reason };
@@ -1122,6 +1194,18 @@ async function buildSnapshot() {
     }
 
     approvedSignals.push({ signal, gate: gateVerdict });
+  }
+
+  // What the app decided, written down whether or not a channel is configured.
+  // Before this, only delivered signals reached the journal, so the panel showed
+  // fewer trades than the tracker had scored and the two could never agree.
+  // Delivery below upgrades the same row to "sent".
+  for (const { signal, gate } of [...approvedSignals, ...overrideSignals]) {
+    journal.record(signal, {
+      status: "approved",
+      regime: gate.condition,
+      newsNear: Boolean(blackout && blackout.active),
+    });
   }
 
   // Discord delivery
@@ -1748,7 +1832,20 @@ app.get("/api/money", (_req, res) => {
     killSwitch: Boolean(o.killSwitch),
     killReason: o.killReason || null,
   });
-  res.json({ ok: true, account: totals(executor.status(prices)), shadow: totals(shadowMod.status(prices)) });
+  const account = executor.status(prices);
+  const shadow = shadowMod.status(prices);
+  res.json({
+    ok: true,
+    account: totals(account),
+    shadow: totals(shadow),
+    // Which book is which, so the two balances are never read as one account.
+    books: ledgerMod.reconcile({
+      tracker: tracker.load(),
+      journal: journal.readJournal().entries,
+      executor: account,
+      shadow,
+    }).books,
+  });
 });
 
 app.get("/api/exec", (_req, res) => {
@@ -2049,8 +2146,24 @@ app.post("/api/tv/webhook", async (req, res) => {
   }
 });
 
-/** The journal: every alert, what it saw, and why it failed. */
-app.get("/api/journal", (_req, res) => res.json({ ok: true, ...journal.summary() }));
+/**
+ * The journal: every alert, what it saw, and why it failed — plus the ledger,
+ * which says how many trades each book holds so three panels cannot quietly
+ * disagree about the same week.
+ */
+app.get("/api/journal", (_req, res) => {
+  const prices = priceMapNow();
+  res.json({
+    ok: true,
+    ...journal.summary(),
+    ledger: ledgerMod.reconcile({
+      tracker: tracker.load(),
+      journal: journal.readJournal().entries,
+      executor: executor.status(prices),
+      shadow: shadowMod.status(prices),
+    }),
+  });
+});
 
 /** Read-only: what would the gate say about this market right now? */
 app.get("/api/brain/gate", async (req, res) => {
@@ -2771,6 +2884,16 @@ async function start() {
       `State store: supabase ${stateStore.TABLE} — restored ${restored.restored}, ` +
         `kept local ${restored.keptLocal}, pushed ${restored.pushed}`
     );
+  }
+
+  // Results the tracker scored before the journal existed have no entry, which
+  // is why the two panels reported different numbers of trades. Give them a row
+  // on start-up: a result with no recorded context is still a result.
+  try {
+    const backfilled = journal.backfill(tracker.load().history);
+    if (backfilled) console.log(`[journal] back-filled ${backfilled} tracked result(s) with no entry`);
+  } catch (err) {
+    console.error(`[journal] back-fill failed: ${err.message}`);
   }
 
   app.listen(PORT, () => {

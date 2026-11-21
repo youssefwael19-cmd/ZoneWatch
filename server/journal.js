@@ -63,7 +63,18 @@ function entryId(signal) {
 function record(signal, extras = {}) {
   const journal = readJournal();
   const id = entryId(signal);
-  if (journal.entries.some((e) => e.id === id && e.status === extras.status)) return null;
+  // One row per signal, not one per status: an approved signal is written down
+  // at the moment of the decision and upgraded to "sent" if a channel actually
+  // delivers it. Recording the second status as a new row counted the same trade
+  // twice and inflated every total on the page.
+  const existing = journal.entries.find((e) => e.id === id);
+  if (existing) {
+    if (existing.status === extras.status) return null;
+    existing.status = extras.status || existing.status;
+    existing.heldReason = extras.heldReason ?? null;
+    writeJournal(journal);
+    return existing;
+  }
 
   const checks = (signal.confluence && signal.confluence.checks) || [];
   const side = signal.side;
@@ -98,6 +109,11 @@ function record(signal, extras = {}) {
       // recorded so the two can be scored apart instead of blending into one
       // number that describes neither.
       riskMultiplier: riskMultiplierOf(signal),
+      // Why this one was allowed at a fraction of the risk: a proof from the next
+      // door, the market's own live book, or an exploration slot. A trade that
+      // exists to gather evidence must never be read later as a proven setup.
+      proofSource: signal.proofSource || null,
+      exploration: signal.proofSource === "exploration",
       provenCondition: (signal.adjacentProof && signal.adjacentProof.provenIn) || null,
       regime: extras.regime || null,
       atrPercentile: Number.isFinite(extras.atrPercentile) ? extras.atrPercentile : null,
@@ -132,6 +148,72 @@ function classifyFailure(resolved) {
 }
 
 /**
+ * The closest entry for the same market and direction inside a window.
+ * `want` chooses which side of the match to look at: an unresolved entry to
+ * resolve, or an already-resolved one to recognise (so a back-fill does not
+ * write a second row for a result that is already recorded under another id).
+ */
+const MATCH_WINDOW_MS = 15 * 60 * 1000;
+function nearestEntry(entries, r, want = "open") {
+  const at = new Date(r.openedAt || r.at || 0).getTime();
+  let best = null;
+  let bestGap = Infinity;
+  for (const e of entries) {
+    if (want === "open" && e.outcome != null) continue;
+    if (want === "resolved" && e.outcome == null) continue;
+    if (e.symbol !== r.symbol || e.side !== r.side) continue;
+    const gap = Math.abs(new Date(e.at || 0).getTime() - at);
+    if (gap <= MATCH_WINDOW_MS && gap < bestGap) {
+      best = e;
+      bestGap = gap;
+    }
+  }
+  return best;
+}
+
+/**
+ * Give a home to results the tracker scored before any journal entry existed.
+ *
+ * The first tracked signals predate the journal, and their results were only
+ * ever in signals.json. Leaving them out means the dashboard shows fewer trades
+ * than happened; inventing their features would be worse. They are written down
+ * as what they are — a tracked result with no recorded context.
+ */
+function backfill(resolvedSignals) {
+  const journal = readJournal();
+  let added = 0;
+  for (const r of resolvedSignals || []) {
+    if (!r || r.outcome == null) continue;
+    const known =
+      journal.entries.some((e) => e.id === r.id) ||
+      nearestEntry(journal.entries, r, "open") != null ||
+      nearestEntry(journal.entries, r, "resolved") != null;
+    if (known) continue;
+    journal.entries.push({
+      id: r.id,
+      at: r.openedAt || r.closedAt || new Date().toISOString(),
+      symbol: r.symbol,
+      side: r.side,
+      setup: r.confidence || "standard",
+      status: "sent",
+      heldReason: null,
+      entry: r.entry ?? null,
+      stop: r.stop ?? null,
+      target: r.target ?? null,
+      features: { backfilled: true },
+      outcome: r.outcome,
+      rMultiple: Number(r.rMultiple) || 0,
+      failureReason: r.outcome === "loss" ? "clean_stop" : null,
+      closedAt: r.closedAt || null,
+      heldMinutes: r.heldMinutes ?? null,
+    });
+    added++;
+  }
+  if (added) writeJournal(journal);
+  return added;
+}
+
+/**
  * Attach the result to its journal entry. Called when a tracked signal closes.
  * Ids match the tracker's, so no lookup table is needed.
  */
@@ -140,7 +222,15 @@ function resolve(resolvedSignals) {
   let changed = 0;
 
   for (const r of resolvedSignals) {
-    const entry = journal.entries.find((e) => e.id === r.id && e.outcome == null);
+    // Match on the id the tracker and the journal share. When the id misses —
+    // zone prices rounded differently when the entry was written, or the
+    // tracker was holding a signal from before the journal existed — fall back
+    // to the same market and direction opening at the same moment. Without the
+    // fallback the result closes in the tracker and never lands here, which is
+    // how the two panels came to disagree.
+    const entry =
+      journal.entries.find((e) => e.id === r.id && e.outcome == null) ||
+      nearestEntry(journal.entries, r, "open");
     if (!entry) continue;
     entry.outcome = r.outcome;
     entry.rMultiple = r.rMultiple;
@@ -202,9 +292,16 @@ function summary() {
 
   return {
     logged: entries.length,
+    // "approved" is a decision that no channel delivered; "sent" is one that
+    // left the building. Both are signals the app meant to trade.
+    delivered: entries.filter((e) => e.status === "sent").length,
     sent: sent.length,
     held: entries.length - sent.length,
     closed: closed.length,
+    // Results that belong to held-back signals: counted, but never mixed into
+    // the delivered record, because the owner was never sent those trades.
+    heldResolved: entries.filter((e) => e.status === "held" && e.outcome != null && e.outcome !== "expired")
+      .length,
     open: sent.filter((e) => e.outcome == null).length,
     wins,
     losses: closed.filter((e) => e.outcome === "loss").length,
@@ -240,11 +337,15 @@ function summary() {
     byCondition: bucket(closed, (e) => e.features.regime),
     // Did the half-size trades behave like half-size trades should? Entries
     // logged before the multiplier existed were full size, hence the default.
-    bySize: bucket(closed, (e) =>
-      Number(e.features.riskMultiplier) > 0 && Number(e.features.riskMultiplier) < 1
-        ? "half size (proof from the next-door condition)"
-        : "full size"
-    ),
+    bySize: bucket(closed, (e) => {
+      const source = e.features.proofSource;
+      if (source === "exploration") return "exploration size (unproven, gathering evidence)";
+      if (source === "live") return "half size (market's own live book)";
+      if (source === "adjacent") return "half size (proof from the next-door condition)";
+      return Number(e.features.riskMultiplier) > 0 && Number(e.features.riskMultiplier) < 1
+        ? "reduced size (reason not recorded)"
+        : "full size";
+    }),
     byMarket: bucket(closed, (e) => e.symbol),
     recent: [...entries].slice(-8).reverse(),
     note:
@@ -252,4 +353,4 @@ function summary() {
   };
 }
 
-module.exports = { record, resolve, summary, classifyFailure, readJournal };
+module.exports = { record, resolve, backfill, summary, classifyFailure, readJournal };

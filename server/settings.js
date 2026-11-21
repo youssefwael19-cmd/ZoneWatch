@@ -617,6 +617,11 @@ const EXEC_DEFAULTS = {
   // an account id and token are filled in.
   direct: { provider: "oanda", environment: "practice", accountId: "", token: "" },
   requireGate: true,
+  // The two ways a refused signal can still trade, and how small it must be.
+  // Exploration exists so an unproven market produces outcomes at all; live
+  // evidence is the market's own results earning half size. Neither is proof.
+  exploration: { enabled: true, perDay: 3, perSymbolPerDay: 1, sizeMultiplier: 0.25 },
+  liveEvidence: { enabled: true, minTrades: 20, minExpectancy: 0.05, minTStat: 1.5, sizeMultiplier: 0.5 },
   // TradingView can only send alerts, so these settings describe the receiver.
   // requireGate stays true by default: an alert from outside the app has not
   // been measured by the brain, and should not silently skip it.
@@ -643,6 +648,8 @@ function getExecConfig() {
     symbolOverrides: { ...EXEC_DEFAULTS.symbolOverrides, ...(exec.symbolOverrides || {}) },
     tv: { ...EXEC_DEFAULTS.tv, ...(exec.tv || {}) },
     direct: { ...EXEC_DEFAULTS.direct, ...(exec.direct || {}) },
+    exploration: { ...EXEC_DEFAULTS.exploration, ...(exec.exploration || {}) },
+    liveEvidence: { ...EXEC_DEFAULTS.liveEvidence, ...(exec.liveEvidence || {}) },
     costs: {
       ...EXEC_DEFAULTS.costs,
       ...(exec.costs || {}),
@@ -683,6 +690,37 @@ function setExecConfig(patch = {}) {
     next.stopOutPct = Math.round(clampNumber(patch.stopOutPct, 0, 100, current.stopOutPct));
   }
   if (patch.requireGate !== undefined) next.requireGate = Boolean(patch.requireGate);
+  if (patch.exploration && typeof patch.exploration === "object") {
+    const e = { ...next.exploration };
+    if (patch.exploration.enabled !== undefined) e.enabled = Boolean(patch.exploration.enabled);
+    if (patch.exploration.perDay !== undefined) {
+      e.perDay = Math.round(clampNumber(patch.exploration.perDay, 0, 12, e.perDay));
+    }
+    if (patch.exploration.perSymbolPerDay !== undefined) {
+      e.perSymbolPerDay = Math.round(clampNumber(patch.exploration.perSymbolPerDay, 0, 4, e.perSymbolPerDay));
+    }
+    if (patch.exploration.sizeMultiplier !== undefined) {
+      e.sizeMultiplier = clampNumber(patch.exploration.sizeMultiplier, 0.05, 0.5, e.sizeMultiplier);
+    }
+    next.exploration = e;
+  }
+  if (patch.liveEvidence && typeof patch.liveEvidence === "object") {
+    const l = { ...next.liveEvidence };
+    if (patch.liveEvidence.enabled !== undefined) l.enabled = Boolean(patch.liveEvidence.enabled);
+    if (patch.liveEvidence.minTrades !== undefined) {
+      l.minTrades = Math.round(clampNumber(patch.liveEvidence.minTrades, 10, 200, l.minTrades));
+    }
+    if (patch.liveEvidence.minExpectancy !== undefined) {
+      l.minExpectancy = clampNumber(patch.liveEvidence.minExpectancy, 0, 1, l.minExpectancy);
+    }
+    if (patch.liveEvidence.minTStat !== undefined) {
+      l.minTStat = clampNumber(patch.liveEvidence.minTStat, 0, 5, l.minTStat);
+    }
+    if (patch.liveEvidence.sizeMultiplier !== undefined) {
+      l.sizeMultiplier = clampNumber(patch.liveEvidence.sizeMultiplier, 0.05, 1, l.sizeMultiplier);
+    }
+    next.liveEvidence = l;
+  }
   if (patch.symbolOverrides && typeof patch.symbolOverrides === "object") {
     for (const [k, v] of Object.entries(patch.symbolOverrides)) {
       if (typeof v === "string" && v.trim()) next.symbolOverrides[k] = v.trim().slice(0, 40);

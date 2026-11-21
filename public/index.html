@@ -1019,6 +1019,23 @@
         money in this market, in the kind of market it is right now — it will often mean silence, which is the intent. Everything
         withheld appears under <strong>Held back</strong> in the Learning tab with its reason. Turn it off to get every setup again.
       </div>
+      <label class="row" style="margin-top:14px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="exploreBox" style="width:auto;margin-right:8px" checked />
+        Let an unproven market take a few small trades to gather evidence
+      </label>
+      <div class="hint">
+        When the gate refuses everything for a market, nothing is measured and nothing ever becomes proven. This allows up to
+        <strong>3 tiny trades a day</strong> (one per market) at a quarter of the normal risk, marked as <em>exploration</em> in the
+        journal. They are never counted as proof.
+      </div>
+      <label class="row" style="margin-top:14px;text-transform:none;letter-spacing:0;font-size:13px">
+        <input type="checkbox" id="liveEvidenceBox" style="width:auto;margin-right:8px" checked />
+        Let a market's own winning record earn half-size trades
+      </label>
+      <div class="hint">
+        A market with 20+ closed trades at a positive expectancy (t ≥ 1.5) may trade at half risk when no backtest rule is proven
+        for it. This is the app learning from its own results, so keep it on if you want it to adapt.
+      </div>
       <div class="hint">Signals are rule-based confluence, not backtested, and not financial advice.</div>
       <button class="btn ghost" id="sendRecap" style="margin-top:12px">Send weekly recap now</button>
       <button class="btn ghost" id="sendDailyRecap" style="margin-top:12px">Send daily recap now</button>
@@ -2318,7 +2335,9 @@ async function loadJournal() {
   try {
     const d = await api("/api/journal");
     const parts = [];
-    parts.push(`<strong>${d.logged}</strong> logged (${d.sent} sent, ${d.held} held back)`);
+    parts.push(
+      `<strong>${d.logged}</strong> logged (${d.sent} approved${d.delivered != null ? `, ${d.delivered} delivered` : ""}, ${d.held} held back)`
+    );
     if (d.closed) {
       // Wins, losses and break-evens side by side: a stop trailed back to entry
       // is a closed trade that made nothing, and seeing it next to the wins is
@@ -2328,6 +2347,17 @@ async function loadJournal() {
       parts.push(`<strong>${d.winrate}%</strong> won · <strong>${d.expectancy > 0 ? "+" : ""}${d.expectancy}R</strong> each`);
     } else {
       parts.push("nothing has closed yet");
+    }
+    // Which book is which. Three panels used to answer "how many trades" with
+    // three different numbers and no way to tell why; the books are now named
+    // side by side, and a result that never reached the journal is called out.
+    if (d.ledger && d.ledger.books) {
+      const b = d.ledger.books;
+      parts.push(
+        `<br><span class="hint">signals ${b.signals.open} open / <strong>${b.signals.closed}</strong> closed ` +
+          `· live ${b.live.open} open / <strong>${b.live.closed}</strong> closed ` +
+          `· shadow ${b.shadow.open} open / <strong>${b.shadow.closed}</strong> closed</span>`
+      );
     }
     totals.innerHTML = parts.join(" · ");
 
@@ -2343,9 +2373,11 @@ async function loadJournal() {
     ].join("");
     body.innerHTML = rows || `<tr><td colspan="4" class="hint">Nothing has closed yet, so there is nothing to score. Alerts are logged the moment they are sent — the scoring starts when the first one resolves.</td></tr>`;
 
-    fails.innerHTML = (d.failureReasons && d.failureReasons.length)
-      ? `Why the losing ones failed: ${d.failureReasons.map((f) => `${f.reason.replace(/_/g, " ")} ×${f.n}`).join(", ")}.`
-      : "";
+    const gapText = d.ledger && d.ledger.consistent === false ? d.ledger.gaps.join(" ") : "";
+    fails.innerHTML =
+      ((d.failureReasons && d.failureReasons.length)
+        ? `Why the losing ones failed: ${d.failureReasons.map((f) => `${f.reason.replace(/_/g, " ")} ×${f.n}`).join(", ")}.`
+        : "") + (gapText ? `<br><span style="color:#f5b942">Book check: ${gapText}</span>` : "");
   } catch (err) {
     body.innerHTML = `<tr><td colspan="4" class="hint">Could not load: ${err.message}</td></tr>`;
   }
@@ -2876,6 +2908,10 @@ function paintProvider(p) {
   if (ib) ib.checked = p.ivbAlerts !== false;
   const bg = document.getElementById("brainGateBox");
   if (bg) bg.checked = p.brainGate !== false;
+  const ex = document.getElementById("exploreBox");
+  if (ex && p.exploration) ex.checked = p.exploration.enabled !== false;
+  const le = document.getElementById("liveEvidenceBox");
+  if (le && p.liveEvidence) le.checked = p.liveEvidence.enabled !== false;
   const ob = document.getElementById("openOnlyBox");
   if (ob) ob.checked = p.alertOnlyWhenOpen !== false;
   if (p.instruments) {
@@ -3402,6 +3438,37 @@ document.getElementById("brainGateBox").addEventListener("change", async (e) => 
   if (hint) hint.textContent = d.ok
     ? (e.target.checked ? "Proven-rule gate on. Expect fewer, stricter alerts." : "Gate off — every setup will alert again.")
     : (d.error || "Could not save.");
+});
+
+async function saveLane(patch, hint, onText, offText) {
+  const el = document.getElementById("pollHint");
+  try {
+    const res = await fetch("/api/exec/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    const d = await res.json();
+    if (el) el.textContent = d.ok ? hint : d.error || "Could not save.";
+  } catch (err) {
+    if (el) el.textContent = "Could not save: " + err.message;
+  }
+}
+
+document.getElementById("exploreBox").addEventListener("change", (e) => {
+  const on = e.target.checked;
+  saveLane(
+    { exploration: { enabled: on } },
+    on ? "Exploration on: up to 3 tiny unproven trades a day." : "Exploration off: an unproven market will not trade at all."
+  );
+});
+
+document.getElementById("liveEvidenceBox").addEventListener("change", (e) => {
+  const on = e.target.checked;
+  saveLane(
+    { liveEvidence: { enabled: on } },
+    on ? "Live evidence on: a winning market can trade at half size." : "Live evidence off: only a backtest proof allows a trade."
+  );
 });
 
 document.getElementById("hookNews").addEventListener("change", (e) => {

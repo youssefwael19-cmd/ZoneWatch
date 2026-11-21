@@ -31,6 +31,14 @@ const SUPPRESS_EXPECTANCY = -0.15; // R per trade
 const SUPPRESS_TSTAT = -1.5;
 const GOOD_EXPECTANCY = 0.1;
 const GOOD_TSTAT = 1.5;
+// What it takes for the app's own results to earn a half-size trade when the
+// backtest has no champion for the market. Deliberately below the proof bar: a
+// live sample is weaker evidence than 30 unseen backtest trades, so it buys half
+// the risk, never the whole trade. Above the muting bar, because a market has to
+// have done something right to be worth trying at all.
+const LIVE_MIN = 20;
+const LIVE_MIN_EXPECTANCY = 0.05;
+const LIVE_MIN_TSTAT = 1.5;
 
 /* ------------------------------ maths ------------------------------ */
 
@@ -40,7 +48,11 @@ function tStat(values) {
   const mean = values.reduce((a, b) => a + b, 0) / n;
   const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1);
   const sd = Math.sqrt(variance);
-  if (!sd) return null;
+  // Identical results have no spread, and subtracting the mean leaves floating
+  // point noise rather than an exact zero. Dividing by that noise produced a
+  // t-statistic around 1e16, which clears every threshold in the app and would
+  // call twenty identical trades proof of anything. No spread, no verdict.
+  if (!Number.isFinite(sd) || sd <= 1e-9 * Math.max(1, Math.abs(mean))) return null;
   return Number((mean / (sd / Math.sqrt(n))).toFixed(2));
 }
 
@@ -108,6 +120,52 @@ function evaluate(history) {
 
   rows.sort((a, b) => b.n - a.n);
   return rows;
+}
+
+/* --------------------------- live evidence --------------------------- */
+
+/**
+ * Is this market's own live book positive enough to be worth half size?
+ *
+ * Pooled across direction and setup on purpose: the question here is "is this
+ * market worth trading at all", not "is one particular setup working". The
+ * pooling is the weakness — a long-only edge can carry a losing short — which is
+ * exactly why passing this test buys half the risk and not a full position.
+ *
+ * Exported so the threshold arithmetic can be tested without live data.
+ */
+function liveEvidence(history, symbol, thresholds = {}) {
+  const min = Number(thresholds.minTrades) > 0 ? Number(thresholds.minTrades) : LIVE_MIN;
+  const minExpectancy =
+    Number.isFinite(Number(thresholds.minExpectancy)) && thresholds.minExpectancy !== undefined
+      ? Number(thresholds.minExpectancy)
+      : LIVE_MIN_EXPECTANCY;
+  const minT = Number(thresholds.minTStat) > 0 ? Number(thresholds.minTStat) : LIVE_MIN_TSTAT;
+
+  const rs = (history || [])
+    .filter((h) => h && h.symbol === symbol && (h.outcome === "win" || h.outcome === "loss" || h.outcome === "breakeven"))
+    .map((h) => Number(h.rMultiple) || 0);
+  const n = rs.length;
+  const expectancy = n ? Number((rs.reduce((a, b) => a + b, 0) / n).toFixed(3)) : null;
+  const t = tStat(rs);
+  const positive =
+    n >= min && expectancy != null && expectancy >= minExpectancy && t != null && t >= minT;
+  return {
+    symbol,
+    n,
+    expectancy,
+    tStat: t,
+    positive,
+    threshold: { min, expectancy: minExpectancy, tStat: minT },
+  };
+}
+
+/** Every market with a closed trade, as a lookup for the gate. */
+function liveEvidenceAll(history, thresholds = {}) {
+  const symbols = [...new Set((history || []).map((h) => h && h.symbol).filter(Boolean))];
+  const map = {};
+  for (const symbol of symbols) map[symbol] = liveEvidence(history, symbol, thresholds);
+  return map;
 }
 
 /* --------------------------- live state --------------------------- */
@@ -227,4 +285,13 @@ function summary() {
   };
 }
 
-module.exports = { evaluate, verdictFor, noteSuppressed, refresh, summary, tStat };
+module.exports = {
+  evaluate,
+  verdictFor,
+  noteSuppressed,
+  refresh,
+  summary,
+  tStat,
+  liveEvidence,
+  liveEvidenceAll,
+};

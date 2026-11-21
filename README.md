@@ -341,6 +341,50 @@ predictions. Nothing here accounts for the news, the session or what the higher
 timeframe is doing. Treat them as a prompt to look at the chart, never as a
 reason to place a trade on their own.
 
+### How it decides to trade at all
+
+Three answers, in order, and each one says which it gave:
+
+1. **A proven rule.** The brain measures every strategy family on every market,
+   grouped by the condition the market was in, and keeps a champion only where a
+   cell clears 30 unseen trades, 0.10R each, t ≥ 2.5, and a positive result in all
+   three unseen blocks. That still means most markets have no champion.
+2. **The market's own live book** (`liveEvidence`, on by default). Twenty or more
+   closed trades at a positive expectancy (t ≥ 1.5) buys **half** the risk when no
+   backtest proof exists. This is the path that makes the app learn from its own
+   results instead of only from history: the gate was previously deaf to them.
+3. **The exploration budget** (`exploration`, on by default). When neither of the
+   above applies, up to three trades a day (one per market) at a quarter of the
+   normal risk, tagged `exploration` in the journal and never counted as proof.
+   Without it an unproven market produced nothing, so it could never produce the
+   evidence that would make it proven — the app sat at three signals, all held.
+
+Both lanes are switches in Settings (`POST /api/exec/config` with
+`{"exploration":{"enabled":false}}` or `{"liveEvidence":{"enabled":false}}`),
+and every clamped value lives in `EXEC_DEFAULTS` in `server/settings.js`.
+
+The statistics had a bug worth knowing about: a sample of identical results has
+no spread, and floating-point noise made the t-statistic around 10¹⁶, which
+clears any bar. Twenty identical trades could have been called proven. A sample
+with no spread now returns no t-statistic at all, and `BAR_VERSION` was raised so
+cells judged under the old number are re-measured rather than trusted.
+
+### Which book a number came from
+
+Three things happen to a signal and they are counted separately, everywhere:
+
+| Book | What it is |
+| --- | --- |
+| signals | what the app decided: `open`, `closed`, `expired` |
+| live | what was actually ordered into the paper/live account |
+| shadow | what the gate's refusals would have paid |
+
+The journal and money panels both report these three, plus a `consistent` flag
+and a list of gaps: a tracked result with no journal entry (back-filled on the
+next start), or a journal entry closed with no tracked signal behind it. Before
+this, the panels answered "how many trades" with three different numbers and
+nothing on the screen said why.
+
 ### What the walk-forward testing actually found
 
 An early version of this scoring reported a ~63% win rate. That number came

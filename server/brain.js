@@ -62,7 +62,10 @@ const MIN_GOOD_FOLDS = FOLDS;
 // Bumped whenever the bar itself changes. Cells store the `proven` flag they
 // were judged with, so raising the bar without re-measuring would leave the old
 // verdicts standing under a rule that no longer approves them.
-const BAR_VERSION = 2;
+// 3: the t-statistic no longer divides by floating-point noise, so a cell of
+// identical results can no longer look proven. Verdicts measured under 2 were
+// judged by a statistic that could be astronomically large by accident.
+const BAR_VERSION = 3;
 const RUN_GAP_MS = 30 * 60 * 1000;
 // A proof in the condition next door is real evidence, but it is not evidence
 // about this condition. It buys a half-size trade, never a full one.
@@ -135,7 +138,11 @@ function tStat(values) {
   const mean = values.reduce((a, b) => a + b, 0) / n;
   const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1);
   const sd = Math.sqrt(variance);
-  if (!sd) return null;
+  // Identical results leave floating-point noise in the variance, not an exact
+  // zero, so the old guard never fired and a cell of identical trades produced a
+  // t-statistic around 1e16 — enough to clear any bar and be called proven. A
+  // sample with no spread is not evidence.
+  if (!Number.isFinite(sd) || sd <= 1e-9 * Math.max(1, Math.abs(mean))) return null;
   return Number((mean / (sd / Math.sqrt(n))).toFixed(2));
 }
 
