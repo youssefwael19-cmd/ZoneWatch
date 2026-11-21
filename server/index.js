@@ -1337,13 +1337,19 @@ async function buildSnapshot() {
   if (tracked.resolved && tracked.resolved.length) journal.resolve(tracked.resolved);
 
   try {
-    // A direct broker closes the trade itself, so ask it before assuming the
-    // position is still there. Paper and bridge resolve their own stops.
-    if (settings.getExecConfig().mode === "direct") {
+    // A real broker closes stops and targets itself, so ask it before assuming
+    // the position is still there. Paper resolves its own stops; the terminal
+    // through the bridge and the REST API both report what they still hold.
+    const execMode = settings.getExecConfig().mode;
+    if (execMode === "direct" || execMode === "bridge") {
       const reconciled = await executor.reconcile(priceBySymbol);
       for (const done of reconciled.closed) {
-        console.log(`executor: ${done.symbol} ${done.side} closed at broker ${done.outcome} ${done.pnl}`);
+        console.log(
+          `executor: ${done.symbol} ${done.side} closed at broker ${done.outcome} ${done.pnl}` +
+            `${done.exitSource === "broker-deal" ? ` at ${done.exit} (${done.brokerDeal && done.brokerDeal.reason})` : " on a quote"}`
+        );
       }
+      if (reconciled.error) console.error(`executor: could not reconcile — ${reconciled.error}`);
     }
     const executed = executor.mark(priceBySymbol);
     for (const done of executed.closed) {

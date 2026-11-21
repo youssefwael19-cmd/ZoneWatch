@@ -33,7 +33,7 @@ Safety properties, on purpose:
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -48,6 +48,27 @@ ALLOW_LIVE = os.environ.get("ALLOW_LIVE", "") == "1"
 PORT = int(os.environ.get("ZW_BRIDGE_PORT", "8787"))
 LOT_STEP = 0.01
 MAX_LOTS = float(os.environ.get("ZW_MAX_LOTS", "5"))
+
+# Why a deal happened, as MT5 names it. The app books the difference between a
+# stop, a target and a margin stop-out in its journal, so the terminal's reason
+# is reported rather than flattened to "closed".
+_DEAL_REASON_NAMES = [
+    ("DEAL_REASON_CLIENT", "client"),
+    ("DEAL_REASON_MOBILE", "mobile"),
+    ("DEAL_REASON_WEB", "web"),
+    ("DEAL_REASON_EXPERT", "expert"),
+    ("DEAL_REASON_SL", "stop loss"),
+    ("DEAL_REASON_TP", "take profit"),
+    ("DEAL_REASON_SO", "stop out"),
+    ("DEAL_REASON_ROLLOVER", "rollover"),
+    ("DEAL_REASON_VMARGIN", "variation margin"),
+    ("DEAL_REASON_SPLIT", "split"),
+]
+# Built from what this MetaTrader5 build actually exports, so a package version
+# without one of the constants degrades to a number instead of failing to import.
+DEAL_REASONS = {
+    getattr(mt5, name): label for name, label in _DEAL_REASON_NAMES if hasattr(mt5, name)
+}
 
 if not TOKEN or len(TOKEN) < 16:
     print("Set ZW_BRIDGE_TOKEN to a random string of at least 16 characters.")
@@ -185,13 +206,55 @@ def place_order(body):
             "error": f"retcode {result.retcode}: {result.comment}",
             "retcode": result.retcode,
         }
+    # order_send answers with an *order* ticket; the position it created has its
+    # own. The app asks later whether that position still exists, so report both
+    # instead of letting it assume they are the same number.
+    held = next((p for p in open_positions() if p["symbol"] == symbol), None)
     return 200, {
         "ok": True,
         "ticket": result.order,
+        "position": held["ticket"] if held else None,
         "price": result.price,
         "lots": result.volume,
         "symbol": symbol,
     }
+
+def closed_deals(hours):
+    """Closing deals from the terminal's own history.
+
+    On a real account a stop or a target is filled by the broker, at whatever
+    price the market gave it, and sometimes with a gap. The app needs that price
+    to book the trade the account actually got — the one number only the
+    terminal has — so the closing deals are handed over as they are.
+    """
+    now = datetime.now(timezone.utc)
+    deals = mt5.history_deals_get(now - timedelta(hours=hours), now) or []
+    closing = {mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_INOUT}
+    out_by = getattr(mt5, "DEAL_ENTRY_OUT_BY", None)
+    if out_by is not None:
+        closing.add(out_by)
+
+    rows = []
+    for d in deals:
+        if d.entry not in closing:
+            continue
+        rows.append(
+            {
+                "ticket": d.ticket,
+                "position": d.position_id,
+                "symbol": d.symbol,
+                "volume": d.volume,
+                "price": d.price,
+                "profit": round(d.profit, 2),
+                "commission": round(getattr(d, "commission", 0) or 0, 2),
+                "swap": round(getattr(d, "swap", 0) or 0, 2),
+                "reason": DEAL_REASONS.get(d.reason, str(d.reason)),
+                "time": datetime.fromtimestamp(d.time, timezone.utc).isoformat(),
+            }
+        )
+    rows.sort(key=lambda row: row["time"])
+    return rows
+
 
 def modify_position(body):
     """Move the stop (and target) on a position the terminal already holds.
@@ -307,6 +370,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/positions"):
             self._json(200, {"ok": True, "positions": open_positions()})
+            return
+        if self.path.startswith("/closed"):
+            params = parse_qs(urlparse(self.path).query)
+            try:
+                hours = float(params.get("hours", ["24"])[0])
+            except ValueError:
+                self._json(400, {"ok": False, "error": "hours must be a number"})
+                return
+            if mt5.account_info() is None:
+                self._json(503, {"ok": False, "error": "terminal not logged in"})
+                return
+            hours = min(720.0, max(0.25, hours))
+            self._json(200, {"ok": True, "hours": hours, "deals": closed_deals(hours)})
             return
         if self.path.startswith("/spreads"):
             params = parse_qs(urlparse(self.path).query)

@@ -60,6 +60,14 @@ Press **Test bridge**. It should answer with the account balance, currency and
 the broker's own open positions into the panel, and the app re-reads them every
 five minutes while bridge mode is on so position sizing uses the real equity.
 
+**Reconciliation** uses `GET /positions` (what the terminal still holds) and
+`GET /closed?hours=N` (closing deals from the terminal's own history, with each
+fill price and reason). The app no longer closes a bridge trade on its own
+quotes: when the terminal stops, targets or stops out a position, that deal is
+what the ledger books, so the journal and the account agree on both the exit and
+its price. `POST /order` answers with both the order ticket and the position
+ticket, because MT5 uses different numbers for the two.
+
 **Trailing stops** use `POST /modify` with `{"symbol": "XAUUSDm", "ticket": 123456,
 "sl": 2401.5, "tp": 2420.0}`, which sends `TRADE_ACTION_SLTP` for that position and
 answers with the stop the terminal actually holds. The app's stop ladder (break-even

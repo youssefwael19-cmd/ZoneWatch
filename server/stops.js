@@ -89,7 +89,11 @@ function advance({ side, entry, initialStop, stop, peak, price }) {
   const risk = Math.abs(Number(entry) - Number(initialStop));
   const e = Number(entry);
   const p = Number(price);
-  const best = Number.isFinite(Number(peak)) ? Number(peak) : e;
+  // A position that has not moved yet has no peak. `Number(null)` is 0 and
+  // finite, so treating a null peak as a reading put the best price at zero —
+  // for a SELL that is the *best possible* price, which yanked the stop to
+  // nonsense on the first tick.
+  const best = peak == null || !Number.isFinite(Number(peak)) ? e : Number(peak);
   if (!(risk > 0) || !Number.isFinite(p)) {
     return { stop, peak: best, peakR: 0, protectsR: protectedR(0), moved: false };
   }

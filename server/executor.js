@@ -11,7 +11,10 @@
  *   bridge — a POST to a small service running on the machine that has
  *            MetaTrader 5 open and logged in (see bridge/mt5_bridge.py). MT5
  *            has no public REST API and its Python package is Windows-only, so
- *            the terminal has to live somewhere and be spoken to.
+ *            the terminal has to live somewhere and be spoken to. The terminal
+ *            holds the stop and the target and fills them itself, so the app
+ *            only settles a bridge position once the bridge reports it gone,
+ *            at the price the terminal's deal history recorded.
  *   direct — the broker's own REST API (see server/brokers), for an account
  *            with no terminal at all. The app places the order from the cloud
  *            and the broker holds the stop and target, so nothing has to stay
@@ -527,7 +530,13 @@ async function place(signal, priceBySymbol) {
       writeState(state);
       return { ok: false, reason: sent.reason, mode: config.mode };
     }
-    order.bridgeTicket = sent.ticket || null;
+    // MT5 returns an *order* ticket from order_send and a different *position*
+    // ticket from positions_get. Amendments act on the position and
+    // reconciliation asks whether the position still exists, so both are kept
+    // and the position ticket is the one used when it is known.
+    order.bridgeOrderTicket = sent.ticket || null;
+    order.bridgePositionTicket = sent.position != null ? String(sent.position) : null;
+    order.bridgeTicket = order.bridgePositionTicket || order.bridgeOrderTicket;
   }
 
   if (config.mode === "direct") {
@@ -596,7 +605,11 @@ async function sendToBridge(order) {
     if (!res.ok || data.ok !== true) {
       return { ok: false, reason: `bridge refused: ${data.error || res.status}` };
     }
-    return { ok: true, ticket: data.ticket || null };
+    return {
+      ok: true,
+      ticket: data.ticket || null,
+      position: data.position != null ? data.position : null,
+    };
   } catch (err) {
     return { ok: false, reason: `bridge unreachable: ${err.message}` };
   } finally {
@@ -628,7 +641,7 @@ async function modifyAtBridge(pos, stop) {
       },
       body: JSON.stringify({
         symbol: pos.brokerSymbol,
-        ticket: pos.bridgeTicket || null,
+        ticket: pos.bridgePositionTicket || pos.bridgeTicket || null,
         sl: stop,
         tp: pos.target,
       }),
@@ -872,7 +885,12 @@ function mark(priceBySymbol) {
   rollDay(state);
   if (!state.open.length) return { closed: [] };
 
-  const direct = config.mode === "direct";
+  // Only paper settles here. At a real broker the stop and the target live on
+  // the broker's books: the position has ended when the broker says it has, at
+  // the price the broker filled. Closing on a local quote could sell something
+  // already closed, or keep something the broker has flattened — and book a
+  // fill the account never got. reconcile() is what notices those.
+  const local = config.mode === "paper";
   const stillOpen = [];
   const closed = [];
 
@@ -883,29 +901,27 @@ function mark(priceBySymbol) {
       continue;
     }
 
-    if (!direct) {
+    if (local) {
       // Stop management runs before the stop is tested, so a position that has
       // reached 1R and come back to entry closes at break-even rather than at
       // the original loss. Paper only here: in bridge and direct mode the stop
       // lives on the broker's books, so the ladder is applied by trailStops()
       // and only recorded once the broker has taken the new stop.
-      if (config.mode === "paper") {
-        const moved = stopsMod.advance({
-          side: pos.side,
-          entry: pos.entry,
-          initialStop: pos.initialStop ?? pos.stop,
-          stop: pos.stop,
-          peak: pos.peak,
-          price,
-        });
-        pos.peak = moved.peak;
-        if (moved.moved) {
-          pos.stop = moved.stop;
-          pos.trail = [
-            ...(pos.trail || []),
-            { at: new Date().toISOString(), stop: moved.stop, protectsR: moved.protectsR },
-          ];
-        }
+      const moved = stopsMod.advance({
+        side: pos.side,
+        entry: pos.entry,
+        initialStop: pos.initialStop ?? pos.stop,
+        stop: pos.stop,
+        peak: pos.peak,
+        price,
+      });
+      pos.peak = moved.peak;
+      if (moved.moved) {
+        pos.stop = moved.stop;
+        pos.trail = [
+          ...(pos.trail || []),
+          { at: new Date().toISOString(), stop: moved.stop, protectsR: moved.protectsR },
+        ];
       }
 
       const hitStop = pos.side === "BUY" ? price <= pos.stop : price >= pos.stop;
@@ -942,7 +958,7 @@ function mark(priceBySymbol) {
   // Margin call. Only paper decides this itself: in bridge mode the terminal
   // stops positions out on its own margin (usually at 50%), and in direct mode
   // the broker does. Closing here would fight a stop-out that already happened.
-  if (!direct && config.mode === "paper" && stillOpen.length) {
+  if (local && stillOpen.length) {
     closed.push(...stopOut(stillOpen, priceBySymbol, state));
   }
 
@@ -975,56 +991,119 @@ function mark(priceBySymbol) {
 /**
  * Ask the broker whether it still holds each of our positions.
  *
- * In direct mode the broker is the one that closes stops and targets, so the
- * app cannot know a trade ended until it asks. A local position the broker no
- * longer holds is settled at the current price, which is close enough to the
- * fill to keep the day's P&L honest — and it is labelled so the journal does
- * not pretend the exit was a precise tick.
+ * At a real broker — the terminal through the bridge, or the REST API directly
+ * — the broker is the one that closes stops and targets, so the app cannot know
+ * a trade ended until it asks. A local position the broker no longer holds is
+ * settled at the price the broker recorded when it closed it, which is the fill
+ * the account actually got; when the terminal's deal history is unavailable it
+ * falls back to the current quote, labelled so the journal does not pretend the
+ * exit was a precise tick.
  */
 async function reconcile(priceBySymbol) {
   const config = settings.getExecConfig();
-  if (config.mode !== "direct") return { closed: [] };
+  if (config.mode !== "direct" && config.mode !== "bridge") return { closed: [] };
 
   const state = readState();
   rollDay(state);
   if (!state.open.length) return { closed: [] };
 
-  const provider = brokers.get(config);
-  if (!provider) return { closed: [], error: "no direct broker configured" };
-
-  const live = await provider.openTrades(config);
+  let live;
+  if (config.mode === "bridge") {
+    live = await bridgeOpenPositions(config);
+  } else {
+    const provider = brokers.get(config);
+    if (!provider) return { closed: [], error: "no direct broker configured" };
+    live = await provider.openTrades(config);
+  }
   if (!live.ok) {
+    // An unreachable broker proves nothing about the position, so nothing is
+    // closed on a guess. The next cycle asks again.
     state.lastError = live.error;
     writeState(state);
     return { closed: [], error: live.error };
   }
 
-  // Brokers rename markets (NASDAQ is US100 at cTrader, NAS100_USD at OANDA),
-  // so a position is matched by the broker's own ticket first and only then by
-  // a normalised symbol. Matching on the app's symbol alone would declare a
-  // live trade closed the moment the names differ.
+  // Brokers rename markets (NASDAQ is US100 at cTrader, NAS100_USD at OANDA,
+  // XAUUSDm at the MT5 terminal), so a position is matched by the broker's own
+  // ticket first and only then by a normalised symbol. Matching on the app's
+  // symbol alone would declare a live trade closed the moment the names differ.
+  const trades = live.trades || [];
   const heldIds = new Set(
-    (live.trades || [])
+    trades
       .map((trade) => String(trade.positionId != null ? trade.positionId : trade.ticket != null ? trade.ticket : trade.id != null ? trade.id : ""))
       .filter(Boolean)
   );
-  const heldSymbols = new Set((live.trades || []).map((trade) => marketKey(trade.symbol)).filter(Boolean));
+  const heldSymbols = new Set(trades.map((trade) => marketKey(trade.symbol)).filter(Boolean));
   const stillOpen = [];
-  const closed = [];
+  const gone = [];
 
   for (const pos of state.open) {
-    const ticket = pos.brokerOrderId != null ? String(pos.brokerOrderId) : "";
-    if ((ticket && heldIds.has(ticket)) || heldSymbols.has(marketKey(pos.symbol))) {
+    const tickets = [pos.bridgePositionTicket, pos.bridgeTicket, pos.brokerOrderId]
+      .filter((t) => t != null && t !== "")
+      .map(String);
+    const symbols = [pos.brokerSymbol, pos.symbol].filter(Boolean).map(marketKey);
+    if (tickets.some((t) => heldIds.has(t)) || symbols.some((s) => heldSymbols.has(s))) {
       stillOpen.push(pos);
       continue;
     }
-    const price = priceOf(priceBySymbol, pos.symbol);
-    const exit = Number.isFinite(price)
-      ? price
-      : Number.isFinite(pos.lastPrice)
-        ? pos.lastPrice
-        : pos.entry;
-    closed.push(settle(state, pos, exit, null, "closed at the broker (stop or target)"));
+    gone.push(pos);
+  }
+
+  const closed = [];
+  if (gone.length) {
+    // The terminal keeps every closing deal. Asking for them turns "the
+    // position is gone" into "it closed here, at this price, for this reason" —
+    // the difference between booking the account's fill and inventing one.
+    let deals = null;
+    if (config.mode === "bridge") {
+      const opened = gone
+        .map((pos) => new Date(pos.openedAt || 0).getTime())
+        .filter((at) => Number.isFinite(at));
+      const hours = opened.length
+        ? Math.min(168, Math.max(1, Math.ceil((Date.now() - Math.min(...opened)) / 3600000) + 1))
+        : 24;
+      const history = await bridgeClosedDeals(config, hours);
+      if (history.ok) deals = history.deals;
+    }
+
+    for (const pos of gone) {
+      const deal = deals ? matchCloseDeal(deals, pos) : null;
+      const price = priceOf(priceBySymbol, pos.symbol);
+      const exit =
+        deal && Number.isFinite(Number(deal.price)) && Number(deal.price) > 0
+          ? Number(deal.price)
+          : Number.isFinite(price)
+            ? price
+            : Number.isFinite(pos.lastPrice)
+              ? pos.lastPrice
+              : pos.entry;
+      const extra = {
+        brokerClosed: true,
+        exitSource: deal ? "broker-deal" : "quote",
+      };
+      if (deal) {
+        extra.brokerDeal = {
+          ticket: deal.ticket != null ? deal.ticket : null,
+          position: deal.position != null ? deal.position : null,
+          price: Number(deal.price),
+          profit: Number.isFinite(Number(deal.profit)) ? Number(deal.profit) : null,
+          reason: deal.reason || null,
+          at: deal.time || null,
+        };
+      }
+      closed.push(
+        settle(
+          state,
+          pos,
+          exit,
+          null,
+          deal
+            ? `closed at the broker (${deal.reason || "stop or target"})`
+            : "closed at the broker (stop or target)",
+          extra
+        )
+      );
+    }
   }
 
   if (closed.length) {
@@ -1037,6 +1116,77 @@ async function reconcile(priceBySymbol) {
   }
 
   return { closed };
+}
+
+/**
+ * The terminal's closing deal for a position we believe we held.
+ *
+ * Matched by the position ticket first, because that is the same number on both
+ * sides. The symbol fallback exists for positions opened before the app knew to
+ * keep the position ticket: the bridge holds one position per symbol, so a
+ * closing deal on that symbol after the position opened can only be ours.
+ */
+function matchCloseDeal(deals, pos) {
+  const wanted = [pos.bridgePositionTicket, pos.bridgeTicket, pos.brokerOrderId]
+    .filter((t) => t != null && t !== "")
+    .map(String);
+  let byTicket = null;
+  for (const deal of deals) {
+    if (deal.position == null || !wanted.includes(String(deal.position))) continue;
+    if (!byTicket || Date.parse(deal.time || 0) >= Date.parse(byTicket.time || 0)) byTicket = deal;
+  }
+  if (byTicket) return byTicket;
+
+  const symbol = marketKey(pos.brokerSymbol || pos.symbol);
+  if (!symbol) return null;
+  const openedAt = new Date(pos.openedAt || 0).getTime() - 60000;
+  let bySymbol = null;
+  for (const deal of deals) {
+    if (marketKey(deal.symbol) !== symbol) continue;
+    const at = Date.parse(deal.time || 0);
+    if (Number.isFinite(at) && at < openedAt) continue;
+    if (!bySymbol || at >= Date.parse(bySymbol.time || 0)) bySymbol = deal;
+  }
+  return bySymbol;
+}
+
+/** One read-only call to the bridge, with its token and a timeout. */
+async function bridgeGet(config, path) {
+  if (!config.bridgeUrl) return { ok: false, error: "no bridge URL configured" };
+  if (!config.bridgeSecret) return { ok: false, error: "no bridge secret configured" };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`${config.bridgeUrl.replace(/\/$/, "")}${path}`, {
+      headers: { "x-bridge-token": config.bridgeSecret },
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok !== true) {
+      return { ok: false, error: data.error || `bridge returned ${res.status}` };
+    }
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: `bridge unreachable: ${err.message}` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The positions the terminal itself holds right now. */
+async function bridgeOpenPositions(config) {
+  const res = await bridgeGet(config, "/positions");
+  if (!res.ok) return res;
+  const trades = Array.isArray(res.data.positions) ? res.data.positions : [];
+  return { ok: true, trades };
+}
+
+/** Closing deals from the terminal's own history, newest last. */
+async function bridgeClosedDeals(config, hours) {
+  const res = await bridgeGet(config, `/closed?hours=${hours}`);
+  if (!res.ok) return res;
+  const deals = Array.isArray(res.data.deals) ? res.data.deals : [];
+  return { ok: true, deals };
 }
 
 function marketKey(name) {
