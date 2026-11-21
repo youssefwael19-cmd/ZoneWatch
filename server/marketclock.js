@@ -20,9 +20,10 @@ const sessions = require("./sessions");
 
 const MAX_STALE_MINUTES = 25;
 
-function weeklyOpen(now = new Date()) {
+function weeklyOpen(now = new Date(), symbol = null) {
   try {
-    return sessions.marketState(now);
+    // Bitcoin trades through the weekend, so its clock is not the FX week.
+    return sessions.weeklyOpenFor(symbol, now);
   } catch {
     return true;
   }
@@ -51,8 +52,13 @@ function ageMinutes(lastMarketUpdate, now = Date.now()) {
 /**
  * @returns {{allowed: boolean, reason: string|null, ageMinutes: number|null}}
  */
-function check({ lastMarketUpdate, now = Date.now(), maxStaleMinutes = MAX_STALE_MINUTES } = {}) {
-  if (!weeklyOpen(new Date(now))) {
+function check({
+  lastMarketUpdate,
+  now = Date.now(),
+  maxStaleMinutes = MAX_STALE_MINUTES,
+  symbol = null,
+} = {}) {
+  if (!weeklyOpen(new Date(now), symbol)) {
     return { allowed: false, reason: "the market is closed for the weekend", ageMinutes: null };
   }
 

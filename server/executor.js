@@ -47,6 +47,10 @@ const VALUE_PER_UNIT = {
   NASDAQ: 1,
   US100: 1,
   USTEC: 1,
+  // One lot of bitcoin is one coin, so a $1 move is $1 per lot. Without this
+  // it would fall through to the FX contract size and reserve 100,000× too
+  // much margin.
+  BTCUSD: 1,
 };
 const FX_VALUE_PER_UNIT = 100000;
 
@@ -158,6 +162,7 @@ const QUOTE_CURRENCY = {
   USDCAD: "CAD",
   AUDJPY: "JPY",
   NZDJPY: "JPY",
+  BTCUSD: "USD",
 };
 // For these pairs the base currency is USD, so one contract is already dollars.
 const USD_BASE = new Set(["USDJPY", "USDCHF", "USDCAD"]);

@@ -34,6 +34,7 @@ const feedwatch = require("./feedwatch");
 const healthMod = require("./health");
 const brainMod = require("./brain");
 const journal = require("./journal");
+const locksMod = require("./locks");
 const tradelog = require("./tradelog");
 const executor = require("./executor");
 const shadowMod = require("./shadow");
@@ -873,7 +874,7 @@ async function buildSnapshot() {
   const heldByHours = [];
   const hoursBlocked = (symbol) => {
     if (!onlyWhenOpen) return false;
-    const gate = marketclock.check({ lastMarketUpdate: tickBySymbol.get(symbol) });
+    const gate = marketclock.check({ lastMarketUpdate: tickBySymbol.get(symbol), symbol });
     if (gate.allowed) return false;
     heldByHours.push({ symbol, reason: gate.reason });
     return true;
@@ -1392,6 +1393,60 @@ async function buildSnapshot() {
     console.error("shadow book:", err.message);
   }
 
+  // Why each market is quiet, in the order the gates run. This is a reading of
+  // the stored state, not a decision: nothing here can approve or refuse a
+  // trade. The three gates that need a setup in hand (confirmation, thin stop,
+  // learner mute) are named on the card but cannot be judged here.
+  const staleSymbols = new Set(((feed && feed.stale) || []).map((s) => s.symbol));
+  const brainBySymbol = new Map(brainRows.map((row) => [row.symbol, row]));
+  const correlationOn = settings.getCorrelationEnabled();
+  const lockRows = instruments.map((inst) => {
+    const clock = marketclock.check({
+      lastMarketUpdate: tickBySymbol.get(inst.symbol),
+      symbol: inst.symbol,
+    });
+    const labRow = labSummary.results[inst.symbol] || null;
+    const brainRow = brainBySymbol.get(inst.symbol) || null;
+    const group = correlationOn
+      ? correlationGroups().find((g) => g.includes(inst.symbol))
+      : null;
+    const partner = group
+      ? group.find(
+          (s) =>
+            s !== inst.symbol &&
+            Date.now() - (lastAlertAt.get(s) || 0) < CORRELATION_WINDOW_MS
+        )
+      : null;
+    const sinceSignal = Date.now() - (lastSignalSentAt.get(inst.symbol) || 0);
+    return {
+      symbol: inst.symbol,
+      label: inst.label,
+      marketOpen: clock.allowed,
+      marketReason: clock.reason,
+      feedStale: staleSymbols.has(inst.symbol),
+      feedDetail: "the provider has stopped sending new prices",
+      newsActive: Boolean(blackout && blackout.active),
+      newsDetail: `news blackout: ${
+        ((blackout && blackout.events && blackout.events[0]) || {}).title ||
+        "high-impact event"
+      }`,
+      guardStop: Boolean(guard && guard.stop),
+      guardReason: (guard && guard.reason) || "daily loss limit",
+      labTradable: labRow ? labRow.tradable === true : null,
+      labVerdict: labRow ? labRow.verdict : "not tested yet",
+      unproven: unprovenMarkets.has(inst.symbol),
+      correlatedWith: partner || null,
+      brainGateOn,
+      brainCondition: brainRow ? brainRow.condition : null,
+      brainChampion: brainRow ? brainRow.champion : null,
+      brainAdjacent: brainRow ? brainRow.adjacent : null,
+      chopHeld: chopSymbols.has(inst.symbol) && !chopProven.has(inst.symbol),
+      cooldownMinutes:
+        sinceSignal < SIGNAL_COOLDOWN_MS ? Math.max(1, Math.round(sinceSignal / 60000)) : null,
+    };
+  });
+  const lockSummary = locksMod.explain(lockRows);
+
   snapshot = {
     ok: true,
     checkedAt: new Date().toISOString(),
@@ -1427,6 +1482,7 @@ async function buildSnapshot() {
     discordErrors,
     marketOpen: sessionsMod.marketState(new Date()),
     alertsHeldByHours: hoursHeldSnapshot,
+    locks: lockSummary,
     alertsHeldByBrain: brainHeldSnapshot,
     feed: { stale: feedSnapshotStale, checked: feedSnapshotChecked, staleMinutes: feedwatch.STALE_MINUTES },
     deliveries: discord.getDeliveries().slice(0, 10),

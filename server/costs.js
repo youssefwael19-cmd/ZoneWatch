@@ -38,6 +38,10 @@ const SPREADS = {
   USDCHF: 0.00018,
   AUDJPY: 0.02,
   NZDJPY: 0.02,
+  // Bitcoin is quoted in dollars, so this is dollars per coin. It is the
+  // widest spread here and widens further around news, which is why a stop
+  // measured against it has to be correspondingly far away.
+  BTCUSD: 25,
 };
 
 /**
@@ -57,6 +61,7 @@ const DEFAULT_STOPS = {
   USDCHF: 0.002,
   AUDJPY: 0.2,
   NZDJPY: 0.2,
+  BTCUSD: 600,
 };
 
 const LIVE_MAX_AGE_MS = 15 * 60 * 1000;

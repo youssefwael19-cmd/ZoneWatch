@@ -244,7 +244,30 @@ function detectMarketEvents(prevOpen, now = new Date()) {
   return { open, events };
 }
 
+/**
+ * Instruments that never close.
+ *
+ * The FX week stops on Friday evening, but bitcoin does not: its market runs
+ * through the weekend. Applying the FX calendar to it would silence the app on
+ * the two days when nothing else is tradeable.
+ */
+const ALWAYS_OPEN = new Set(["BTCUSD"]);
+
+function symbolKey(symbol) {
+  return String(symbol == null ? "" : symbol)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+/** Is this market open now? Unknown and FX-style markets follow the FX week. */
+function weeklyOpenFor(symbol, now = new Date()) {
+  if (ALWAYS_OPEN.has(symbolKey(symbol))) return true;
+  return marketState(now);
+}
+
 module.exports = {
+  ALWAYS_OPEN,
+  weeklyOpenFor,
   getSessionStates,
   detectSessionEvents,
   detectMarketEvents,

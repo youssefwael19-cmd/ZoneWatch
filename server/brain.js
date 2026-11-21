@@ -376,10 +376,24 @@ function summary() {
   const rows = Object.entries(brain.results).map(([symbol, r]) => {
     const condition = r.current ? r.current.label : "unclear";
     const champion = r.champions ? r.champions[condition] : null;
+    // A proof in the neighbouring condition is not a proof here, but it is not
+    // nothing either: the gate lets it buy a half-size trade. Reported so the
+    // dashboard can say why a market that has no champion still prompts.
+    const near = adjacentCondition(condition);
+    const adjacent = near && r.champions ? r.champions[near] || null : null;
     return {
       symbol,
       at: r.at,
       condition,
+      adjacent: adjacent
+        ? {
+            condition: near,
+            name: adjacent.familyName,
+            n: adjacent.n,
+            expectancy: adjacent.expectancy,
+            tStat: adjacent.tStat,
+          }
+        : null,
       efficiency: r.current ? r.current.efficiency : null,
       volatilityPercentile: r.current ? r.current.volatilityPercentile : null,
       champion: champion

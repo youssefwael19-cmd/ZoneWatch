@@ -16,6 +16,9 @@ const PIP_SIZE = {
   NASDAQ: 1,
   US30: 1,
   SPX500: 1,
+  // Bitcoin is quoted in dollars per coin, so one point is one dollar. Calling
+  // that a "pip" would be wrong, and unitLabel already prints "pts".
+  BTCUSD: 1,
 };
 
 const DEFAULT_PIP = 0.0001;

@@ -348,6 +348,12 @@
         </div>
 
         <div class="panel">
+          <h2>What is holding each market <span class="hint" id="lockMeta" style="letter-spacing:0;text-transform:none"></span></h2>
+          <p class="hint" style="margin:-6px 0 10px">The first gate that would stop a setup in that market, in the order the app applies them. Confirmation, thin stops and the learner only exist once there is a setup, so they are not judged here.</p>
+          <div id="lockRows" class="empty">Checking the gates…</div>
+        </div>
+
+        <div class="panel">
           <h2>Zone proximity
             <button class="quiet tiny head-act" id="proxToggle">Show all</button>
           </h2>
@@ -388,7 +394,7 @@
                 <select id="szSym">
                   <option>XAUUSD</option><option>NASDAQ</option><option>EURUSD</option><option>GBPUSD</option>
                   <option>USDJPY</option><option>AUDUSD</option><option>USDCAD</option><option>USDCHF</option>
-                  <option>AUDJPY</option><option>NZDJPY</option>
+                  <option>AUDJPY</option><option>NZDJPY</option><option>BTCUSD</option>
                 </select>
               </div>
             </div>
@@ -676,7 +682,7 @@
               <select id="brainSym" style="width:auto;padding:4px 8px;font-size:11.5px;height:26px">
                 <option>XAUUSD</option><option>NASDAQ</option><option>EURUSD</option><option>GBPUSD</option>
                 <option>USDJPY</option><option>AUDUSD</option><option>USDCAD</option><option>USDCHF</option>
-                <option>AUDJPY</option><option>NZDJPY</option>
+                <option>AUDJPY</option><option>NZDJPY</option><option>BTCUSD</option>
               </select>
               <button class="quiet tiny" id="brainRun">Test now</button>
             </span>
@@ -1900,6 +1906,40 @@ function renderQuotes(quotes, nearest) {
   }).join("");
 }
 
+function renderLocks(summary) {
+  const host = document.getElementById("lockRows");
+  const meta = document.getElementById("lockMeta");
+  if (!host) return;
+  const rows = (summary && summary.rows) || [];
+  if (!rows.length) {
+    host.className = "empty";
+    host.textContent = "No markets enabled.";
+    if (meta) meta.textContent = "";
+    return;
+  }
+  if (meta) {
+    meta.textContent = `${summary.open} open · ${summary.partial} partly held · ${summary.held} held`;
+  }
+  host.className = "";
+  host.innerHTML = rows.map((r) => {
+    const tone = r.state === "open" ? "#7ff0cf" : r.state === "partial" ? "#ffd889" : "#ff8b8b";
+    const badge = r.stoppedBy ? "held by " + r.stoppedBy : r.state === "partial" ? "partly held" : "open";
+    // The whole chain, so a market that is held by the lab still shows what
+    // would have stopped it next. Held gates are called out; the rest are ticks.
+    const chain = (r.locks || [])
+      .map((l) => `${l.state === "open" ? "✓" : l.state === "partial" ? "◐" : "✕"} ${l.name}`)
+      .join(" · ");
+    return `<div style="padding:9px 11px;border-radius:10px;background:rgba(255,255,255,.03);margin-bottom:8px">
+      <div style="display:flex;gap:8px;align-items:baseline;justify-content:space-between;flex-wrap:wrap">
+        <strong style="font-size:13px">${r.label || r.symbol}</strong>
+        <span class="pill" style="color:${tone};border-color:${tone}55">${badge}</span>
+      </div>
+      <div class="hint" style="margin:5px 0 0">${r.headline}</div>
+      <div class="hint mono" style="margin:3px 0 0;font-size:10.5px;opacity:.7;white-space:normal" title="${chain.replace(/"/g, "&quot;")}">${chain}</div>
+    </div>`;
+  }).join("");
+}
+
 function renderSignals(signals, stats) {
   const el = document.getElementById("signals");
   const meta = document.getElementById("signalMeta");
@@ -2492,6 +2532,7 @@ async function refreshWatch() {
     renderAlerts(data.alerts || []);
     renderNewsBanner(data);
     renderMarketClock(data);
+    renderLocks(data.locks);
     renderHealth(data);
     if (data.fired && data.fired.length) {
       beep(data.fired.length > 1 ? 3 : 2);

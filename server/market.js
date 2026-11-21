@@ -45,6 +45,22 @@ const DEFAULTS = {
     valuePerPointPerLot: 1,
   },
 
+  // Bitcoin against the dollar. One lot is one coin, so a $1 move is $1 per
+  // lot — the smallest size the paper book takes (0.0001 lots) still risks
+  // well under a cent on a normal stop. Crypto trades all week, which is why
+  // the session clock has to treat it apart from the FX week.
+  BTCUSD: {
+    label: "BTC/USD · Bitcoin",
+    provider: "yahoo",
+    twelveData: "BTC/USD",
+    yahoo: "BTC-USD",
+    tradingView: "BITSTAMP:BTCUSD",
+    decimals: 1,
+    unit: "USD",
+    valuePerPointPerLot: 1,
+    minUpdateMs: 30000,
+  },
+
   // ---- Currencies with the strongest published evidence ----
   // Majors that carry trend and momentum well, plus the two classic carry
   // pairings (AUD/JPY and NZD/JPY: high-yielder against the funding currency).
@@ -153,6 +169,7 @@ const demoState = {
   USDCHF: { last: 0.884, volatility: 0.0008 },
   AUDJPY: { last: 101.2, volatility: 0.12 },
   NZDJPY: { last: 92.4, volatility: 0.12 },
+  BTCUSD: { last: 96000, volatility: 300 },
 };
 
 const priceCache = new Map();
