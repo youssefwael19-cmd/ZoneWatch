@@ -25,6 +25,16 @@ const FILE = require("./stateDir").file("signals.json");
 const MAX_HISTORY = 200;
 const EXPIRY_MS = 24 * 60 * 60 * 1000; // a day without resolution = expired
 
+/**
+ * Expired rows written before expiries were pinned to 0R still carry the
+ * floating R they happened to be worth when the clock ran out. Normalising on
+ * read keeps those old rows from skewing totals R and expectancy.
+ */
+function stripExpiredR(h) {
+  if (!h || h.outcome !== "expired" || !h.rMultiple) return h;
+  return { ...h, rMultiple: 0 };
+}
+
 function load() {
   try {
     const raw = fs.readFileSync(FILE, "utf-8").trim();
@@ -32,7 +42,7 @@ function load() {
     const parsed = JSON.parse(raw);
     return {
       open: Array.isArray(parsed.open) ? parsed.open : [],
-      history: Array.isArray(parsed.history) ? parsed.history : [],
+      history: Array.isArray(parsed.history) ? parsed.history.map(stripExpiredR) : [],
     };
   } catch {
     return { open: [], history: [] };
@@ -210,14 +220,21 @@ function update(priceBySymbol, now = Date.now(), options = {}) {
         risk > 0 && Number.isFinite(exit)
           ? (s.side === "BUY" ? Number(exit) - entry : entry - Number(exit)) / risk
           : null;
+      // An expiry is not a trade result: nothing was closed for a reason, and
+      // the floating R at the moment the clock ran out is not something the
+      // signal earned. Booking it would move totals R and expectancy every time
+      // a slow signal timed out. Expired stays 0R; exit is kept so the message
+      // can still say where price was.
       const rMultiple =
-        actualR != null
-          ? Number(actualR.toFixed(2))
-          : outcome === "win"
-            ? Number(s.riskReward ?? 0.6)
-            : outcome === "loss"
-              ? -1
-              : 0;
+        outcome === "expired"
+          ? 0
+          : actualR != null
+            ? Number(actualR.toFixed(2))
+            : outcome === "win"
+              ? Number(s.riskReward ?? 0.6)
+              : outcome === "loss"
+                ? -1
+                : 0;
       resolved.push({
         ...s,
         outcome,
