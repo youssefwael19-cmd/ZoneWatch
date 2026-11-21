@@ -147,7 +147,7 @@ function pathOutcome(s, bars, openedAtMs) {
 
     if (canTrail) {
       peakR = Math.max(peakR, s.side === "BUY" ? (high - entry) / risk : (entry - low) / risk);
-      stop = stopsMod.protect({ side: s.side, entry, stop, peakR });
+      stop = stopsMod.protect({ side: s.side, entry, stop, peakR, initialStop: openedWith });
     }
   }
   return null;

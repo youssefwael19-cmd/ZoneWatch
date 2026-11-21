@@ -164,7 +164,7 @@ function simulate(bars, zones, atr, from, to, cfg) {
           break;
         }
         peakR = Math.max(peakR, side === "BUY" ? (b.h - entry) / risk : (entry - b.l) / risk);
-        held = stopsMod.protect({ side, entry, stop: held, peakR });
+        held = stopsMod.protect({ side, entry, stop: held, peakR, initialStop: stop });
       }
 
       if (exit != null) {

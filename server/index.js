@@ -1351,6 +1351,18 @@ async function buildSnapshot() {
         `executor: ${done.symbol} ${done.side} closed ${done.outcome} ${done.pnl}${done.marginCall ? " (margin call)" : ""}`
       );
     }
+    // On a real account the stop that matters is the broker's, so the ladder is
+    // walked against the positions the broker holds. Paper does this inside
+    // mark(); every other mode needs the broker to confirm the new stop.
+    const trailed = await executor.trailStops(priceBySymbol);
+    for (const step of trailed.moved) {
+      console.log(
+        `executor: ${step.symbol} ${step.side} stop -> ${step.stop} (${step.protectsR}R protected)`
+      );
+    }
+    for (const fail of trailed.errors) {
+      console.error(`executor: could not move the ${fail.symbol} stop — ${fail.reason}`);
+    }
   } catch (err) {
     console.error("executor mark:", err.message);
   }

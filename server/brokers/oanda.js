@@ -237,9 +237,50 @@ async function place(config, order) {
   return {
     ok: true,
     id: fill.orderID || fill.id,
+    // The broker's own trade id, distinct from the order id. Moving a stop acts
+    // on the trade, so this is the handle a trailing stop needs.
+    tradeId: fill.tradeOpened && fill.tradeOpened.tradeID ? String(fill.tradeOpened.tradeID) : null,
     price: fill.price != null ? Number(fill.price) : null,
     units: Math.abs(Number(fill.units) || units),
   };
+}
+
+/**
+ * Move the stop on a trade the broker already holds.
+ *
+ * PUT on a trade's orders creates the stop if there is none and replaces it if
+ * there is, which is exactly what the stop ladder needs: the stop only ever
+ * moves up, so replacing is the whole operation.
+ */
+async function modifyStop(config, { tradeId, symbol, side, stop }) {
+  const s = settingsFor(config);
+  if (!(Number(stop) > 0)) return { ok: false, error: "no stop price to send" };
+
+  let id = tradeId ? String(tradeId) : "";
+  if (!id) {
+    // A position opened before trade ids were recorded has none; ask the broker
+    // which trade it is rather than refusing to protect it.
+    const open = await openTrades(config);
+    if (!open.ok) return open;
+    const match = open.trades.find(
+      (t) => t.symbol === symbol && (!side || t.side === side)
+    );
+    if (!match) return { ok: false, error: `no open ${symbol} trade at the broker to amend` };
+    id = match.ticket;
+  }
+
+  const res = await call(
+    config,
+    `/v3/accounts/${encodeURIComponent(s.accountId)}/trades/${encodeURIComponent(id)}/orders`,
+    {
+      method: "PUT",
+      body: { stopLoss: { price: Number(stop).toFixed(5), timeInForce: "GTC" } },
+    }
+  );
+  if (!res.ok) return res;
+  const tx = (res.data && res.data.stopLossOrderTransaction) || {};
+  if (!tx.id) return { ok: false, error: "broker accepted the amend but returned no stop order" };
+  return { ok: true, tradeId: id, stop: tx.price != null ? Number(tx.price) : Number(stop) };
 }
 
 /** Close whatever the broker holds on one instrument, long or short. */
@@ -289,6 +330,7 @@ module.exports = {
   openTrades,
   pricing,
   place,
+  modifyStop,
   closeInstrument,
   closeAll,
   test,

@@ -46,13 +46,18 @@ function protectedR(peakR) {
  *
  * @param {object} o
  * @param {"BUY"|"SELL"} o.side
- * @param {number} o.entry   the price the position was filled at
- * @param {number} o.stop    the stop currently held
- * @param {number} o.peakR   best excursion since entry, in R
+ * @param {number} o.entry        the price the position was filled at
+ * @param {number} o.stop         the stop currently held
+ * @param {number} o.peakR        best excursion since entry, in R
+ * @param {number} [o.initialStop] the stop the trade opened with. This is the
+ *   risk unit, and it has to be passed: measuring risk from the stop held now
+ *   makes it zero the moment that stop reaches entry, which froze the ladder at
+ *   break-even instead of letting it trail the rest of the move.
  * @returns {number} the stop to hold now — never worse than the one passed in
  */
-function protect({ side, entry, stop, peakR }) {
-  const risk = Math.abs(Number(entry) - Number(stop));
+function protect({ side, entry, stop, peakR, initialStop }) {
+  const openedWith = Number(initialStop == null ? stop : initialStop);
+  const risk = Math.abs(Number(entry) - openedWith);
   if (!(risk > 0)) return stop;
   const keep = protectedR(peakR);
   if (keep < 0) return stop;
@@ -90,7 +95,7 @@ function advance({ side, entry, initialStop, stop, peak, price }) {
   }
   const nextPeak = side === "BUY" ? Math.max(best, p) : Math.min(best, p);
   const peakR = side === "BUY" ? (nextPeak - e) / risk : (e - nextPeak) / risk;
-  const next = protect({ side, entry: e, stop, peakR });
+  const next = protect({ side, entry: e, stop, peakR, initialStop });
   return {
     stop: next,
     peak: nextPeak,

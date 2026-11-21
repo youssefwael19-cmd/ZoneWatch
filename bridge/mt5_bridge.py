@@ -193,6 +193,84 @@ def place_order(body):
         "symbol": symbol,
     }
 
+def modify_position(body):
+    """Move the stop (and target) on a position the terminal already holds.
+
+    The app's stop ladder tightens a stop as a trade runs; on a real account
+    that only means something if the broker's own stop is the one that moves.
+    TRADE_ACTION_SLTP is the MT5 request for exactly this: it does not touch the
+    open price or volume, only the protective orders.
+
+    A position is found by ticket when the app has one, otherwise by symbol.
+    The symbol fallback matters because MT5 returns an *order* ticket from
+    order_send and a *position* ticket from positions_get, and they differ.
+    """
+    symbol = str(body.get("symbol", "")).strip()
+    ticket = body.get("ticket")
+    sl = float(body.get("sl") or 0)
+    tp = float(body.get("tp") or 0)
+
+    if sl <= 0:
+        # Same rule as entry: no unprotected position, ever.
+        return 400, {"ok": False, "error": "refusing to amend a position without a stop loss"}
+
+    position = None
+    if ticket:
+        found = mt5.positions_get(ticket=int(ticket)) or []
+        if found:
+            position = found[0]
+    if position is None:
+        if not symbol:
+            return 400, {"ok": False, "error": "missing symbol or ticket"}
+        for p in open_positions():
+            if p["symbol"] == symbol:
+                found = mt5.positions_get(ticket=p["ticket"]) or []
+                if found:
+                    position = found[0]
+                break
+    if position is None:
+        return 404, {"ok": False, "error": f"no open position for {symbol or ticket}"}
+
+    # Only ever tighten: a stop that a request could move backwards is a way to
+    # lose money by accident, so out-of-order messages are ignored.
+    if position.sl > 0:
+        tighter = sl > position.sl if position.type == mt5.POSITION_TYPE_BUY else sl < position.sl
+        if not tighter:
+            return 200, {
+                "ok": True,
+                "ticket": position.ticket,
+                "sl": position.sl,
+                "unchanged": True,
+                "note": "existing stop is already at least as protective",
+            }
+
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "position": position.ticket,
+        "symbol": position.symbol,
+        "sl": sl,
+        "tp": tp if tp > 0 else position.tp,
+        "magic": 20261115,
+        "comment": "zone-watch trail",
+    }
+    result = mt5.order_send(request)
+    if result is None:
+        return 502, {"ok": False, "error": f"order_send returned None: {mt5.last_error()}"}
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        return 400, {
+            "ok": False,
+            "error": f"retcode {result.retcode}: {result.comment}",
+            "retcode": result.retcode,
+        }
+
+    # Report what the terminal now holds, not what was asked for.
+    after = mt5.positions_get(ticket=position.ticket) or []
+    held = after[0].sl if after else sl
+    if held and abs(float(held) - sl) > abs(sl) * 1e-7:
+        return 502, {"ok": False, "error": f"terminal still shows the stop at {held}"}
+    return 200, {"ok": True, "ticket": position.ticket, "sl": held or sl, "symbol": position.symbol}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ZoneWatchBridge/1.0"
 
@@ -267,6 +345,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path.startswith("/order"):
             code, payload = place_order(body)
+            self._json(code, payload)
+            return
+        if self.path.startswith("/modify"):
+            code, payload = modify_position(body)
             self._json(code, payload)
             return
         if self.path.startswith("/close"):

@@ -35,6 +35,8 @@ const PAYLOAD = {
   ACCOUNT_AUTH_REQ: 2102,
   ACCOUNT_AUTH_RES: 2103,
   NEW_ORDER_REQ: 2106,
+  // 2109 is amend-order (a pending order); the one for a live position is 2110.
+  AMEND_POSITION_SLTP_REQ: 2110,
   CLOSE_POSITION_REQ: 2111,
   ASSET_LIST_REQ: 2112,
   ASSET_LIST_RES: 2113,
@@ -775,6 +777,62 @@ async function place(config, order) {
   }
 }
 
+/**
+ * Move the stop on a position the broker holds.
+ *
+ * There is no response body to read on the JSON transport — the server's
+ * acknowledgement is not the same as the stop having moved — so this asks the
+ * broker what the stop is now instead of assuming the amend worked. A trailing
+ * stop that only exists in this process is the failure mode worth avoiding.
+ */
+async function modifyStop(config, { positionId, symbol, side, stop }) {
+  try {
+    const state = await getSession(config);
+    const price = Number(stop);
+    if (!(price > 0)) return { ok: false, error: "no stop price to send" };
+
+    let id = positionId != null && positionId !== "" ? Number(positionId) : null;
+    if (id == null) {
+      const open = await openTrades(config);
+      if (!open.ok) return open;
+      const match = open.trades.find(
+        (t) => t.symbol === symbol && (!side || t.side === side)
+      );
+      if (!match) return { ok: false, error: `no open ${symbol} position at the broker to amend` };
+      id = Number(match.positionId);
+    }
+
+    state.client.send(PAYLOAD.AMEND_POSITION_SLTP_REQ, {
+      ctidTraderAccountId: state.accountId,
+      positionId: id,
+      stopLoss: price,
+    });
+
+    const deadline = Date.now() + 3000;
+    let seen = null;
+    while (Date.now() < deadline) {
+      const open = await openTrades(config);
+      if (open.ok) {
+        const held = open.trades.find((t) => String(t.positionId) === String(id));
+        if (!held) return { ok: false, error: "the broker no longer holds this position" };
+        seen = held;
+        // Prices come back as doubles, so compare with a tolerance rather than
+        // demanding an exact float match.
+        if (held.sl != null && Math.abs(Number(held.sl) - price) <= Math.abs(price) * 1e-7) {
+          return { ok: true, positionId: String(id), stop: Number(held.sl) };
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    return {
+      ok: false,
+      error: `the broker still shows the stop at ${seen && seen.sl != null ? seen.sl : "unknown"}`,
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 async function closeInstrument(config, symbol) {
   try {
     const state = await getSession(config);
@@ -925,6 +983,7 @@ module.exports = {
   openTrades,
   pricing,
   place,
+  modifyStop,
   closeInstrument,
   test,
   refreshTokens,

@@ -207,6 +207,7 @@ function summary() {
     closed: closed.length,
     open: sent.filter((e) => e.outcome == null).length,
     wins,
+    losses: closed.filter((e) => e.outcome === "loss").length,
     breakeven: closed.filter((e) => e.outcome === "breakeven").length,
     winrate: closed.length ? Number(((wins / closed.length) * 100).toFixed(1)) : null,
     expectancy: closed.length

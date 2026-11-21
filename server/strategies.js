@@ -34,7 +34,10 @@ const MAX_HOLD_BARS = 48;
 // Bumped whenever a family's rule, or the way a trade is resolved, changes
 // meaning. Stored measurements from an older version are thrown away rather
 // than left to back a live alert with a number nobody can reproduce.
-const RULES_VERSION = 2;
+// 3: the stop ladder no longer freezes at break-even (stops.protect takes the
+// entry stop as the risk unit), so every older backtest resolved its winners
+// with a stop that could not trail past entry.
+const RULES_VERSION = 3;
 
 /**
  * Series every family may need, computed once per analysed series.
@@ -530,7 +533,15 @@ function resolve(bars, i, trade, to) {
       }
       peakR = Math.max(peakR, (entry - b.l) / risk);
     }
-    stop = stopsMod.protect({ side: trade.side, entry, stop, peakR });
+    stop = stopsMod.protect({
+      side: trade.side,
+      entry,
+      stop,
+      peakR,
+      // The risk unit is the entry stop; measuring it from the stop held now
+      // collapses it to zero once the stop reaches entry.
+      initialStop: Number(trade.stop),
+    });
   }
   return { outcome: "open", r: 0, bars: limit - i };
 }

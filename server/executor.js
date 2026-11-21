@@ -538,6 +538,9 @@ async function place(signal, priceBySymbol) {
       return { ok: false, reason: sent.reason, mode: config.mode };
     }
     order.brokerOrderId = sent.id || null;
+    // A stop amendment acts on the broker's trade, not on the order that opened
+    // it, and some brokers (OANDA) use different ids for the two.
+    order.brokerTradeId = sent.tradeId != null ? String(sent.tradeId) : null;
     order.brokerFillPrice = Number.isFinite(sent.price) ? sent.price : null;
   }
   // Paper fills at the signal price and pays the modelled broker costs, so it
@@ -562,7 +565,7 @@ async function sendToBroker(order) {
     target: order.target,
   });
   if (!result.ok) return { ok: false, reason: `broker refused: ${result.error}` };
-  return { ok: true, id: result.id, price: result.price };
+  return { ok: true, id: result.id, tradeId: result.tradeId, price: result.price };
 }
 
 async function sendToBridge(order) {
@@ -599,6 +602,136 @@ async function sendToBridge(order) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Move a stop at the bridge (MetaTrader 5).
+ *
+ * The bridge exposes /modify, which sends TRADE_ACTION_SLTP for the position
+ * holding this market. The bridge holds one position per symbol by design, so a
+ * symbol is enough to name the position; the broker ticket is sent too when we
+ * have one.
+ */
+async function modifyAtBridge(pos, stop) {
+  const config = settings.getExecConfig();
+  if (!config.bridgeUrl) return { ok: false, reason: "no bridge URL configured" };
+  if (!config.bridgeSecret) return { ok: false, reason: "no bridge secret configured" };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`${config.bridgeUrl.replace(/\/$/, "")}/modify`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-bridge-token": config.bridgeSecret,
+      },
+      body: JSON.stringify({
+        symbol: pos.brokerSymbol,
+        ticket: pos.bridgeTicket || null,
+        sl: stop,
+        tp: pos.target,
+      }),
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok !== true) {
+      return { ok: false, reason: `bridge refused: ${data.error || res.status}` };
+    }
+    return { ok: true, stop: Number.isFinite(Number(data.sl)) ? Number(data.sl) : stop };
+  } catch (err) {
+    return { ok: false, reason: `bridge unreachable: ${err.message}` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Move a stop at the broker's own API (direct mode). */
+async function modifyAtBroker(pos, stop) {
+  const config = settings.getExecConfig();
+  const provider = brokers.get(config);
+  if (!provider) return { ok: false, reason: "no direct broker configured" };
+  if (typeof provider.modifyStop !== "function") {
+    return { ok: false, reason: `${provider.name || "this broker"} cannot move a stop through its API` };
+  }
+  const result = await provider.modifyStop(config, {
+    positionId: pos.brokerOrderId,
+    tradeId: pos.brokerTradeId,
+    symbol: pos.symbol,
+    side: pos.side,
+    stop,
+  });
+  if (!result.ok) return { ok: false, reason: result.error || "the broker refused the amendment" };
+  return { ok: true, stop: Number.isFinite(Number(result.stop)) ? Number(result.stop) : stop };
+}
+
+/**
+ * Walk the stop ladder for positions whose stop lives on the broker's books.
+ *
+ * Paper's trailing stop is arithmetic in this process, and mark() applies it. An
+ * account at a real broker needs the same ladder, but a stop moved here and not
+ * at the broker is protection the account does not have: the app would close a
+ * trade at break-even on its own numbers while the broker still held the
+ * original stop. So the move is only recorded once the broker confirms it, and
+ * a refusal leaves the stop where it was and reports why.
+ *
+ * One modification per move, never per tick: the ladder only changes the stop
+ * at 1R and then every half R, so a quiet market sends nothing.
+ */
+async function trailStops(priceBySymbol) {
+  const config = settings.getExecConfig();
+  if (config.mode === "paper") return { moved: [], errors: [] };
+
+  const state = readState();
+  if (!state.open.length) return { moved: [], errors: [] };
+
+  const moved = [];
+  const errors = [];
+  let dirty = false;
+
+  for (const pos of state.open) {
+    const price = priceOf(priceBySymbol, pos.symbol);
+    if (!Number.isFinite(price)) continue;
+
+    const step = stopsMod.advance({
+      side: pos.side,
+      entry: pos.entry,
+      initialStop: pos.initialStop ?? pos.stop,
+      stop: pos.stop,
+      peak: pos.peak,
+      price,
+    });
+    if (step.peak !== pos.peak) {
+      pos.peak = step.peak;
+      dirty = true;
+    }
+    if (!step.moved) continue;
+
+    const sent = config.mode === "bridge" ? await modifyAtBridge(pos, step.stop) : await modifyAtBroker(pos, step.stop);
+    if (!sent.ok) {
+      // The stop on the books stays as it is, so the app never believes in a
+      // stop the broker does not hold. The next cycle tries again.
+      pos.trailError = sent.reason;
+      errors.push({ symbol: pos.symbol, stop: step.stop, reason: sent.reason });
+      dirty = true;
+      continue;
+    }
+
+    pos.stop = sent.stop;
+    pos.trailError = null;
+    pos.trail = [
+      ...(pos.trail || []),
+      { at: new Date().toISOString(), stop: pos.stop, protectsR: step.protectsR, via: config.mode },
+    ];
+    moved.push({ symbol: pos.symbol, side: pos.side, stop: pos.stop, protectsR: step.protectsR });
+    dirty = true;
+  }
+
+  if (dirty) {
+    state.lastError = errors.length ? `stop trail: ${errors[0].symbol} — ${errors[0].reason}` : null;
+    writeState(state);
+  }
+  return { moved, errors };
 }
 
 /**
@@ -753,9 +886,9 @@ function mark(priceBySymbol) {
     if (!direct) {
       // Stop management runs before the stop is tested, so a position that has
       // reached 1R and come back to entry closes at break-even rather than at
-      // the original loss. Paper only: in bridge and direct mode the stop lives
-      // on the broker's books, and moving it here would leave the app believing
-      // in protection the account does not have.
+      // the original loss. Paper only here: in bridge and direct mode the stop
+      // lives on the broker's books, so the ladder is applied by trailStops()
+      // and only recorded once the broker has taken the new stop.
       if (config.mode === "paper") {
         const moved = stopsMod.advance({
           side: pos.side,
@@ -1233,6 +1366,7 @@ module.exports = {
   testBroker,
   place,
   mark,
+  trailStops,
   status,
   kill,
   revive,

@@ -60,6 +60,13 @@ Press **Test bridge**. It should answer with the account balance, currency and
 the broker's own open positions into the panel, and the app re-reads them every
 five minutes while bridge mode is on so position sizing uses the real equity.
 
+**Trailing stops** use `POST /modify` with `{"symbol": "XAUUSDm", "ticket": 123456,
+"sl": 2401.5, "tp": 2420.0}`, which sends `TRADE_ACTION_SLTP` for that position and
+answers with the stop the terminal actually holds. The app's stop ladder (break-even
+at 1R, then 0.5R behind the best price) is applied to the broker's own stop, so a
+position is protected where it lives rather than only in the app's memory. The
+bridge refuses to loosen a stop and refuses an amend with no stop price.
+
 **Read live spreads** uses `GET /spreads?symbols=XAUUSDm,USTECm,...` and returns,
 per broker symbol, the current spread in points and in price units. The app uses
 that number for the cost of every order and for the break-even table, because
@@ -84,7 +91,8 @@ Options, simplest first:
 ## What it will and will not do
 
 - Sends the stop loss with every order, so the broker holds the stop even if the
-  bridge or the app dies mid-trade.
+  bridge or the app dies mid-trade — and moves it at the terminal as the trade
+  runs, so the trailing stop is real protection, not a number in the app.
 - Refuses a position on a symbol it already holds.
 - Refuses lots above `ZW_MAX_LOTS` (default 5).
 - Answers `403` on a live account unless `ALLOW_LIVE=1`.

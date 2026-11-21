@@ -2287,7 +2287,12 @@ async function loadJournal() {
     const parts = [];
     parts.push(`<strong>${d.logged}</strong> logged (${d.sent} sent, ${d.held} held back)`);
     if (d.closed) {
-      parts.push(`<strong>${d.closed}</strong> closed · <strong>${d.winrate}%</strong> won · <strong>${d.expectancy > 0 ? "+" : ""}${d.expectancy}R</strong> each`);
+      // Wins, losses and break-evens side by side: a stop trailed back to entry
+      // is a closed trade that made nothing, and seeing it next to the wins is
+      // how the win rate stops looking better than the trading was.
+      parts.push(`<strong>${d.closed}</strong> closed`);
+      parts.push(`<strong>${d.wins ?? 0}</strong> won · <strong>${d.losses ?? 0}</strong> lost · <strong>${d.breakeven ?? 0}</strong> break-even`);
+      parts.push(`<strong>${d.winrate}%</strong> won · <strong>${d.expectancy > 0 ? "+" : ""}${d.expectancy}R</strong> each`);
     } else {
       parts.push("nothing has closed yet");
     }
