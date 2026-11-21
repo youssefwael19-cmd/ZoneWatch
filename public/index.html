@@ -800,6 +800,10 @@
         <button class="ghost" id="pwSave">Change password</button>
         <span class="hint" id="pwMsg"></span>
       </div>
+      <div class="hint" id="pwEnvWarn" style="display:none;color:#ffcf8a">
+        <span class="mono">ZW_DASH_PASSWORD</span> is set on the server and replaces anything you save here on the
+        next restart. Remove it in ProductEcho, restart, then change the password again.
+      </div>
       <div class="hint">Forgot the password? Remove the <span class="mono">auth</span> block from settings.json on the server and reload to set a new one.</div>
     </div>
 
@@ -3979,6 +3983,7 @@ async function loadAuth() {
     settingsUnlocked = Boolean(d.signedIn);
     gateConfigured = Boolean(d.configured);
     authEnvManaged = Boolean(d.envManaged);
+    paintEnvWarning();
     const state = document.getElementById("authState");
     const expiry = document.getElementById("authExpiry");
     if (state) {
@@ -3992,6 +3997,17 @@ async function loadAuth() {
     }
   } catch {}
   paintSettingsGate();
+}
+
+/**
+ * A password saved here is not the last word while the server variable is set:
+ * the next start adopts that value over this one. Saying so on the form is the
+ * difference between "my new password does not work" and knowing why.
+ */
+function paintEnvWarning() {
+  const el = document.getElementById("pwEnvWarn");
+  if (!el) return;
+  el.style.display = authEnvManaged ? "" : "none";
 }
 
 /** Show either the password prompt or the settings panels, never both. */
@@ -4091,7 +4107,9 @@ document.getElementById("pwSave").addEventListener("click", async () => {
     nxt.value = "";
     // The signing key is rotated, so every other device is signed out and this
     // one has already been handed a fresh cookie by the response.
-    msg.textContent = "Password changed. Other devices are signed out.";
+    msg.textContent = authEnvManaged
+      ? "Saved, but ZW_DASH_PASSWORD is still set — the next restart puts that value back. Remove the variable in ProductEcho now."
+      : "Password changed. Other devices are signed out.";
   } catch (err) {
     msg.textContent = err.message;
   }
