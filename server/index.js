@@ -132,7 +132,7 @@ app.post("/api/auth/login", (req, res) => {
   const password = String((req.body && req.body.password) || "");
   // The variable counts as a password too, so a failed adoption write or a
   // missing restart cannot leave the owner with a form that keeps saying no.
-  if (!auth.verifyPassword(password, stored) && !auth.envAccepted(password)) {
+  if (!auth.verifyPassword(password, stored) && !auth.envAccepted(password, stored)) {
     auth.noteFailure(req);
     res.status(401).json({ ok: false, error: "that password is not right" });
     return;
@@ -181,7 +181,7 @@ app.post("/api/auth/password", (req, res) => {
   const next = String((req.body && req.body.next) || "");
   // Someone signed in on a long-lived cookie who has forgotten the old password
   // can still replace it with the variable they control on the server.
-  if (!auth.verifyPassword(current, record) && !auth.envAccepted(current)) {
+  if (!auth.verifyPassword(current, record) && !auth.envAccepted(current, record)) {
     auth.noteFailure(req);
     res.status(401).json({ ok: false, error: "the current password is not right" });
     return;
@@ -195,6 +195,11 @@ app.post("/api/auth/password", (req, res) => {
     return;
   }
   const fresh = auth.createAuth(next);
+  // Remember which variable value this password replaces. Without it, a host
+  // that keeps injecting ZW_DASH_PASSWORD after it was "deleted" would undo
+  // this change at the next restart, every restart, with no way to tell why.
+  const envValue = auth.envPassword();
+  if (envValue) fresh.envSpent = auth.envFingerprint(fresh, envValue);
   settings.setAuth(fresh);
   auth.noteSuccess(req);
   res.setHeader("set-cookie", auth.sessionCookie(req, fresh));

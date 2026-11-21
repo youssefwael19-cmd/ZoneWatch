@@ -680,7 +680,11 @@ start-up it adopts that value as the dashboard password, keeping the cookie
 signing secret, and logs `dashboard password adopted from ZW_DASH_PASSWORD`.
 Sign in, change the password in Settings if you want a different one, then remove
 the variable — while it is set it wins over the hash in `settings.json` on every
-start. It is a server variable rather than a reset form on the site precisely
+start, **except** the value you just replaced: a password set in Settings records
+that value as spent, so a host that keeps injecting a variable you have deleted
+(some do, until the release is recreated) can no longer undo your password at
+every restart. Setting the variable to a *new* value is honoured again, so the
+recovery route still exists. It is a server variable rather than a reset form on the site precisely
 because anyone who found the URL could otherwise use a reset form to lock you out.
 The variable's **value** is the password; its name, `ZW_DASH_PASSWORD`, is only
 the label. A value shorter than 8 characters is ignored (and logged).

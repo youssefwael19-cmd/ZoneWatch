@@ -58,6 +58,24 @@ function sameSecret(a, b) {
 }
 
 /**
+ * A fingerprint of the variable's value, so a value the owner has already moved
+ * past can be recognised on a later start without keeping the password itself.
+ * Costs the same as the stored hash, so it cannot be guessed faster either.
+ */
+function envFingerprint(record, value) {
+  const salt = (record && record.salt) || "zw-env";
+  return crypto.scryptSync(String(value), `env:${salt}`, 32).toString("hex");
+}
+
+/** Has a password set in the dashboard already replaced this exact value? */
+function envSpent(record, value) {
+  if (!record || !record.envSpent) return false;
+  const known = Buffer.from(record.envSpent, "hex");
+  const given = Buffer.from(envFingerprint(record, value), "hex");
+  return known.length === given.length && crypto.timingSafeEqual(known, given);
+}
+
+/**
  * Is `password` the value of `ZW_DASH_PASSWORD`? The variable is a password in
  * its own right, not only a boot-time copy of one.
  *
@@ -65,11 +83,14 @@ function sameSecret(a, b) {
  * read-only disk) or never happen (the app was not restarted after the value
  * was added). Treating the variable as an accepted credential means the way
  * back in works on the first try instead of depending on a file write: whoever
- * can set the server's environment is the owner.
+ * can set the server's environment is the owner. A value the owner has already
+ * replaced from the dashboard is not accepted, so a host that keeps injecting
+ * an old variable cannot keep a retired password alive.
  */
-function envAccepted(password) {
+function envAccepted(password, record) {
   const value = envPassword();
   if (!value) return false;
+  if (envSpent(record, value)) return false;
   return sameSecret(password, value);
 }
 
@@ -88,6 +109,16 @@ function adoptEnvPassword(getAuth, setAuth, out = console) {
   }
   const current = getAuth();
   if (current && verifyPassword(value, current)) return false;
+  if (current && envSpent(current, value)) {
+    // The owner set their own password after this value was put there, and the
+    // host is still handing it to every new process (a delete that never
+    // reached the deployment). Overwriting would undo their password on every
+    // restart, which is the one thing recovery must never do.
+    out.log(
+      "[auth] ZW_DASH_PASSWORD was replaced by a password set in the dashboard earlier; leaving it alone (change the variable to a new value to use it again)"
+    );
+    return false;
+  }
   const fresh = createAuth(value);
   if (current && current.secret) fresh.secret = current.secret;
   try {
@@ -322,6 +353,8 @@ module.exports = {
   createAuth,
   envPassword,
   envAccepted,
+  envFingerprint,
+  envSpent,
   adoptEnvPassword,
   hashPassword,
   verifyPassword,
