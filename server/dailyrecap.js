@@ -161,9 +161,18 @@ function buildRecap({
       const more = drift.length > shown.length ? ` +${drift.length - shown.length} more` : "";
       parts.push(`**${drift.length} mismatch${drift.length === 1 ? "" : "es"}** — ${shown.join(", ")}${more}`);
     }
-    const fixed = repairs.filter((r) => r.ok).length;
-    const refused = repairs.filter((r) => !r.ok);
-    if (fixed) parts.push(`${fixed} stop${fixed === 1 ? "" : "s"} re-sent to the broker`);
+    const resent = repairs.filter((r) => r.action !== "adopted" && r.ok).length;
+    if (resent) parts.push(`${resent} stop${resent === 1 ? "" : "s"} re-sent to the broker`);
+    // A correction the app made by taking the broker's tighter stop is still a
+    // correction: the position is now protected where the terminal says it is,
+    // and saying nothing would make the app's stop look like it never changed.
+    const adopted = repairs.filter((r) => r.action === "adopted");
+    if (adopted.length) {
+      const shown = adopted.slice(0, 2).map((r) => `${r.symbol} ${r.side} ${r.to} tighter than ${r.from}`);
+      const more = adopted.length > shown.length ? ` +${adopted.length - shown.length} more` : "";
+      parts.push(`${adopted.length} stop${adopted.length === 1 ? "" : "s"} adopted from the broker (${shown.join(", ")}${more})`);
+    }
+    const refused = repairs.filter((r) => r.action !== "adopted" && !r.ok);
     if (refused.length) {
       parts.push(
         `**${refused.length} re-send${refused.length === 1 ? "" : "s"} refused** (${refused[0].symbol || "?"}: ${

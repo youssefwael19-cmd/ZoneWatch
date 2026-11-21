@@ -19,6 +19,7 @@ const http = require("http");
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "zw-bridge-"));
 const stateDir = require("../server/stateDir");
 stateDir.prepare({ dir: DIR, root: DIR });
+const dailyRecap = require("../server/dailyrecap");
 
 let passed = 0;
 let failed = 0;
@@ -298,6 +299,27 @@ async function run() {
   check("nothing is sent that would loosen it", amendBodies.length, before);
   check("the app takes the broker's tighter stop", executor.status().open[0].stop, 2385);
   check("and the adoption is recorded", executor.status().open[0].stopRepair.action, "adopted");
+  const adoptedRecord = executor.status().stopRepairs.find((r) => r.action === "adopted");
+  check(
+    "the Trading panel is given the adoption with both numbers",
+    [adoptedRecord.symbol, adoptedRecord.side, adoptedRecord.from, adoptedRecord.to],
+    ["XAUUSD", "SELL", 2390, 2385]
+  );
+  const recapAdopted = dailyRecap.fromApp({
+    journal: {},
+    exec: executor.status({ XAUUSD: 2385 }),
+    history: [],
+    openTrades: 1,
+    proven: [],
+    live: { zones: [], quotes: [{ price: 2385 }], feed: {} },
+  });
+  contains("the daily recap has a stop line", recapAdopted, "Stops:");
+  contains(
+    "the recap names the adopted stop, its side and both numbers",
+    recapAdopted,
+    "1 stop adopted from the broker (XAUUSD SELL 2385 tighter than 2390)"
+  );
+  contains("and still counts the re-sends separately", recapAdopted, "stops re-sent to the broker");
 
   console.log("--- a position the broker holds with no stop ---");
   positions[0].sl = 0;

@@ -2247,13 +2247,23 @@ async function loadExec() {
       ${d.lastError ? `<div style="color:#ff9a9a;margin-top:6px">last error: ${d.lastError}</div>` : ""}
       ${(() => {
         const drift = d.stopDrift || [];
-        if (!drift.length) return "";
+        // A stop the app took from the broker is not on the mismatch list — the
+        // two sides now agree — but the stop the position carries changed, so it
+        // is shown rather than left for someone to notice in MetaTrader.
+        const adopted = (d.stopRepairs || []).filter((r) => r.action === "adopted").slice(-3);
+        if (!drift.length && !adopted.length) return "";
+        const adoptedHtml = adopted.length
+          ? `<div style="margin-top:6px;color:#ffd08a">` + adopted.map((r) =>
+              `<div><strong>Stop adopted · ${r.symbol} ${r.side}</strong> — the broker held ${r.to} (tighter than the app's ${r.from}); the app now tracks the broker's stop.</div>`
+            ).join("") + `<div class="hint" style="margin-top:2px">The broker owns the stop, so its tighter number is the one that will close the trade. Nothing was sent to loosen it.</div></div>`
+          : "";
+        if (!drift.length) return `<div style="margin-top:8px">${adoptedHtml}</div>`;
         return `<div style="margin-top:8px;color:#ff9a9a">` + drift.map((s) => {
           const gap = s.diff == null || s.brokerStop == null
             ? `the broker holds no stop, the app thinks it is ${s.appStop}`
             : `broker ${s.brokerStop}, app ${s.appStop} (${Math.abs(s.diff).toFixed(2)} ${s.direction === "behind" ? "behind — less protected" : "ahead of the app"})`;
           return `<div><strong>Stop mismatch · ${s.symbol} ${s.side}</strong> — ${gap}${s.trailError ? ` · last trail attempt: ${s.trailError}` : ""}${s.repairError ? ` · re-sending the stop failed: ${s.repairError}` : ""}</div>`;
-        }).join("") + `<div class="hint" style="margin-top:2px">The broker owns the stop, so its number is the one that will close the trade. The app re-sends its own stop every cycle until the broker holds it, so this clears on its own; it stays here only while the broker keeps refusing, and the reason is shown above.</div></div>`;
+        }).join("") + `<div class="hint" style="margin-top:2px">The broker owns the stop, so its number is the one that will close the trade. The app re-sends its own stop every cycle until the broker holds it, so this clears on its own; it stays here only while the broker keeps refusing, and the reason is shown above.</div></div>${adoptedHtml}`;
       })()}`;
 
     const acct = d.account;
