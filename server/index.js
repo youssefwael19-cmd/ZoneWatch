@@ -85,6 +85,11 @@ app.use(
  * the public page never shows a webhook, an API key or an account number.
  * ------------------------------------------------------------------ */
 
+// Before the first request: a locked-out owner on a host with no shell sets
+// ZW_DASH_PASSWORD and restarts instead of editing settings.json by hand.
+const envPasswordAdopted = auth.adoptEnvPassword(settings.getAuth, settings.setAuth);
+if (envPasswordAdopted) console.log("[auth] the server variable is now the dashboard password");
+
 app.get("/api/auth/status", (req, res) => {
   const record = settings.getAuth();
   const expires = auth.sessionExpiry(req, record);
@@ -93,6 +98,7 @@ app.get("/api/auth/status", (req, res) => {
     configured: Boolean(record),
     signedIn: auth.isSignedIn(req, record),
     expiresAt: expires ? new Date(expires).toISOString() : null,
+    envManaged: Boolean(auth.envPassword()),
   });
 });
 
@@ -187,7 +193,9 @@ app.get("/login", (req, res) => {
     res.redirect("/");
     return;
   }
-  res.type("html").send(auth.page({ mode: settings.getAuth() ? "login" : "setup" }));
+  res.type("html").send(
+    auth.page({ mode: settings.getAuth() ? "login" : "setup", envManaged: Boolean(auth.envPassword()) })
+  );
 });
 
 app.get("/setup", (req, res) => {
@@ -195,7 +203,7 @@ app.get("/setup", (req, res) => {
     res.redirect("/login");
     return;
   }
-  res.type("html").send(auth.page({ mode: "setup" }));
+  res.type("html").send(auth.page({ mode: "setup", envManaged: Boolean(auth.envPassword()) }));
 });
 
 /*

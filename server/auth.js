@@ -31,6 +31,49 @@ function createAuth(password) {
   };
 }
 
+/**
+ * The recovery password, if the server was given one.
+ *
+ * The hash in settings.json is the real password, but a forgotten one can only
+ * be cleared by editing that file on the host. On a hosted deployment the owner
+ * often has no shell to do it with, so a lockout there is permanent — and the
+ * dashboard is the only way to reach the broker, the risk rules and the kill
+ * switch. ZW_DASH_PASSWORD is the way back in: when it is set and at least
+ * MIN_PASSWORD long, it becomes the dashboard password on start-up.
+ *
+ * It is deliberately not a reset form on the public site: anyone who finds the
+ * URL could use that to lock the owner out. A server variable can only be set
+ * by the person who owns the server.
+ */
+function envPassword() {
+  const value = String(process.env.ZW_DASH_PASSWORD || "").trim();
+  return value.length >= MIN_PASSWORD ? value : "";
+}
+
+/**
+ * Adopt `ZW_DASH_PASSWORD` as the dashboard password, keeping the cookie-signing
+ * secret so a restart does not sign every device out. Returns true when it wrote
+ * a new record. Passed the getters/setters so this stays testable on its own.
+ */
+function adoptEnvPassword(getAuth, setAuth, out = console) {
+  const value = envPassword();
+  if (!value) {
+    if (String(process.env.ZW_DASH_PASSWORD || "").trim()) {
+      out.warn(`[auth] ZW_DASH_PASSWORD is shorter than ${MIN_PASSWORD} characters and was ignored`);
+    }
+    return false;
+  }
+  const current = getAuth();
+  if (current && verifyPassword(value, current)) return false;
+  const fresh = createAuth(value);
+  if (current && current.secret) fresh.secret = current.secret;
+  setAuth(fresh);
+  out.log(
+    "[auth] dashboard password adopted from ZW_DASH_PASSWORD — change it in Settings (and unset the variable) when you are back in"
+  );
+  return true;
+}
+
 function verifyPassword(password, record) {
   if (!record || !record.salt || !record.hash) return false;
   const known = Buffer.from(record.hash, "hex");
@@ -169,7 +212,7 @@ const STYLE = `
   .hint { margin-top: 16px; font-size: 12px; color: #7d90a6; }
 `;
 
-function page({ mode }) {
+function page({ mode, envManaged = false }) {
   const setup = mode === "setup";
   const title = setup ? "Protect the dashboard" : "Zone Watch";
   const sub = setup
@@ -199,7 +242,9 @@ function page({ mode }) {
   <div class="hint">${
     setup
       ? "At least 8 characters. Nothing is stored in the phone; the password is checked on the server."
-      : "Forgot it? Remove the <code>auth</code> block from settings.json on the server to start over."
+      : envManaged
+        ? "This password comes from <code>ZW_DASH_PASSWORD</code> on the server, so it survives restarts. Change it there."
+        : "Forgot it? Set <code>ZW_DASH_PASSWORD</code> on the server, or remove the <code>auth</code> block from settings.json, and restart."
   }</div>
 </main>
 <script>
@@ -241,6 +286,8 @@ function page({ mode }) {
 module.exports = {
   MIN_PASSWORD,
   createAuth,
+  envPassword,
+  adoptEnvPassword,
   hashPassword,
   verifyPassword,
   isSignedIn,

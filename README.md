@@ -674,8 +674,19 @@ Adding a new `/api/exec/*` or `/api/settings/*` route is private automatically;
 anything outside those prefixes is public by design, so never put a secret on a
 path that is not in that list.
 
-To reset a forgotten password, remove the `auth` object from `settings.json` on
-the server (`~/zone-watch/settings.json` in Serv00's file manager or over SSH,
+**Locked out and no shell to fix it with?** Set `ZW_DASH_PASSWORD` (8 characters
+or more) in the host's environment or secret store and restart the app. On
+start-up it adopts that value as the dashboard password, keeping the cookie
+signing secret, and logs `dashboard password adopted from ZW_DASH_PASSWORD`.
+Sign in, change the password in Settings if you want a different one, then remove
+the variable — while it is set it wins over the hash in `settings.json` on every
+start. It is a server variable rather than a reset form on the site precisely
+because anyone who found the URL could otherwise use a reset form to lock you out.
+`/api/auth/status` reports `envManaged: true` while it is in force, and the login
+page says so.
+
+On a host you can reach, the other way is to remove the `auth` object from
+`settings.json` (`~/zone-watch/settings.json` in Serv00's file manager or over SSH,
 `sudo nano /opt/zone-watch/settings.json` on the VM, or `docker exec` on a Docker
 box) and restart it: the app offers the setup page again. Signing out is `POST /api/auth/logout`; the
 login page also explains this.
