@@ -1199,6 +1199,7 @@ let settingsUnlocked = false;
 // Whether the server holds ZW_DASH_PASSWORD, which decides what the recovery
 // hint on the Watch tab can honestly offer.
 let authEnvManaged = false;
+let authEnvOverrides = false;
 let gateConfigured = false;
 let soundOn = true;
 let instruments = [];
@@ -3983,6 +3984,7 @@ async function loadAuth() {
     settingsUnlocked = Boolean(d.signedIn);
     gateConfigured = Boolean(d.configured);
     authEnvManaged = Boolean(d.envManaged);
+    authEnvOverrides = Boolean(d.envOverrides);
     paintEnvWarning();
     const state = document.getElementById("authState");
     const expiry = document.getElementById("authExpiry");
@@ -4007,7 +4009,7 @@ async function loadAuth() {
 function paintEnvWarning() {
   const el = document.getElementById("pwEnvWarn");
   if (!el) return;
-  el.style.display = authEnvManaged ? "" : "none";
+  el.style.display = authEnvOverrides ? "" : "none";
 }
 
 /** Show either the password prompt or the settings panels, never both. */
@@ -4107,9 +4109,14 @@ document.getElementById("pwSave").addEventListener("click", async () => {
     nxt.value = "";
     // The signing key is rotated, so every other device is signed out and this
     // one has already been handed a fresh cookie by the response.
-    msg.textContent = authEnvManaged
-      ? "Saved, but ZW_DASH_PASSWORD is still set — the next restart puts that value back. Remove the variable in ProductEcho now."
-      : "Password changed. Other devices are signed out.";
+    if (authEnvManaged) {
+      // This save retires that value, so the variable can no longer undo it.
+      authEnvOverrides = false;
+      paintEnvWarning();
+      msg.textContent = "Password changed, and the server variable can no longer replace it. Remove it in ProductEcho when convenient. Other devices are signed out.";
+    } else {
+      msg.textContent = "Password changed. Other devices are signed out.";
+    }
   } catch (err) {
     msg.textContent = err.message;
   }

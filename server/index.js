@@ -105,6 +105,9 @@ app.get("/api/auth/status", (req, res) => {
     // is what tells a locked-out owner whether they are typing the wrong string
     // or the server never took the value.
     envAdopted: Boolean(envValue) && auth.verifyPassword(envValue, record),
+    // Whether the variable can still replace the password on the next start.
+    // A value the owner has already replaced from the dashboard cannot.
+    envOverrides: Boolean(envValue) && !(record && auth.envSpent(record, envValue)),
   });
 });
 
@@ -211,8 +214,13 @@ app.get("/login", (req, res) => {
     res.redirect("/");
     return;
   }
+  const record = settings.getAuth();
+  const envValue = auth.envPassword();
   res.type("html").send(
-    auth.page({ mode: settings.getAuth() ? "login" : "setup", envManaged: Boolean(auth.envPassword()) })
+    auth.page({
+      mode: record ? "login" : "setup",
+      envManaged: Boolean(envValue) && !(record && auth.envSpent(record, envValue)),
+    })
   );
 });
 
@@ -221,7 +229,10 @@ app.get("/setup", (req, res) => {
     res.redirect("/login");
     return;
   }
-  res.type("html").send(auth.page({ mode: "setup", envManaged: Boolean(auth.envPassword()) }));
+  const envValue = auth.envPassword();
+  res.type("html").send(
+    auth.page({ mode: "setup", envManaged: Boolean(envValue) && !auth.envSpent(settings.getAuth(), envValue) })
+  );
 });
 
 /*
