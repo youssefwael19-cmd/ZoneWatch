@@ -2280,6 +2280,38 @@ app.get("/api/export/signals.csv", (_req, res) => {
   res.send([cols.join(","), ...rows].join("\n"));
 });
 
+/**
+ * Every recorded signal, in the shape a chart tool needs.
+ *
+ * The CSV stays as it was (closed trades, for a spreadsheet). This is the same
+ * journal in JSON with the open time and the levels, which scripts/make-pine-data.js
+ * turns into the block the TradingView indicator draws.
+ */
+app.get("/api/export/signals.json", (_req, res) => {
+  const { entries } = journal.readJournal();
+  res.json({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    signals: entries.map((e) => ({
+      id: e.id,
+      at: e.at,
+      symbol: e.symbol,
+      side: e.side,
+      setup: e.setup || null,
+      status: e.status,
+      entry: e.entry,
+      stop: e.stop,
+      target: e.target,
+      outcome: e.outcome || null,
+      rMultiple: e.rMultiple == null ? null : e.rMultiple,
+      closedAt: e.closedAt || null,
+      // A result recovered from the tracker has no recorded context. Marked so
+      // nobody reads it as a signal the app measured at the time.
+      backfilled: Boolean(e.features && e.features.backfilled),
+    })),
+  });
+});
+
 /** The learner: what the app has judged about its own past calls. */
 app.get("/api/learning", (_req, res) => {
   const learn = learning.summary();

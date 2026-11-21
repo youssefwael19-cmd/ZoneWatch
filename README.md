@@ -137,6 +137,45 @@ themselves run on the polling provider. Change the chart symbols in
 `server/market.js` (`tradingView` field) if you prefer different brokers or
 contracts.
 
+### The bot's signals on your own TradingView chart
+
+`pine/zonewatch-signals.pine` draws every signal as an arrow with its stop and
+target, at the bar where it happened, plus a summary table. It is an indicator,
+not a strategy: it draws what the app already did and never generates a signal
+of its own.
+
+**Why you paste rather than connect.** Pine Script can only read TradingView's
+own market data — `request.security()` takes a symbol, not a URL, and there is no
+HTTP function — so a chart script cannot call this app. The signals travel inside
+the script's text box instead. The other direction, TradingView → the app, works
+fine (that is `/api/tv/webhook`), because a webhook leaves TradingView.
+
+1. Run the generator. It reads `/api/export/signals.json` (every recorded signal)
+   and prints the block:
+
+   ```bash
+   node scripts/make-pine-data.js                 # live app
+   node scripts/make-pine-data.js --held          # include held-back signals
+   node scripts/make-pine-data.js --limit 40      # a shorter block
+   ```
+
+2. Open the script in TradingView (Pine Editor → paste `pine/zonewatch-signals.pine`
+   → **Add to chart**).
+3. Settings → **Signals** → paste the generator's output.
+
+Line format, so you can check it by eye: `epochMillis|SYMBOL|BUY|entry|stop|target|KIND`,
+where `KIND` is `OPEN`, `WIN`, `LOSS`, `BE`, `EXPIRED` or `HELD`. Times are
+absolute, so the indicator works on any timeframe; a signal is drawn on the bar
+whose range contains it. Two consequences worth knowing:
+
+- **Signals older than the chart's first loaded bar cannot be drawn.** Go back
+  further in history, or use a higher timeframe, if arrows are missing.
+- **Only this chart's symbol is drawn** by default. A EURUSD arrow on a NASDAQ
+  chart would sit at a price that means nothing, so the filter is on unless you
+  turn it off.
+
+Refresh the block when you want newer signals; it is a snapshot, not a live feed.
+
 ## Discord alerts
 
 Alerts can be pushed into a Discord channel as rich embeds showing the
