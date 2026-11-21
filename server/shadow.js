@@ -285,9 +285,10 @@ function resolve(state, prices, config, now) {
       costDetail: { ...(pos.costDetail || {}), exit: exitCost },
       nights,
       pnl,
-      // Labelled by what it actually made: a stop that had been trailed past
-      // entry has not lost anything.
-      outcome: hitStop && pnl < 0 ? "loss" : "win",
+      // Labelled by what it actually made: a stop trailed past entry has not
+      // lost anything, and one that filled exactly at break-even has not won
+      // anything either.
+      outcome: pnl > 0 ? "win" : pnl < 0 ? "loss" : "breakeven",
       closedAt: now.toISOString(),
       ...(extra || {}),
     });

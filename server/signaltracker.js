@@ -126,10 +126,12 @@ function pathOutcome(s, bars, openedAtMs) {
     // Both inside one bar: the order inside the bar is unknown, so take the
     // pessimistic reading. Anything else flatters the strategy.
     if (hitStop) {
-      // A stop trailed past entry has not lost: how it is labelled follows what
-      // the exit actually did.
-      const protectedStop = canTrail && (s.side === "BUY" ? stop >= entry : stop <= entry);
-      return { outcome: protectedStop ? "win" : "loss", exit: stop, barAt: at, trailed: stop !== openedWith };
+      // Labelled by what the exit actually did. A stop trailed past entry has
+      // not lost, and one filled exactly at entry has neither won nor lost —
+      // counting that as a win inflates the win rate the dashboard reports.
+      const better = s.side === "BUY" ? stop > entry : stop < entry;
+      const outcome = !canTrail ? "loss" : stop === entry ? "breakeven" : better ? "win" : "loss";
+      return { outcome, exit: stop, barAt: at, trailed: stop !== openedWith };
     }
     if (hitTarget) return { outcome: "win", exit: s.target, barAt: at };
 
@@ -198,8 +200,24 @@ function update(priceBySymbol, now = Date.now(), options = {}) {
     }
 
     if (outcome) {
+      // The R is what the exit actually paid, not what a full target would have
+      // paid. With a stop ladder running, a winner that closed at +0.6R must not
+      // be booked as the full 2R — that inflates expectancy the same way a
+      // break-even counted as a win inflates the win rate.
+      const entry = Number(s.entry ?? s.price);
+      const risk = Math.abs(entry - Number(s.stop));
+      const actualR =
+        risk > 0 && Number.isFinite(exit)
+          ? (s.side === "BUY" ? Number(exit) - entry : entry - Number(exit)) / risk
+          : null;
       const rMultiple =
-        outcome === "win" ? Number(s.riskReward ?? 0.6) : outcome === "loss" ? -1 : 0;
+        actualR != null
+          ? Number(actualR.toFixed(2))
+          : outcome === "win"
+            ? Number(s.riskReward ?? 0.6)
+            : outcome === "loss"
+              ? -1
+              : 0;
       resolved.push({
         ...s,
         outcome,

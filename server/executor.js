@@ -632,7 +632,9 @@ function settle(state, pos, exit, outcome, note, extra) {
     costDetail: { ...(pos.costDetail || {}), exit: exitCost },
     nights,
     pnl,
-    outcome: outcome || (pnl >= 0 ? "win" : "loss"),
+    // Exactly break-even is its own outcome. Calling it a win would put a 0.00
+    // into the win column and quietly inflate the rate the dashboard reports.
+    outcome: outcome || (pnl > 0 ? "win" : pnl < 0 ? "loss" : "breakeven"),
     closedAt: new Date().toISOString(),
     ...(extra || {}),
   };

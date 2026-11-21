@@ -31,10 +31,38 @@ const { FAMILIES, runFamily, RULES_VERSION } = require("./strategies");
 const FILE = require("./stateDir").file("brain.json");
 
 const FOLDS = 3;
-const MIN_TRADES = 20;
-const MIN_EXPECTANCY = 0.05;
-const MIN_TSTAT = 1.5;
-const MIN_GOOD_FOLDS = 2;
+
+/*
+ * The proof bar.
+ *
+ * The library is twelve rules wide and every one is measured in all four
+ * conditions, so a single market now tests ~48 cells at once. At that width a
+ * t-statistic of 1.5 is not evidence: across the app's 525 measured cells, 34
+ * clear t=1.5 — roughly 8.5 of them per condition slot would pass on luck
+ * alone. That is how a market ends up "proven" on a strategy that simply got
+ * the coin to land its way.
+ *
+ * Tightened accordingly:
+ *  - 30+ unseen trades, so a run of three winners cannot carry a cell;
+ *  - 0.10R per trade, so a marginal market is not called a champion;
+ *  - t >= 2.5, which only 5 of the 525 cells clear — about one per condition
+ *    slot would be expected by chance rather than eight;
+ *  - positive in ALL THREE unseen blocks, not two. Best-of-48 selection is the
+ *    thing being defended against, and fold agreement is the cheapest honest
+ *    check that the result is not one lucky block.
+ *
+ * This is deliberately uncomfortable: on the current data it takes the number
+ * of champions from 17 to 2. Fewer, real ones is the point. A market with no
+ * champion does not trade, and that is a correct answer, not a gap.
+ */
+const MIN_TRADES = 30;
+const MIN_EXPECTANCY = 0.1;
+const MIN_TSTAT = 2.5;
+const MIN_GOOD_FOLDS = FOLDS;
+// Bumped whenever the bar itself changes. Cells store the `proven` flag they
+// were judged with, so raising the bar without re-measuring would leave the old
+// verdicts standing under a rule that no longer approves them.
+const BAR_VERSION = 2;
 const RUN_GAP_MS = 30 * 60 * 1000;
 // A proof in the condition next door is real evidence, but it is not evidence
 // about this condition. It buys a half-size trade, never a full one.
@@ -53,7 +81,7 @@ function readBrain() {
     // dropped rather than left to gate a live alert on a number nobody can
     // measure again. The markets are then re-tested back to back instead of
     // waiting a day for the ordinary schedule to reach them.
-    if (parsed.rulesVersion !== RULES_VERSION) {
+    if (parsed.rulesVersion !== RULES_VERSION || parsed.barVersion !== BAR_VERSION) {
       state.burst = true;
       return { results: {}, updatedAt: parsed.updatedAt || null };
     }
@@ -94,6 +122,7 @@ function readBrain() {
 function writeBrain(brain) {
   try {
     brain.rulesVersion = RULES_VERSION;
+    brain.barVersion = BAR_VERSION;
     writeJson(FILE, brain, 2);
   } catch (err) {
     state.error = err.message;
@@ -450,5 +479,7 @@ module.exports = {
   MIN_TRADES,
   MIN_EXPECTANCY,
   MIN_TSTAT,
+  MIN_GOOD_FOLDS,
+  BAR_VERSION,
   ADJACENT_MULTIPLE,
 };

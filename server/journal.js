@@ -185,7 +185,12 @@ function bucket(entries, keyFn) {
 function summary() {
   const { entries } = readJournal();
   const sent = entries.filter((e) => e.status !== "held");
-  const closed = sent.filter((e) => e.outcome === "win" || e.outcome === "loss");
+  // Break-even is a closed trade, not a win: it belongs in the sample (it is a
+  // real 0R outcome) and out of the win count, so neither the win rate nor the
+  // expectancy is flattered by stops trailed back to entry.
+  const closed = sent.filter(
+    (e) => e.outcome === "win" || e.outcome === "loss" || e.outcome === "breakeven"
+  );
   const wins = closed.filter((e) => e.outcome === "win").length;
 
   const failureCounts = new Map();
@@ -202,6 +207,7 @@ function summary() {
     closed: closed.length,
     open: sent.filter((e) => e.outcome == null).length,
     wins,
+    breakeven: closed.filter((e) => e.outcome === "breakeven").length,
     winrate: closed.length ? Number(((wins / closed.length) * 100).toFixed(1)) : null,
     expectancy: closed.length
       ? Number((closed.reduce((a, e) => a + (Number(e.rMultiple) || 0), 0) / closed.length).toFixed(2))

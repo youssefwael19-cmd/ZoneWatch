@@ -53,7 +53,12 @@ function groupKey(trade) {
  * Exported so the logic can be tested without touching live data.
  */
 function evaluate(history) {
-  const closed = (history || []).filter((h) => h.outcome === "win" || h.outcome === "loss");
+  // Break-even trades stay in the sample. Dropping them would bias the
+  // expectancy in whichever direction the missing 0R trades came from, and a
+  // stop trailed to entry is exactly the outcome this count is full of.
+  const closed = (history || []).filter(
+    (h) => h.outcome === "win" || h.outcome === "loss" || h.outcome === "breakeven"
+  );
 
   const groups = new Map();
   for (const t of closed) {
