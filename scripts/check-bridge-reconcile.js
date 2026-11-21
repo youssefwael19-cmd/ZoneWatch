@@ -236,6 +236,38 @@ async function run() {
   check("1.5R on a 10-point risk holds +1R", trailed.moved[0].stop, 2390);
   check("the app records the broker's stop", executor.status().open[0].stop, 2390);
 
+  console.log("--- the broker's stop drifts away from the app's ---");
+  // The trail was recorded at 2390, and then the terminal put its old stop back
+  // (or the amendment never landed). The app must not keep believing 2390.
+  positions = [{ ticket: 777003, symbol: "XAUUSDm", side: "SELL", lots, entry: 2400, sl: 2410, tp: 2380, profit: 0 }];
+  rec = await executor.reconcile({ XAUUSD: 2385 });
+  check("the drift does not close the position", rec.closed.length, 0);
+  check("one stop mismatch is reported", rec.stopDrift, 1);
+  let drift = executor.status().stopDrift;
+  check("the panel lists it", drift.length, 1);
+  check("the app's stop is kept", drift[0].appStop, 2390);
+  check("the broker's stop is kept", drift[0].brokerStop, 2410);
+  check("a looser broker stop reads as behind", drift[0].direction, "behind");
+  check("the open position carries the broker's stop", executor.status().open[0].brokerStop, 2410);
+  const onDisk = JSON.parse(fs.readFileSync(ledgerFile, "utf8"));
+  check("the mismatch is written to the ledger, not just held in memory", onDisk.open[0].stopMismatch.broker, 2410);
+
+  console.log("--- the broker takes the stop, and the mismatch clears ---");
+  positions[0].sl = 2390;
+  rec = await executor.reconcile({ XAUUSD: 2385 });
+  check("no drift once the broker holds the app's stop", executor.status().stopDrift.length, 0);
+  check("the broker's stop is still recorded", executor.status().open[0].brokerStop, 2390);
+
+  console.log("--- a position the broker holds with no stop ---");
+  positions[0].sl = 0;
+  await executor.reconcile({ XAUUSD: 2385 });
+  drift = executor.status().stopDrift;
+  check("a missing broker stop is a mismatch", drift.length, 1);
+  check("it reads as no stop at all", drift[0].direction, "none");
+  positions[0].sl = 2390;
+  await executor.reconcile({ XAUUSD: 2385 });
+  check("and clears when the stop is back", executor.status().stopDrift.length, 0);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exitCode = 1;
   server.close();

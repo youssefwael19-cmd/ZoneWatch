@@ -1028,25 +1028,53 @@ async function reconcile(priceBySymbol) {
   // ticket first and only then by a normalised symbol. Matching on the app's
   // symbol alone would declare a live trade closed the moment the names differ.
   const trades = live.trades || [];
-  const heldIds = new Set(
-    trades
-      .map((trade) => String(trade.positionId != null ? trade.positionId : trade.ticket != null ? trade.ticket : trade.id != null ? trade.id : ""))
-      .filter(Boolean)
-  );
-  const heldSymbols = new Set(trades.map((trade) => marketKey(trade.symbol)).filter(Boolean));
-  const stillOpen = [];
-  const gone = [];
-
-  for (const pos of state.open) {
+  const byTicket = new Map();
+  const bySymbol = new Map();
+  for (const trade of trades) {
+    const id = trade.positionId != null ? trade.positionId : trade.ticket != null ? trade.ticket : trade.id;
+    if (id != null && id !== "") byTicket.set(String(id), trade);
+    const key = marketKey(trade.symbol);
+    if (key && !bySymbol.has(key)) bySymbol.set(key, trade);
+  }
+  const heldFor = (pos) => {
     const tickets = [pos.bridgePositionTicket, pos.bridgeTicket, pos.brokerOrderId]
       .filter((t) => t != null && t !== "")
       .map(String);
-    const symbols = [pos.brokerSymbol, pos.symbol].filter(Boolean).map(marketKey);
-    if (tickets.some((t) => heldIds.has(t)) || symbols.some((s) => heldSymbols.has(s))) {
-      stillOpen.push(pos);
+    for (const ticket of tickets) {
+      const trade = byTicket.get(ticket);
+      if (trade) return trade;
+    }
+    for (const symbol of [pos.brokerSymbol, pos.symbol].filter(Boolean).map(marketKey)) {
+      const trade = bySymbol.get(symbol);
+      if (trade) return trade;
+    }
+    return null;
+  };
+
+  const stillOpen = [];
+  const gone = [];
+  let dirty = false;
+
+  for (const pos of state.open) {
+    const trade = heldFor(pos);
+    if (!trade) {
+      gone.push(pos);
       continue;
     }
-    gone.push(pos);
+
+    // The broker holds the position and the stop that will actually close it,
+    // so every pass writes down what it holds next to what this app thinks. A
+    // difference is a trail that did not land, and it belongs on the panel
+    // rather than in a log line nobody reads.
+    const brokerStop =
+      trade.sl != null && Number.isFinite(Number(trade.sl)) && Number(trade.sl) > 0 ? Number(trade.sl) : null;
+    const mismatch = stopCheck(pos, trade);
+    if ((pos.brokerStop ?? null) !== brokerStop || JSON.stringify(pos.stopMismatch || null) !== JSON.stringify(mismatch)) {
+      pos.brokerStop = brokerStop;
+      pos.stopMismatch = mismatch;
+      dirty = true;
+    }
+    stillOpen.push(pos);
   }
 
   const closed = [];
@@ -1113,9 +1141,11 @@ async function reconcile(priceBySymbol) {
     state.balance = Number((state.balance + closed.reduce((a, c) => a + c.pnl, 0)).toFixed(2));
     if (state.closed.length > 500) state.closed = state.closed.slice(-500);
     writeState(state);
+  } else if (dirty) {
+    writeState(state);
   }
 
-  return { closed };
+  return { closed, stopDrift: stillOpen.filter((pos) => pos.stopMismatch).length };
 }
 
 /**
@@ -1191,6 +1221,44 @@ async function bridgeClosedDeals(config, hours) {
 
 function marketKey(name) {
   return String(name || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+/**
+ * The broker's stop for one of our positions, compared with the one this app
+ * believes protects it.
+ *
+ * The trailing stop is executed at the broker and only recorded here once the
+ * broker confirms it, so the two numbers should agree. They can still drift: an
+ * amendment can land on another position, a terminal can restore the old stop,
+ * or the bridge can be mid-restart. Nothing else compares the two sides, so a
+ * trail that silently failed would leave the app reporting protection the
+ * account does not have.
+ *
+ * Returns null when the stops agree, otherwise what each side holds.
+ */
+function stopCheck(pos, trade) {
+  const appStop = Number(pos.stop);
+  const rawBrokerStop = trade && trade.sl != null ? Number(trade.sl) : null;
+  // MT5 and OANDA both report 0 (or nothing) for a position with no stop: that
+  // is the widest mismatch of all, not a missing measurement.
+  const brokerStop = Number.isFinite(rawBrokerStop) && rawBrokerStop > 0 ? rawBrokerStop : null;
+  const at = new Date().toISOString();
+
+  if (brokerStop == null || !Number.isFinite(appStop)) {
+    return { app: Number.isFinite(appStop) ? appStop : null, broker: brokerStop, diff: null, direction: "none", at };
+  }
+  // A broker rounds a stop to the symbol's digits, so a difference far below a
+  // tick is the same stop rather than a trail that failed.
+  const tolerance = Math.max(Math.abs(appStop) * 1e-6, 1e-6);
+  if (Math.abs(brokerStop - appStop) <= tolerance) return null;
+  const looser = pos.side === "BUY" ? brokerStop < appStop : brokerStop > appStop;
+  return {
+    app: appStop,
+    broker: brokerStop,
+    diff: Number((brokerStop - appStop).toFixed(8)),
+    direction: looser ? "behind" : "ahead",
+    at,
+  };
 }
 
 function rollDay(state) {
@@ -1281,6 +1349,21 @@ function status(priceBySymbol) {
       };
     })(),
     open: state.open,
+    // Every open position whose stop the broker does not match. The broker owns
+    // the stop, so this is the panel that says whether the protection the app
+    // reports is the protection the account has.
+    stopDrift: state.open
+      .filter((pos) => pos.stopMismatch)
+      .map((pos) => ({
+        symbol: pos.symbol,
+        side: pos.side,
+        appStop: pos.stopMismatch.app,
+        brokerStop: pos.stopMismatch.broker,
+        diff: pos.stopMismatch.diff,
+        direction: pos.stopMismatch.direction,
+        checkedAt: pos.stopMismatch.at,
+        trailError: pos.trailError || null,
+      })),
     openCount: state.open.length,
     closedCount: state.closed.length,
     closed: state.closed.slice(-20).reverse(),

@@ -2244,7 +2244,17 @@ async function loadExec() {
           : `· bridge ${d.bridgeConfigured ? "configured" : "not configured"}`}
         · account ${d.accountSource === "exness-mt5" ? "read from Exness" : d.account ? "read from the broker" : "app figure"}
         · TradingView alerts ${d.tv && d.tv.enabled ? "on" : "off"}${d.tv && d.tv.enabled && d.tv.requireGate === false ? " (gate bypassed)" : ""}</div>
-      ${d.lastError ? `<div style="color:#ff9a9a;margin-top:6px">last error: ${d.lastError}</div>` : ""}`;
+      ${d.lastError ? `<div style="color:#ff9a9a;margin-top:6px">last error: ${d.lastError}</div>` : ""}
+      ${(() => {
+        const drift = d.stopDrift || [];
+        if (!drift.length) return "";
+        return `<div style="margin-top:8px;color:#ff9a9a">` + drift.map((s) => {
+          const gap = s.diff == null || s.brokerStop == null
+            ? `the broker holds no stop, the app thinks it is ${s.appStop}`
+            : `broker ${s.brokerStop}, app ${s.appStop} (${Math.abs(s.diff).toFixed(2)} ${s.direction === "behind" ? "behind — less protected" : "ahead of the app"})`;
+          return `<div><strong>Stop mismatch · ${s.symbol} ${s.side}</strong> — ${gap}${s.trailError ? ` · last trail attempt: ${s.trailError}` : ""}</div>`;
+        }).join("") + `<div class="hint" style="margin-top:2px">The broker owns the stop, so its number is the one that will close the trade. The app does not trail against a stop the broker does not hold; check the position in MetaTrader if this does not clear within a few cycles.</div></div>`;
+      })()}`;
 
     const acct = d.account;
     const acctBox = document.getElementById("exAccountBox");
@@ -2261,7 +2271,8 @@ async function loadExec() {
     const open = d.open || [];
     document.getElementById("exOpen").innerHTML = open.length
       ? `<div class="sub">Open positions</div>` + open.map(p => `<div class="hint" style="padding:4px 0">
-          <strong>${p.symbol}</strong> ${p.side} ${p.lots} lots @ ${p.entry} · stop ${p.stop} · target ${p.target}
+          <strong>${p.symbol}</strong> ${p.side} ${p.lots} lots @ ${p.entry} · stop ${p.stop}${p.brokerStop != null ? ` (broker ${p.brokerStop})` : ""} · target ${p.target}
+          ${p.stopMismatch ? `<span style="color:#ff9a9a"> · <strong>stop mismatch</strong></span>` : ""}
           ${p.margin != null ? `· margin $${Number(p.margin).toFixed(2)}` : ""}
           ${p.floating != null ? `· now ${p.floating > 0 ? "+" : ""}$${p.floating.toFixed(2)}` : ""}
         </div>`).join("")
