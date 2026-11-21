@@ -26,7 +26,7 @@ const { writeJson } = require("./atomicWrite");
 
 const candlesMod = require("./candles");
 const regime = require("./regime");
-const { FAMILIES, runFamily } = require("./strategies");
+const { FAMILIES, runFamily, RULES_VERSION } = require("./strategies");
 
 const FILE = require("./stateDir").file("brain.json");
 
@@ -41,13 +41,22 @@ const RUN_GAP_MS = 30 * 60 * 1000;
 const ADJACENT_MULTIPLE = 0.5;
 const TTL_MS = 24 * 60 * 60 * 1000;
 
-const state = { running: false, lastRunAt: 0, lastSymbol: null, error: null };
+const state = { running: false, lastRunAt: 0, lastSymbol: null, error: null, burst: false };
 
 function readBrain() {
   try {
     const raw = fs.readFileSync(FILE, "utf-8").trim();
     if (!raw) return { results: {}, updatedAt: null };
     const parsed = JSON.parse(raw);
+
+    // A stored verdict from an older rule set is not reproducible, so it is
+    // dropped rather than left to gate a live alert on a number nobody can
+    // measure again. The markets are then re-tested back to back instead of
+    // waiting a day for the ordinary schedule to reach them.
+    if (parsed.rulesVersion !== RULES_VERSION) {
+      state.burst = true;
+      return { results: {}, updatedAt: parsed.updatedAt || null };
+    }
     const results = parsed.results || {};
 
     // A stored verdict may only ever cite a rule that still exists. If a
@@ -84,6 +93,7 @@ function readBrain() {
 
 function writeBrain(brain) {
   try {
+    brain.rulesVersion = RULES_VERSION;
     writeJson(FILE, brain, 2);
   } catch (err) {
     state.error = err.message;
@@ -230,7 +240,11 @@ async function runFor(symbol, candleSymbol) {
 /** One stale market per RUN_GAP_MS, like the lab. */
 async function maybeRun(instruments = []) {
   if (state.running) return;
-  if (Date.now() - state.lastRunAt < RUN_GAP_MS) return;
+  // After a rule change every market is stale at once, so the usual one-market-
+  // per-half-hour pace would leave the gate silent for most of a day. One per
+  // watch cycle until the backlog is gone, then back to the normal gap.
+  const gap = state.burst ? 0 : RUN_GAP_MS;
+  if (Date.now() - state.lastRunAt < gap) return;
 
   const brain = readBrain();
   const stale = instruments.find((inst) => {
@@ -238,7 +252,10 @@ async function maybeRun(instruments = []) {
     if (!r) return true;
     return Date.now() - new Date(r.at).getTime() > TTL_MS;
   });
-  if (!stale) return;
+  if (!stale) {
+    state.burst = false;
+    return;
+  }
 
   await runFor(stale.symbol, stale.candleSymbol);
 }

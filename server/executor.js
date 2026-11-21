@@ -35,6 +35,7 @@ const settings = require("./settings");
 const costsMod = require("./costs");
 const market = require("./market");
 const brokers = require("./brokers");
+const stopsMod = require("./stops");
 
 const FILE = require("./stateDir").file("executor.json");
 
@@ -485,6 +486,12 @@ async function place(signal, priceBySymbol) {
     slippageMoney: fill ? fill.money : 0,
     fillModel: fill ? "paper-market" : "broker",
     stop: Number(signal.stop),
+    // Kept so the risk unit never changes when the stop is moved. Without it a
+    // break-even stop would make every later measurement divide by a distance
+    // that had already been redefined.
+    initialStop: Number(signal.stop),
+    peak: null,
+    trail: [],
     target: Number(signal.target),
     riskMoney: size.riskMoney,
     riskPct: size.riskPctActual,
@@ -742,15 +749,43 @@ function mark(priceBySymbol) {
     }
 
     if (!direct) {
+      // Stop management runs before the stop is tested, so a position that has
+      // reached 1R and come back to entry closes at break-even rather than at
+      // the original loss. Paper only: in bridge and direct mode the stop lives
+      // on the broker's books, and moving it here would leave the app believing
+      // in protection the account does not have.
+      if (config.mode === "paper") {
+        const moved = stopsMod.advance({
+          side: pos.side,
+          entry: pos.entry,
+          initialStop: pos.initialStop ?? pos.stop,
+          stop: pos.stop,
+          peak: pos.peak,
+          price,
+        });
+        pos.peak = moved.peak;
+        if (moved.moved) {
+          pos.stop = moved.stop;
+          pos.trail = [
+            ...(pos.trail || []),
+            { at: new Date().toISOString(), stop: moved.stop, protectsR: moved.protectsR },
+          ];
+        }
+      }
+
       const hitStop = pos.side === "BUY" ? price <= pos.stop : price >= pos.stop;
       const hitTarget = pos.side === "BUY" ? price >= pos.target : price <= pos.target;
       if (hitStop) {
         const stop = stopFill(pos, price, config, state);
-        closed.push(settle(state, pos, stop.exit, "loss", null, {
+        // A stop that had already been moved past entry is not a loss of the
+        // whole risk, so the net result decides the label.
+        const protectedStop = pos.side === "BUY" ? pos.stop >= pos.entry : pos.stop <= pos.entry;
+        closed.push(settle(state, pos, stop.exit, protectedStop ? undefined : "loss", null, {
           slippageUnits: stop.slippageUnits,
           gap: stop.gap,
           gapMoney: stop.gapMoney,
           fillModel: stop.fillModel,
+          protectedStop,
         }));
         continue;
       }

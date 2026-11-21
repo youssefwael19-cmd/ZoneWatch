@@ -22,6 +22,8 @@ const { writeJson } = require("./atomicWrite");
 
 const candlesMod = require("./candles");
 const autozones = require("./autozones");
+const stopsMod = require("./stops");
+const { RULES_VERSION } = require("./strategies");
 
 const LAB_FILE = require("./stateDir").file("lab.json");
 
@@ -47,13 +49,20 @@ for (const mult of [1.2, 1.4, 1.8]) {
   }
 }
 
-const state = { running: false, lastRunAt: 0, lastSymbol: null, error: null };
+const state = { running: false, lastRunAt: 0, lastSymbol: null, error: null, burst: false };
 
 function readLab() {
   try {
     const raw = fs.readFileSync(LAB_FILE, "utf-8").trim();
     if (!raw) return { results: {}, updatedAt: null };
     const parsed = JSON.parse(raw);
+    // Stored verdicts from an older rule set are not reproducible: the stops
+    // were managed differently, so the R figures cannot be compared. Drop them
+    // and re-measure rather than gating alerts on numbers nobody can repeat.
+    if (parsed.rulesVersion !== RULES_VERSION) {
+      state.burst = true;
+      return { results: {}, updatedAt: parsed.updatedAt || null };
+    }
     return { results: parsed.results || {}, updatedAt: parsed.updatedAt || null };
   } catch {
     return { results: {}, updatedAt: null };
@@ -62,6 +71,7 @@ function readLab() {
 
 function writeLab(lab) {
   try {
+    lab.rulesVersion = RULES_VERSION;
     writeJson(LAB_FILE, lab, 2);
   } catch (err) {
     state.error = err.message;
@@ -133,32 +143,32 @@ function simulate(bars, zones, atr, from, to, cfg) {
       if (!(risk > 0)) continue;
       const target = side === "BUY" ? entry + risk * cfg.rr : entry - risk * cfg.rr;
 
-      let outcome = null;
+      // The same stop ladder the executor runs: break-even at 1R, then 0.5R
+      // behind the best price. A zone trade that stalls short of its target
+      // keeps what it earned instead of handing it all back, and the lab scores
+      // the exit the bot would actually have taken.
+      let held = stop;
+      let peakR = 0;
+      let exit = null;
       for (let j = i + 1; j < Math.min(i + MAX_HOLD, to); j++) {
         const b = bars[j];
-        if (side === "BUY") {
-          if (b.l <= stop) {
-            outcome = "loss";
-            break;
-          }
-          if (b.h >= target) {
-            outcome = "win";
-            break;
-          }
-        } else {
-          if (b.h >= stop) {
-            outcome = "loss";
-            break;
-          }
-          if (b.l <= target) {
-            outcome = "win";
-            break;
-          }
+        const hitStop = side === "BUY" ? b.l <= held : b.h >= held;
+        const hitTarget = side === "BUY" ? b.h >= target : b.l <= target;
+        if (hitStop) {
+          // The stop in force at the start of the bar decides the fill.
+          exit = (side === "BUY" ? held - entry : entry - held) / risk;
+          break;
         }
+        if (hitTarget) {
+          exit = cfg.rr;
+          break;
+        }
+        peakR = Math.max(peakR, side === "BUY" ? (b.h - entry) / risk : (entry - b.l) / risk);
+        held = stopsMod.protect({ side, entry, stop: held, peakR });
       }
 
-      if (outcome) {
-        trades.push(outcome === "win" ? cfg.rr : -1);
+      if (exit != null) {
+        trades.push(Number(exit.toFixed(4)));
         break;
       }
     }
@@ -285,7 +295,10 @@ async function runFor(symbol, candleSymbol) {
  */
 async function maybeRun(instruments) {
   if (state.running) return;
-  if (Date.now() - state.lastRunAt < RUN_GAP_MS) return;
+  // After a rule change every market is stale at once; one per watch cycle
+  // until the backlog clears, then back to the ordinary pace.
+  const gap = state.burst ? 0 : RUN_GAP_MS;
+  if (Date.now() - state.lastRunAt < gap) return;
 
   const lab = readLab();
   const now = Date.now();
@@ -296,7 +309,10 @@ async function maybeRun(instruments) {
     return now - new Date(r.at).getTime() > RESULT_TTL_MS;
   });
 
-  if (!stale) return;
+  if (!stale) {
+    state.burst = false;
+    return;
+  }
   await runFor(stale.symbol, stale.candleSymbol);
 }
 

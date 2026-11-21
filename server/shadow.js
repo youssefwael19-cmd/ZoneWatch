@@ -24,6 +24,7 @@ const path = require("path");
 const { writeJson } = require("./atomicWrite");
 const settings = require("./settings");
 const costsMod = require("./costs");
+const stopsMod = require("./stops");
 const executor = require("./executor");
 
 const FILE = require("./stateDir").file("shadow.json");
@@ -188,6 +189,10 @@ function openPosition(state, signal, held, config, prices, now) {
     slippageMoney: fill.money,
     fillModel: "paper-market",
     stop: Number(signal.stop),
+    // The risk unit, fixed at entry so a moved stop cannot redefine it.
+    initialStop: Number(signal.stop),
+    peak: null,
+    trail: [],
     target: Number(signal.target),
     riskMoney: size.riskMoney,
     riskPct: size.riskPctActual,
@@ -218,6 +223,22 @@ function resolve(state, prices, config, now) {
       stillOpen.push(pos);
       continue;
     }
+    // Same stop ladder as the live book, so the shadow's record is comparable
+    // with the trades that were actually allowed out.
+    const moved = stopsMod.advance({
+      side: pos.side,
+      entry: pos.entry,
+      initialStop: pos.initialStop ?? pos.stop,
+      stop: pos.stop,
+      peak: pos.peak,
+      price,
+    });
+    pos.peak = moved.peak;
+    if (moved.moved) {
+      pos.stop = moved.stop;
+      pos.trail = [...(pos.trail || []), { at: now.toISOString(), stop: moved.stop, protectsR: moved.protectsR }];
+    }
+
     const hitStop = pos.side === "BUY" ? price <= pos.stop : price >= pos.stop;
     const hitTarget = pos.side === "BUY" ? price >= pos.target : price <= pos.target;
     if (!hitStop && !hitTarget) {
@@ -264,7 +285,9 @@ function resolve(state, prices, config, now) {
       costDetail: { ...(pos.costDetail || {}), exit: exitCost },
       nights,
       pnl,
-      outcome: hitStop ? "loss" : "win",
+      // Labelled by what it actually made: a stop that had been trailed past
+      // entry has not lost anything.
+      outcome: hitStop && pnl < 0 ? "loss" : "win",
       closedAt: now.toISOString(),
       ...(extra || {}),
     });

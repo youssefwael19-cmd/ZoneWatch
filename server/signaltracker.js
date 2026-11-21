@@ -19,6 +19,8 @@ const fs = require("fs");
 const path = require("path");
 const { writeJson } = require("./atomicWrite");
 
+const stopsMod = require("./stops");
+
 const FILE = require("./stateDir").file("signals.json");
 const MAX_HISTORY = 200;
 const EXPIRY_MS = 24 * 60 * 60 * 1000; // a day without resolution = expired
@@ -100,6 +102,17 @@ function add(signal) {
  */
 function pathOutcome(s, bars, openedAtMs) {
   if (!Array.isArray(bars) || !bars.length) return null;
+
+  // The stop ladder the live book runs (stops.js): break-even at 1R, then 0.5R
+  // behind the best price. The tracker has to score the exit the bot would have
+  // taken, otherwise its win rate describes a trade nobody placed.
+  const entry = Number(s.entry ?? s.price);
+  const openedWith = Number(s.stop);
+  const risk = Math.abs(entry - openedWith);
+  const canTrail = Number.isFinite(entry) && risk > 0;
+  let stop = openedWith;
+  let peakR = 0;
+
   for (const bar of bars) {
     const at = Number(bar.t) < 1e12 ? Number(bar.t) * 1000 : Number(bar.t);
     if (!Number.isFinite(at) || at + 60 * 1000 < openedAtMs) continue;
@@ -107,13 +120,23 @@ function pathOutcome(s, bars, openedAtMs) {
     const low = Number(bar.l);
     if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
 
-    const hitStop = s.side === "BUY" ? low <= s.stop : high >= s.stop;
+    const hitStop = s.side === "BUY" ? low <= stop : high >= stop;
     const hitTarget = s.side === "BUY" ? high >= s.target : low <= s.target;
 
     // Both inside one bar: the order inside the bar is unknown, so take the
     // pessimistic reading. Anything else flatters the strategy.
-    if (hitStop) return { outcome: "loss", exit: s.stop, barAt: at };
+    if (hitStop) {
+      // A stop trailed past entry has not lost: how it is labelled follows what
+      // the exit actually did.
+      const protectedStop = canTrail && (s.side === "BUY" ? stop >= entry : stop <= entry);
+      return { outcome: protectedStop ? "win" : "loss", exit: stop, barAt: at, trailed: stop !== openedWith };
+    }
     if (hitTarget) return { outcome: "win", exit: s.target, barAt: at };
+
+    if (canTrail) {
+      peakR = Math.max(peakR, s.side === "BUY" ? (high - entry) / risk : (entry - low) / risk);
+      stop = stopsMod.protect({ side: s.side, entry, stop, peakR });
+    }
   }
   return null;
 }
