@@ -13,6 +13,7 @@ const gate = require("../server/gate");
 const exploration = require("../server/exploration");
 const learning = require("../server/learning");
 const ledger = require("../server/ledger");
+const strategies = require("../server/strategies");
 
 let failures = 0;
 function check(name, fn) {
@@ -227,6 +228,95 @@ check("expiries are not counted as closed trades", () => {
   });
   assert.strictEqual(out.books.signals.closed, 0);
   assert.strictEqual(out.books.signals.expired, 2);
+});
+
+/* ---------------------- lab-promoted families ---------------------- */
+
+const ZW2 = { mult: 1.8, stopMode: "zone_width", rr: 2 };
+
+check("a lab config that lost its unseen blocks is not promoted", () => {
+  const out = strategies.promoteLabConfigs({
+    XAUUSD: { chosen: [{ cfg: ZW2, test: { n: 200, expectancy: -0.1 } }] },
+  });
+  assert.deepStrictEqual(out, []);
+});
+
+check("a block too small to be evidence does not promote", () => {
+  const out = strategies.promoteLabConfigs({
+    EURUSD: { chosen: [{ cfg: { mult: 1.2, stopMode: "atr", rr: 1 }, test: { n: 29, expectancy: 0.5 } }] },
+  });
+  assert.deepStrictEqual(out, []);
+});
+
+check("a winner is promoted with its combined unseen record", () => {
+  const out = strategies.promoteLabConfigs({
+    NASDAQ: {
+      chosen: [
+        { cfg: ZW2, test: { n: 39, expectancy: 0.719 } },
+        { cfg: ZW2, test: { n: 38, expectancy: 0.25 } },
+      ],
+    },
+  });
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].id, "lab_18_zw_2");
+  assert.strictEqual(out[0].n, 77);
+  assert.deepStrictEqual(out[0].markets, ["NASDAQ"]);
+  assert.ok(Math.abs(out[0].expectancy - 0.487) < 0.01, String(out[0].expectancy));
+});
+
+check("a losing block counts against the config it came from", () => {
+  const cfg = { mult: 1.2, stopMode: "atr", rr: 1 };
+  const out = strategies.promoteLabConfigs({
+    EURUSD: {
+      chosen: [
+        { cfg, test: { n: 100, expectancy: 0.2 } },
+        { cfg, test: { n: 100, expectancy: -0.15 } },
+      ],
+    },
+  });
+  assert.strictEqual(out[0].n, 200);
+  assert.ok(Math.abs(out[0].expectancy - 0.025) < 0.01, String(out[0].expectancy));
+});
+
+check("a config whose whole unseen record is negative is refused", () => {
+  const cfg = { mult: 1.4, stopMode: "zone_width", rr: 2 };
+  const out = strategies.promoteLabConfigs({
+    GBPUSD: {
+      chosen: [
+        { cfg, test: { n: 60, expectancy: 0.1 } },
+        { cfg, test: { n: 300, expectancy: -0.2 } },
+      ],
+    },
+  });
+  assert.deepStrictEqual(out, []);
+});
+
+check("the promoted list is capped", () => {
+  const results = {};
+  const modes = ["zone_width", "atr"];
+  let n = 0;
+  for (const mult of [1.2, 1.4, 1.8]) {
+    for (const stopMode of modes) {
+      for (const rr of [1, 2]) {
+        results[`M${n++}`] = { chosen: [{ cfg: { mult, stopMode, rr }, test: { n: 50, expectancy: 0.1 + n / 100 } }] };
+      }
+    }
+  }
+  const out = strategies.promoteLabConfigs(results);
+  assert.strictEqual(out.length, strategies.MAX_PROMOTED);
+  // Best unseen record first.
+  assert.ok(out[0].expectancy >= out[1].expectancy, "ranking is not descending");
+});
+
+check("a promoted family walks like any other rule", () => {
+  const family = strategies.labFamily(ZW2);
+  assert.strictEqual(family.id, "lab_18_zw_2");
+  assert.strictEqual(family.promoted, true);
+  assert.strictEqual(family.worksIn.length, 4, "no condition may be called outside its remit");
+  assert.strictEqual(typeof family.entryAt, "function");
+  // No candles, no zones: a rule that guessed anyway would be inventing trades.
+  const ctx = { bars: [], atr: [] };
+  assert.strictEqual(family.entryAt([], 500, ctx), null);
 });
 
 console.log(failures ? `\n${failures} failed` : "\nall passed");

@@ -27,6 +27,7 @@ const { writeJson } = require("./atomicWrite");
 const candlesMod = require("./candles");
 const regime = require("./regime");
 const { FAMILIES, runFamily, RULES_VERSION } = require("./strategies");
+const labMod = require("./lab");
 
 const FILE = require("./stateDir").file("brain.json");
 
@@ -74,6 +75,22 @@ const TTL_MS = 24 * 60 * 60 * 1000;
 
 const state = { running: false, lastRunAt: 0, lastSymbol: null, error: null, burst: false };
 
+/**
+ * Every rule the brain tests: the hand-written library plus whatever the lab has
+ * put ahead on unseen bars. A lab winner is only ever a *candidate* — it is
+ * measured here under the same bar, and its own history earns or denies the
+ * proof.
+ */
+function familiesNow() {
+  try {
+    const promoted = labMod.families();
+    return promoted.length ? [...FAMILIES, ...promoted] : FAMILIES;
+  } catch (err) {
+    state.error = `lab families: ${err.message}`;
+    return FAMILIES;
+  }
+}
+
 function readBrain() {
   try {
     const raw = fs.readFileSync(FILE, "utf-8").trim();
@@ -93,7 +110,7 @@ function readBrain() {
     // A stored verdict may only ever cite a rule that still exists. If a
     // strategy was removed, its old proof goes with it rather than silently
     // backing a live alert.
-    const known = new Set(FAMILIES.map((f) => f.id));
+    const known = new Set(familiesNow().map((f) => f.id));
     for (const [symbol, result] of Object.entries(results)) {
       if (!result || typeof result !== "object") continue;
       if (result.cells) {
@@ -175,8 +192,9 @@ async function evaluateMarket(symbol, candleSymbol, opts = {}) {
   }
 
   const cells = {};
+  const families = familiesNow();
 
-  for (const family of FAMILIES) {
+  for (const family of families) {
     const byCondition = {};
     const foldSigns = {};
 
@@ -244,7 +262,7 @@ async function evaluateMarket(symbol, candleSymbol, opts = {}) {
     grid: Object.fromEntries(
       conditions.map((c) => [
         c,
-        FAMILIES.map((f) => {
+        families.map((f) => {
           const cell = cells[`${c}|${f.id}`];
           return cell ? { family: f.id, n: cell.n, expectancy: cell.expectancy, proven: cell.proven } : null;
         }).filter(Boolean),
@@ -470,6 +488,8 @@ function summary() {
     lastRunAt: state.lastRunAt ? new Date(state.lastRunAt).toISOString() : null,
     lastSymbol: state.lastSymbol,
     error: state.error,
+    // Every rule currently being tested, so a lab candidate is never invisible.
+    families: familiesNow().map((f) => ({ id: f.id, name: f.name, promoted: Boolean(f.promoted) })),
     conditions: rows,
   };
 }

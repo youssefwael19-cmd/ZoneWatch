@@ -28,6 +28,7 @@
  */
 
 const stopsMod = require("./stops");
+const autozones = require("./autozones");
 
 const MAX_HOLD_BARS = 48;
 
@@ -497,6 +498,179 @@ const FAMILIES = [
   },
 ];
 
+/* --------------------- families promoted from the lab --------------------- */
+
+/**
+ * The lab tunes a zone-entry config on older bars, then scores it on bars it
+ * has not seen. When one of those configs comes out ahead on unseen data it is
+ * worth more than a guess, so it is promoted into a family here and the brain
+ * tests it on every market in every condition — under the same proof bar as the
+ * twelve hand-written rules. Nothing about that bar is relaxed for these.
+ *
+ * Two caveats are built into the design rather than argued away:
+ *
+ *  - A promoted config carries a selection advantage: it was picked from
+ *    twelve configs because it did well on this data. That is exactly why it
+ *    stays a *candidate*. Turning a lab winner into a proven rule still needs
+ *    30+ trades, 0.10R, t >= 2.5 and all three blocks positive on folds the
+ *    lab never used to choose it.
+ *  - The set is derived from the lab's current results, so a config that stops
+ *    winning unseen bars stops being tested. The brain's "a rule must still
+ *    exist" check drops the cells measured for it instead of leaving a verdict
+ *    behind that refers to a rule nobody runs any more.
+ */
+
+const LAB_WINDOW = 200; // the same slice of history the lab walks
+const LAB_MAX_PER_SIDE = 4; // the same zone budget the lab uses
+const MIN_BLOCK_TRADES = 30; // a block smaller than this is not evidence
+const MAX_PROMOTED = 3;
+
+/**
+ * Zones as the lab sees them, at every bar, computed once per market run.
+ *
+ * The brain walks a family six times over ~6,200 bars (three folds, twice).
+ * Detecting zones inside that loop would repeat the same 200-bar analysis every
+ * time, so the map is built once per displacement multiple and reused.
+ */
+const labZoneCache = new WeakMap();
+
+function labZoneSeries(ctx, mult) {
+  let perMult = labZoneCache.get(ctx);
+  if (!perMult) {
+    perMult = new Map();
+    labZoneCache.set(ctx, perMult);
+  }
+  const hit = perMult.get(mult);
+  if (hit) return hit;
+
+  const bars = ctx.bars;
+  const out = new Array(bars.length).fill(null);
+  for (let i = LAB_WINDOW; i < bars.length; i++) {
+    out[i] = autozones.detectZones(bars.slice(i - LAB_WINDOW, i + 1), {
+      displacementMult: mult,
+      maxPerSide: LAB_MAX_PER_SIDE,
+    });
+  }
+  perMult.set(mult, out);
+  return out;
+}
+
+/** Stable id for a lab config, so stored cells survive a restart. */
+function labFamilyId(cfg) {
+  const mult = String(cfg.mult).replace(".", "");
+  return `lab_${mult}_${cfg.stopMode === "zone_width" ? "zw" : "atr"}_${cfg.rr}`;
+}
+
+/**
+ * One lab config as a family: the same entry the lab simulated on the horizon
+ * it chose (price closing inside a freshly detected zone), the same stop the
+ * lab tested, and the same target multiple.
+ *
+ * The sample it produces here is smaller than the lab's, on purpose. The brain
+ * walks one trade at a time, like the executor holding one position per market,
+ * so signals that overlap an open trade are skipped; the lab's simulation lets
+ * them stack. Same entries, fewer of them — and that is what the proof bar is
+ * then applied to, so nothing is proven on the looser number.
+ */
+function labFamily(cfg) {
+  const mult = Number(cfg.mult);
+  const rr = Number(cfg.rr);
+  const zoneStop = cfg.stopMode === "zone_width";
+  return {
+    id: labFamilyId(cfg),
+    name: `Lab zone entry (${mult}× displacement, ${zoneStop ? "zone-edge" : "ATR"} stop, ${rr}R)`,
+    promoted: true,
+    // The lab tuned this on price action, not on a market condition, so it has
+    // no intended tape. All four are left in so a measurement there is never
+    // dismissed as "outside this rule's intended condition".
+    worksIn: ["trending-volatile", "trending-quiet", "ranging-volatile", "ranging-quiet"],
+    why: "A zone-entry config the lab tuned on older bars and that came out ahead on bars it had not seen. The brain measures it everywhere like any other rule; the lab's result is a nomination, not a proof.",
+    entryAt(bars, i, ctx) {
+      const atr = ctx.atr[i];
+      if (!(atr > 0) || i < LAB_WINDOW) return null;
+      const zones = labZoneSeries(ctx, mult)[i];
+      if (!zones || !zones.length) return null;
+
+      const bar = bars[i];
+      for (const zone of zones) {
+        if (!(bar.c >= zone.low && bar.c <= zone.high)) continue;
+
+        const side = zone.type === "demand" ? "BUY" : "SELL";
+        const width = Math.max(zone.high - zone.low, atr * 0.1);
+        const entry = bar.c;
+        const stop = zoneStop
+          ? side === "BUY"
+            ? zone.low - width * 0.5
+            : zone.high + width * 0.5
+          : side === "BUY"
+            ? entry - atr
+            : entry + atr;
+        const risk = Math.abs(entry - stop);
+        if (!(risk > 0)) continue;
+        const target = side === "BUY" ? entry + risk * rr : entry - risk * rr;
+        return { side, entry, stop, target };
+      }
+      return null;
+    },
+  };
+}
+
+/**
+ * Which lab configs earned a place in the brain, from the lab's own results.
+ *
+ * A config qualifies by winning at least one unseen block of 30+ trades, and it
+ * is ranked on its *whole* unseen record — the blocks it lost count against it,
+ * so a config cannot be promoted on one lucky block while losing the next.
+ * Only the top few are promoted: every extra family multiplies the tests the
+ * brain runs, and a long list of near-winners is how a search starts finding
+ * edges that are not there.
+ */
+function promoteLabConfigs(labResults) {
+  const nominated = new Set();
+  const all = new Map();
+
+  for (const [symbol, result] of Object.entries(labResults || {})) {
+    for (const fold of (result && result.chosen) || []) {
+      const cfg = fold && fold.cfg;
+      const test = fold && fold.test;
+      if (!cfg || !test) continue;
+      const n = Number(test.n) || 0;
+      const expectancy = Number(test.expectancy);
+      if (!Number.isFinite(expectancy) || n <= 0) continue;
+
+      const id = labFamilyId(cfg);
+      if (!all.has(id)) {
+        all.set(id, {
+          id,
+          cfg: { mult: cfg.mult, stopMode: cfg.stopMode, rr: cfg.rr },
+          n: 0,
+          totalR: 0,
+          markets: new Set(),
+        });
+      }
+      const row = all.get(id);
+      row.n += n;
+      row.totalR += expectancy * n;
+      row.markets.add(symbol);
+
+      if (n >= MIN_BLOCK_TRADES && expectancy > 0) nominated.add(id);
+    }
+  }
+
+  return [...nominated]
+    .map((id) => {
+      const row = all.get(id);
+      return {
+        ...row,
+        markets: [...row.markets],
+        expectancy: row.n ? Number((row.totalR / row.n).toFixed(3)) : null,
+      };
+    })
+    .filter((row) => row.expectancy != null && row.expectancy > 0)
+    .sort((a, b) => (b.expectancy - a.expectancy) || (b.n - a.n) || a.id.localeCompare(b.id))
+    .slice(0, MAX_PROMOTED);
+}
+
 /**
  * Resolve one entry forward, bar by bar, with the live stop ladder applied.
  *
@@ -592,4 +766,16 @@ function runFamily(family, bars, ctx, from, to, opts = {}) {
   return trades;
 }
 
-module.exports = { FAMILIES, runFamily, resolve, series, MAX_HOLD_BARS, RULES_VERSION };
+module.exports = {
+  FAMILIES,
+  runFamily,
+  resolve,
+  series,
+  labFamily,
+  labFamilyId,
+  promoteLabConfigs,
+  MAX_HOLD_BARS,
+  MAX_PROMOTED,
+  MIN_BLOCK_TRADES,
+  RULES_VERSION,
+};

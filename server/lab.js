@@ -23,7 +23,7 @@ const { writeJson } = require("./atomicWrite");
 const candlesMod = require("./candles");
 const autozones = require("./autozones");
 const stopsMod = require("./stops");
-const { RULES_VERSION } = require("./strategies");
+const { RULES_VERSION, labFamily, promoteLabConfigs } = require("./strategies");
 
 const LAB_FILE = require("./stateDir").file("lab.json");
 
@@ -316,6 +316,20 @@ async function maybeRun(instruments) {
   await runFor(stale.symbol, stale.candleSymbol);
 }
 
+/**
+ * The configs this lab has put ahead on unseen bars, handed to the brain as
+ * families it can measure everywhere. Memoised for a minute: readBrain asks
+ * often, and lab.json only changes when a market finishes its test.
+ */
+let familyMemo = { at: 0, list: [] };
+
+function families() {
+  if (Date.now() - familyMemo.at < 60 * 1000) return familyMemo.list;
+  const list = promoteLabConfigs(readLab().results).map((row) => labFamily(row.cfg));
+  familyMemo = { at: Date.now(), list };
+  return list;
+}
+
 /** Is this market allowed to send signal alerts? Unknown markets are allowed. */
 function tradable(symbol) {
   const lab = readLab();
@@ -342,6 +356,7 @@ function summary() {
 module.exports = {
   maybeRun,
   runFor,
+  families,
   tradable,
   summary,
   evaluateMarket,
