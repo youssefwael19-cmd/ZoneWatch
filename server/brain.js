@@ -26,6 +26,9 @@ const { writeJson } = require("./atomicWrite");
 
 const candlesMod = require("./candles");
 const regime = require("./regime");
+const settings = require("./settings");
+const costsMod = require("./costs");
+const market = require("./market");
 const { FAMILIES, runFamily, RULES_VERSION } = require("./strategies");
 const labMod = require("./lab");
 
@@ -66,7 +69,10 @@ const MIN_GOOD_FOLDS = FOLDS;
 // 3: the t-statistic no longer divides by floating-point noise, so a cell of
 // identical results can no longer look proven. Verdicts measured under 2 were
 // judged by a statistic that could be astronomically large by accident.
-const BAR_VERSION = 3;
+// 4: the measurement charges the live cost model — spread, slippage,
+// commission — and gap fills at the bar open. Cells stored under 3 hold a
+// gross number, so they are not evidence for a net-of-cost bar and are dropped.
+const BAR_VERSION = 4;
 const RUN_GAP_MS = 30 * 60 * 1000;
 // A proof in the condition next door is real evidence, but it is not evidence
 // about this condition. It buys a half-size trade, never a full one.
@@ -204,6 +210,78 @@ function summarise(rs) {
 }
 
 /**
+ * The cost model a backtest charges, per instrument.
+ *
+ * The spread comes from the app's configured table or a per-symbol override,
+ * not from a 15-minute broker snapshot: a one-year measurement should not
+ * change because the spread happened to be wide when the watch cycle ran.
+ * Slippage is the live model's fraction of that spread, commission is the
+ * configured per-lot round turn, and `valuePerUnit` turns it into R.
+ */
+function costModelFor(symbol) {
+  const config = settings.getExecConfig();
+  const spread = costsMod.spreadInfo(symbol, config);
+  const slippage = costsMod.slippageInfo(symbol, config);
+  const instrument = market.instrumentList().find((i) => i.symbol === symbol);
+  return {
+    spread: Number.isFinite(spread.units) ? Number(spread.units) : 0,
+    spreadSource: spread.source,
+    slippage: Number.isFinite(slippage.units) ? Number(slippage.units) : 0,
+    slippageSource: slippage.source,
+    commissionPerLot: costsMod.costConfig(config).commissionPerLot,
+    valuePerUnit: instrument ? Number(instrument.valuePerPointPerLot) : 0,
+  };
+}
+
+/** Does a cell clear the proof bar? The bar itself is unchanged. */
+function meetsBar(stats, goodFolds) {
+  return (
+    stats.n >= MIN_TRADES &&
+    stats.expectancy != null &&
+    stats.expectancy >= MIN_EXPECTANCY &&
+    stats.tStat != null &&
+    stats.tStat >= MIN_TSTAT &&
+    goodFolds >= MIN_GOOD_FOLDS
+  );
+}
+
+/**
+ * Judge one cell from its trades, both before and after costs.
+ *
+ * The proof bar is applied to the **net** numbers: a rule that only clears
+ * 0.10R before the broker is paid has not cleared it in the account the app
+ * trades. The gross figures are kept beside them — same trades, same folds,
+ * without the charges — so the report can show what the costs changed and a
+ * cell that was proven only gross cannot hide.
+ *
+ * Exported so the arithmetic can be checked without candles or a brain file.
+ */
+function gradeCell({ condition, family, familyName, grossRs, netRs, grossFolds, netFolds, notes = "" }) {
+  const gross = summarise(grossRs);
+  const net = summarise(netRs);
+  const grossGoodFolds = grossFolds.filter((v) => v > 0).length;
+  const netGoodFolds = netFolds.filter((v) => v > 0).length;
+  return {
+    condition,
+    family,
+    familyName,
+    ...net,
+    goodFolds: netGoodFolds,
+    foldTotals: netFolds,
+    proven: meetsBar(net, netGoodFolds),
+    // What the broker took over the whole sample, in R.
+    costR: Number((net.totalR - gross.totalR).toFixed(2)),
+    gross: {
+      ...gross,
+      goodFolds: grossGoodFolds,
+      foldTotals: grossFolds,
+      proven: meetsBar(gross, grossGoodFolds),
+    },
+    notes,
+  };
+}
+
+/**
  * Test every family on one market, grouped by the condition at entry.
  */
 async function evaluateMarket(symbol, candleSymbol, opts = {}) {
@@ -219,52 +297,44 @@ async function evaluateMarket(symbol, candleSymbol, opts = {}) {
 
   const cells = {};
   const families = familiesNow();
+  const costs = costModelFor(symbol);
+  const runOpts = { ...opts, costs };
 
   for (const family of families) {
-    const byCondition = {};
-    const foldSigns = {};
+    const grossByCondition = {};
+    const netByCondition = {};
+    const grossFolds = {};
+    const netFolds = {};
 
-    for (const [from, to] of folds) {
-      const trades = runFamily(family, bars, ctx, from, to, opts);
+    for (let k = 0; k < folds.length; k++) {
+      const [from, to] = folds[k];
+      const trades = runFamily(family, bars, ctx, from, to, runOpts);
       for (const t of trades) {
-        if (!byCondition[t.condition]) byCondition[t.condition] = [];
-        byCondition[t.condition].push(t.r);
-
-        if (!foldSigns[t.condition]) foldSigns[t.condition] = [];
-        foldSigns[t.condition].push(t.r);
+        const condition = t.condition;
+        if (!grossByCondition[condition]) {
+          grossByCondition[condition] = [];
+          netByCondition[condition] = [];
+          grossFolds[condition] = folds.map(() => 0);
+          netFolds[condition] = folds.map(() => 0);
+        }
+        grossByCondition[condition].push(t.grossR);
+        netByCondition[condition].push(t.r);
+        grossFolds[condition][k] += t.grossR;
+        netFolds[condition][k] += t.r;
       }
     }
 
-    // Per-fold totals, to check the result is not one lucky block.
-    const foldTotals = {};
-    for (const condition of Object.keys(byCondition)) {
-      foldTotals[condition] = folds.map(([from, to]) => {
-        const trades = runFamily(family, bars, ctx, from, to, opts).filter((t) => t.condition === condition);
-        return Number(trades.reduce((a, t) => a + t.r, 0).toFixed(2));
-      });
-    }
-
-    for (const [condition, rs] of Object.entries(byCondition)) {
-      const stats = summarise(rs);
-      const goodFolds = (foldTotals[condition] || []).filter((v) => v > 0).length;
-      const proven =
-        stats.n >= MIN_TRADES &&
-        stats.expectancy != null &&
-        stats.expectancy >= MIN_EXPECTANCY &&
-        stats.tStat != null &&
-        stats.tStat >= MIN_TSTAT &&
-        goodFolds >= MIN_GOOD_FOLDS;
-
-      cells[`${condition}|${family.id}`] = {
+    for (const condition of Object.keys(netByCondition)) {
+      cells[`${condition}|${family.id}`] = gradeCell({
         condition,
         family: family.id,
         familyName: family.name,
-        ...stats,
-        goodFolds,
-        foldTotals: foldTotals[condition] || [],
-        proven,
+        grossRs: grossByCondition[condition],
+        netRs: netByCondition[condition],
+        grossFolds: grossFolds[condition].map((v) => Number(v.toFixed(2))),
+        netFolds: netFolds[condition].map((v) => Number(v.toFixed(2))),
         notes: family.worksIn.includes(condition) ? "" : "outside this rule's intended condition",
-      };
+      });
     }
   }
 
@@ -282,6 +352,7 @@ async function evaluateMarket(symbol, candleSymbol, opts = {}) {
     symbol,
     at: new Date().toISOString(),
     bars: bars.length,
+    costs,
     current: ctx.current,
     champions,
     cells,
@@ -290,7 +361,15 @@ async function evaluateMarket(symbol, candleSymbol, opts = {}) {
         c,
         families.map((f) => {
           const cell = cells[`${c}|${f.id}`];
-          return cell ? { family: f.id, n: cell.n, expectancy: cell.expectancy, proven: cell.proven } : null;
+          return cell
+            ? {
+                family: f.id,
+                n: cell.n,
+                expectancy: cell.expectancy,
+                grossExpectancy: cell.gross ? cell.gross.expectancy : null,
+                proven: cell.proven,
+              }
+            : null;
         }).filter(Boolean),
       ])
     ),
@@ -489,6 +568,8 @@ function status(symbols) {
             name: champion.familyName,
             n: champion.n,
             expectancy: champion.expectancy,
+            grossExpectancy: champion.gross ? champion.gross.expectancy : null,
+            costR: champion.costR != null ? champion.costR : null,
             tStat: champion.tStat,
           }
         : null,
@@ -641,10 +722,12 @@ async function gate(symbol, candleSymbol) {
         name: champion.familyName,
         n: champion.n,
         expectancy: champion.expectancy,
+        grossExpectancy: champion.gross ? champion.gross.expectancy : null,
+        costR: champion.costR != null ? champion.costR : null,
         tStat: champion.tStat,
         outsideUsualCondition: Boolean(champion.notes),
       },
-      reason: `nothing is proven for ${symbol} in a ${condition} market; ${champion.familyName} is proven in ${proof.provenCondition} (${champion.n} trades, ${champion.expectancy}R each, t=${champion.tStat}) — taken at half size`,
+      reason: `nothing is proven for ${symbol} in a ${condition} market; ${champion.familyName} is proven in ${proof.provenCondition} (${champion.n} trades, ${champion.expectancy}R each net of costs, t=${champion.tStat}) — taken at half size`,
     };
   }
 
@@ -657,10 +740,12 @@ async function gate(symbol, candleSymbol) {
       name: champion.familyName,
       n: champion.n,
       expectancy: champion.expectancy,
+      grossExpectancy: champion.gross ? champion.gross.expectancy : null,
+      costR: champion.costR != null ? champion.costR : null,
       tStat: champion.tStat,
       outsideUsualCondition: Boolean(champion.notes),
     },
-    reason: `${champion.familyName} is proven here: ${champion.n} trades, ${champion.expectancy}R each, t=${champion.tStat}`,
+    reason: `${champion.familyName} is proven here: ${champion.n} trades, ${champion.expectancy}R each net of costs, t=${champion.tStat}`,
   };
 }
 
@@ -684,6 +769,8 @@ function summary() {
             name: adjacent.familyName,
             n: adjacent.n,
             expectancy: adjacent.expectancy,
+            grossExpectancy: adjacent.gross ? adjacent.gross.expectancy : null,
+            costR: adjacent.costR != null ? adjacent.costR : null,
             tStat: adjacent.tStat,
           }
         : null,
@@ -695,6 +782,8 @@ function summary() {
             name: champion.familyName,
             n: champion.n,
             expectancy: champion.expectancy,
+            grossExpectancy: champion.gross ? champion.gross.expectancy : null,
+            costR: champion.costR != null ? champion.costR : null,
             winrate: champion.winrate,
             tStat: champion.tStat,
             goodFolds: champion.goodFolds,
@@ -716,10 +805,74 @@ function summary() {
   };
 }
 
+/**
+ * Every measured cell, gross and net, for a read-only report.
+ *
+ * This is the number the proof bar is applied to, per market, condition and
+ * rule. `expectancy` and `tStat` are net of spread, slippage and commission;
+ * `grossExpectancy` and `grossTStat` are the same trades before those charges;
+ * `costR` is what the broker took. `proven` is therefore the net verdict.
+ */
+function cellReport(symbol) {
+  const brain = readBrain();
+  const wanted = symbol ? String(symbol).toUpperCase() : null;
+  const rows = [];
+
+  for (const [sym, result] of Object.entries(brain.results || {})) {
+    if (wanted && sym !== wanted) continue;
+    for (const cell of Object.values((result && result.cells) || {})) {
+      rows.push({
+        symbol: sym,
+        at: (result && result.at) || null,
+        condition: cell.condition,
+        family: cell.family,
+        familyName: cell.familyName,
+        n: cell.n,
+        winrate: cell.winrate,
+        expectancy: cell.expectancy,
+        grossExpectancy: cell.gross ? cell.gross.expectancy : null,
+        costR: cell.costR != null ? cell.costR : null,
+        tStat: cell.tStat,
+        grossTStat: cell.gross ? cell.gross.tStat : null,
+        goodFolds: cell.goodFolds,
+        foldTotals: cell.foldTotals,
+        grossFoldTotals: cell.gross ? cell.gross.foldTotals : null,
+        proven: Boolean(cell.proven),
+        provenGross: Boolean(cell.gross && cell.gross.proven),
+        notes: cell.notes || "",
+      });
+    }
+  }
+
+  rows.sort(
+    (a, b) =>
+      a.symbol.localeCompare(b.symbol) ||
+      a.condition.localeCompare(b.condition) ||
+      a.family.localeCompare(b.family)
+  );
+
+  return {
+    updatedAt: brain.updatedAt || null,
+    barVersion: brain.barVersion || null,
+    costBasis:
+      "net of configured spread, slippage and per-lot commission; gap fills at the bar open",
+    proofBar: {
+      trades: MIN_TRADES,
+      expectancy: MIN_EXPECTANCY,
+      tStat: MIN_TSTAT,
+      folds: MIN_GOOD_FOLDS,
+    },
+    cells: rows,
+  };
+}
+
 module.exports = {
   maybeRun,
   markStale,
   reconcilePromotions,
+  gradeCell,
+  costModelFor,
+  cellReport,
   isStale,
   status,
   gate,

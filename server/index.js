@@ -1820,6 +1820,11 @@ app.get("/api/lab", (_req, res) => res.json({ ok: true, ...labMod.summary() }));
 /** Which strategy has proven itself, in which market condition. */
 app.get("/api/brain", (_req, res) => res.json({ ok: true, ...brainMod.summary() }));
 
+/** Every measured cell, gross and net of costs. Read-only, like /api/brain. */
+app.get("/api/brain/cells", (req, res) => {
+  res.json({ ok: true, ...brainMod.cellReport(req.query.symbol) });
+});
+
 /* --------------------------- auto-trading --------------------------- */
 
 const priceMapNow = () => {

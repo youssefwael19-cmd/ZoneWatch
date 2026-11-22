@@ -682,32 +682,80 @@ function promoteLabConfigs(labResults) {
  * first — the pessimistic reading, so the results are not flattered. A stop
  * raised during a bar only protects from the next bar, which keeps the trail
  * from claiming a fill the bar could not have given.
+ *
+ * The fills pay what the live book pays, when a cost model is supplied:
+ * half the spread on entry and half on exit, adverse slippage on the entry and
+ * on a stop (the live model caps it at a quarter of the stop distance),
+ * round-turn commission expressed in R, and — with or without a cost model — a
+ * gap through the stop fills at the bar's open rather than the stop price.
+ *
+ * `grossR` is the same walk before those charges, so a caller can report both
+ * what the market gave and what the broker took.
  */
-function resolve(bars, i, trade, to) {
+function resolve(bars, i, trade, to, costs = null) {
   const limit = Math.min(i + MAX_HOLD_BARS, to);
   const entry = Number(trade.entry);
   const risk = Math.abs(entry - Number(trade.stop));
-  if (!(risk > 0)) return { outcome: "open", r: 0, bars: limit - i };
+  if (!(risk > 0)) return { outcome: "open", r: 0, grossR: 0, bars: limit - i };
+
+  const spread = costs ? Math.max(0, Number(costs.spread) || 0) : 0;
+  const half = spread / 2;
+  const slippage = Math.min(
+    costs ? Math.max(0, Number(costs.slippage) || 0) : 0,
+    risk * 0.25
+  );
+  const perUnit = costs ? Number(costs.valuePerUnit) : 0;
+  const commission = costs ? Number(costs.commissionPerLot) : 0;
+  // Commission is per lot, round turn. Risk per lot is (stop distance ×
+  // value per price unit), so lots cancel and the charge is a fixed share of R.
+  const commissionR =
+    commission > 0 && perUnit > 0 ? commission / (risk * perUnit) : 0;
+
+  const buy = trade.side === "BUY";
+  // Against the trade, always: a buyer pays up, a seller gets less.
+  const entryFill = buy ? entry + half + slippage : entry - half - slippage;
+
+  function settled(outcome, exit, priceR, j) {
+    const net = ((buy ? exit - entryFill : entryFill - exit) / risk) - commissionR;
+    return {
+      outcome,
+      r: Number(net.toFixed(3)),
+      grossR: Number(priceR.toFixed(3)),
+      bars: j - i,
+      costs: {
+        spread,
+        slippage: Number(slippage.toFixed(8)),
+        commissionR: Number(commissionR.toFixed(4)),
+      },
+    };
+  }
 
   let stop = Number(trade.stop);
   let peakR = 0;
 
   for (let j = i + 1; j < limit; j++) {
     const b = bars[j];
-    if (trade.side === "BUY") {
+    if (buy) {
       if (b.l <= stop) {
-        return { outcome: "loss", r: Number(((stop - entry) / risk).toFixed(3)), bars: j - i };
+        // A bar that opens below the stop is a gap: the fill is the open.
+        const gapped = Number(b.o) <= stop;
+        const base = gapped ? Number(b.o) : stop;
+        const exit = gapped ? base - half : base - half - slippage;
+        return settled("loss", exit, (base - entry) / risk, j);
       }
       if (b.h >= trade.target) {
-        return { outcome: "win", r: Number((Math.abs(trade.target - entry) / risk).toFixed(3)), bars: j - i };
+        return settled("win", Number(trade.target) - half, (Number(trade.target) - entry) / risk, j);
       }
       peakR = Math.max(peakR, (b.h - entry) / risk);
     } else {
       if (b.h >= stop) {
-        return { outcome: "loss", r: Number(((entry - stop) / risk).toFixed(3)), bars: j - i };
+        const gapped = Number(b.o) >= stop;
+        const base = gapped ? Number(b.o) : stop;
+        const exit = gapped ? base + half : base + half + slippage;
+        return settled("loss", exit, (entry - base) / risk, j);
       }
       if (b.l <= trade.target) {
-        return { outcome: "win", r: Number((Math.abs(entry - trade.target) / risk).toFixed(3)), bars: j - i };
+        return settled("win", Number(trade.target) + half, (entry - Number(trade.target)) / risk, j);
       }
       peakR = Math.max(peakR, (entry - b.l) / risk);
     }
@@ -721,7 +769,7 @@ function resolve(bars, i, trade, to) {
       initialStop: Number(trade.stop),
     });
   }
-  return { outcome: "open", r: 0, bars: limit - i };
+  return { outcome: "open", r: 0, grossR: 0, bars: limit - i };
 }
 
 /**
@@ -755,7 +803,7 @@ function runFamily(family, bars, ctx, from, to, opts = {}) {
       placed = { ...trade, stop, target };
     }
 
-    const result = resolve(bars, i, placed, to);
+    const result = resolve(bars, i, placed, to, opts.costs);
     openUntil = i + Math.max(1, result.bars);
     if (result.outcome === "open") continue;
 
@@ -763,6 +811,8 @@ function runFamily(family, bars, ctx, from, to, opts = {}) {
       side: placed.side,
       condition: condition || "unclear",
       r: Number(result.r.toFixed(3)),
+      grossR: Number(result.grossR.toFixed(3)),
+      costR: Number((result.grossR - result.r).toFixed(3)),
       at: new Date(bars[i].t).toISOString(),
     });
   }

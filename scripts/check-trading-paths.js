@@ -18,6 +18,7 @@ const regime = require("../server/regime");
 const promotions = require("../server/promotions");
 const audit = require("../server/audit");
 const brain = require("../server/brain");
+const paperreview = require("../server/paperreview");
 const buildInfo = require("../server/buildinfo");
 
 let failures = 0;
@@ -479,6 +480,103 @@ check("a condition with no trades is not confused with a cell never measured", (
     fallback.conditions.find((c) => c.condition === "ranging-quiet").unmeasured,
     ["USDJPY"]
   );
+});
+
+/* ----------------------- proof net of costs ----------------------- */
+
+check("the backtest charges spread, slippage and commission", () => {
+  const bars = [
+    { t: 0, o: 100, h: 100, l: 100, c: 100, v: 0 },
+    { t: 3600000, o: 100.1, h: 102.1, l: 100.05, c: 102, v: 0 },
+  ];
+  const trade = { side: "BUY", entry: 100, stop: 99, target: 102 };
+  const costs = { spread: 0.2, slippage: 0.05, commissionPerLot: 0.1, valuePerUnit: 1 };
+  const out = strategies.resolve(bars, 0, trade, 2, costs);
+
+  assert.strictEqual(out.outcome, "win");
+  assert.strictEqual(out.grossR, 2, "gross is the target distance");
+  // entry 100 + half spread 0.1 + slippage 0.05 = 100.15; exit 102 - half = 101.90;
+  // 1.75R before the 0.1R round-turn commission.
+  assert.strictEqual(out.r, 1.65);
+  assert.strictEqual(out.costs.spread, 0.2);
+  assert.strictEqual(out.costs.commissionR, 0.1);
+});
+
+check("a gap through the stop fills at the bar open, not the stop", () => {
+  const bars = [
+    { t: 0, o: 100, h: 100, l: 100, c: 100, v: 0 },
+    { t: 3600000, o: 98, h: 99.5, l: 97.5, c: 98, v: 0 },
+  ];
+  const out = strategies.resolve(
+    bars,
+    0,
+    { side: "BUY", entry: 100, stop: 99, target: 102 },
+    2,
+    { spread: 0.2, slippage: 0.05, commissionPerLot: 0, valuePerUnit: 1 }
+  );
+
+  assert.strictEqual(out.outcome, "loss");
+  assert.strictEqual(out.grossR, -2, "the fill is the open, two risk units away");
+  assert.strictEqual(out.r, -2.25, "and it still pays the entry and exit charges");
+});
+
+check("a cell that clears the bar only before costs is not proven", () => {
+  const grossRs = [];
+  const netRs = [];
+  for (let i = 0; i < 30; i++) {
+    const gross = i % 2 === 0 ? 3 : -1; // 1.0R average, t ≈ 2.7
+    grossRs.push(gross);
+    netRs.push(gross - 0.95); // 0.05R average, t near zero
+  }
+
+  const cell = brain.gradeCell({
+    condition: "trending-quiet",
+    family: "lab_x",
+    familyName: "X",
+    grossRs,
+    netRs,
+    grossFolds: [5, 5, 5],
+    netFolds: [2, 2, 2],
+  });
+
+  assert.strictEqual(cell.gross.proven, true, "the gross sample clears the bar");
+  assert.strictEqual(cell.proven, false, "the net sample must not inherit that verdict");
+  assert.ok(cell.expectancy < 0.1);
+  assert.ok(cell.gross.expectancy > cell.expectancy);
+  assert.strictEqual(cell.costR, -28.5, "the sample's total cost is reported in R");
+  assert.deepStrictEqual(cell.foldTotals, [2, 2, 2], "fold totals are net");
+  assert.deepStrictEqual(cell.gross.foldTotals, [5, 5, 5], "gross fold totals are kept too");
+});
+
+check("the paper review compares live R against the net promise", () => {
+  const champion = {
+    family: "lab_a",
+    familyName: "A",
+    expectancy: 0.05,
+    grossExpectancy: 0.4,
+    winrate: 50,
+    tStat: 3,
+  };
+  const exec = {
+    closed: Array.from({ length: 20 }, (_, i) => ({
+      symbol: "EURUSD",
+      riskMoney: 1,
+      pnl: i % 2 === 0 ? 1 : -1,
+      outcome: i % 2 === 0 ? "win" : "loss",
+    })),
+  };
+  const brainInput = { conditions: [{ symbol: "EURUSD", champion }] };
+  const rows = paperreview.buildComparison({ exec, brain: brainInput });
+
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].promisedExpectancy, 0.05, "the gross promise is not the comparison");
+  assert.strictEqual(rows[0].promisedGrossExpectancy, 0.4);
+  assert.strictEqual(rows[0].comparisonBasis, "net of costs");
+
+  const review = paperreview.buildReview({ exec, brain: brainInput });
+  assert.strictEqual(review.ready, true);
+  assert.strictEqual(review.comparisonBasis, "net of costs");
+  assert.ok(/promised \+0\.05R net/.test(review.text), review.text);
 });
 
 /* --------------------------- audit / build --------------------------- */

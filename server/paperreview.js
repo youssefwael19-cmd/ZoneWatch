@@ -93,6 +93,11 @@ function buildComparison({ exec, brain }) {
     if (row.champion) promises.set(row.symbol, row.champion);
   }
 
+  // The backtest promise is already net of spread, slippage and commission;
+  // paper `pnl` is likewise what the book kept. Comparing a cost-inclusive
+  // result with a gross promise would report the broker's charges as the
+  // strategy failing, which is not what this review is asking.
+
   const byMarket = new Map();
   for (const trade of closed) {
     const r = rOf(trade);
@@ -121,7 +126,7 @@ function buildComparison({ exec, brain }) {
     } else if (se == null || se === 0) {
       verdict = "no variation in the results yet";
     } else {
-      gapInSe = (paperExpectancy - promise.expectancy) / se;
+      gapInSe = (paperExpectancy - Number(promise.expectancy)) / se;
       verdict =
         Math.abs(gapInSe) < 2
           ? "in line with the backtest"
@@ -137,7 +142,10 @@ function buildComparison({ exec, brain }) {
       winrate: round((wins / n) * 100, 1),
       paperExpectancy: round(paperExpectancy, 3),
       standardError: round(se, 3),
-      promisedExpectancy: promise ? promise.expectancy : null,
+      promisedExpectancy: promise ? Number(promise.expectancy) : null,
+      promisedGrossExpectancy:
+        promise && promise.grossExpectancy != null ? Number(promise.grossExpectancy) : null,
+      comparisonBasis: "net of costs",
       promisedWinrate: promise ? promise.winrate : null,
       promisedFamily: promise ? promise.familyName || promise.family : null,
       promisedT: promise ? promise.tStat : null,
@@ -214,6 +222,7 @@ function buildReview({ exec, brain, now = new Date() }) {
       ready: false,
       totalTrades,
       need: MIN_TRADES_TO_REVIEW,
+      comparisonBasis: "net of costs",
       rows,
       text:
         totalTrades === 0
@@ -231,7 +240,7 @@ function buildReview({ exec, brain, now = new Date() }) {
   for (const row of rows) {
     const promise =
       row.promisedExpectancy != null
-        ? `${row.promisedFamily}: promised ${row.promisedExpectancy > 0 ? "+" : ""}${row.promisedExpectancy}R`
+        ? `${row.promisedFamily}: promised ${row.promisedExpectancy > 0 ? "+" : ""}${row.promisedExpectancy}R net`
         : "no proven rule";
     lines.push(
       `**${row.symbol}** — ${row.n} trades, ${row.winrate}% won, ${row.paperExpectancy > 0 ? "+" : ""}${row.paperExpectancy}R each (±${row.standardError}) vs ${promise}. ${row.verdict.charAt(0).toUpperCase() + row.verdict.slice(1)}.`
@@ -252,7 +261,15 @@ function buildReview({ exec, brain, now = new Date() }) {
     lines.push(`_${unjudged} market${unjudged === 1 ? " has" : "s have"} fewer than ${MIN_TRADES_TO_JUDGE} trades — the verdicts above are provisional._`);
   }
 
-  return { ready: true, totalTrades, rows, overallR: round(overallR, 3), fill, text: lines.join("\n") };
+  return {
+    ready: true,
+    totalTrades,
+    rows,
+    overallR: round(overallR, 3),
+    fill,
+    comparisonBasis: "net of costs",
+    text: lines.join("\n"),
+  };
 }
 
 module.exports = { buildReview, buildComparison, fillQuality, shouldSend, markSent, weekKey, MIN_TRADES_TO_REVIEW, MIN_TRADES_TO_JUDGE };
