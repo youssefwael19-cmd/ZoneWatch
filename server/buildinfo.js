@@ -15,6 +15,7 @@
  * marker says so.
  */
 
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -132,13 +133,54 @@ function resolve() {
 }
 
 /**
+ * A fingerprint of the code that decides trading: every server module plus the
+ * dependency list. Independent of git, so a host that ships neither .git nor a
+ * commit variable can still say exactly which build is answering — and two
+ * machines with the same tree compute the same value.
+ *
+ * Only server/*.js and package.json are hashed on purpose. A dashboard-only
+ * change does not alter a single number the brain produced, so it must not
+ * invalidate eleven markets of measurement.
+ */
+let fingerprintCache = null;
+
+function codeFingerprint() {
+  if (fingerprintCache) return fingerprintCache;
+  try {
+    const hash = crypto.createHash("sha256");
+    const dir = __dirname;
+    const files = fs
+      .readdirSync(dir)
+      .filter((name) => name.endsWith(".js"))
+      .sort();
+    for (const name of files) {
+      hash.update(`${name}:`);
+      hash.update(fs.readFileSync(path.join(dir, name)));
+      hash.update("\n");
+    }
+    try {
+      hash.update("package.json:");
+      hash.update(fs.readFileSync(path.join(dir, "..", "package.json")));
+    } catch {}
+    fingerprintCache = hash.digest("hex").slice(0, 16);
+  } catch (err) {
+    fingerprintCache = `unreadable-${BOOT_ID}`;
+  }
+  return fingerprintCache;
+}
+
+/**
  * Changes when the build changes, and only then. Plain restarts of the same
  * build keep the same marker, which is what stops a crash loop from putting the
  * brain through an eleven-market re-measure on every boot.
+ *
+ * The commit is preferred because it is the thing a person can look up. When the
+ * host publishes neither a commit nor a repository, the code fingerprint takes
+ * over: it changes on exactly the edits that could change a measurement.
  */
 function marker() {
   const found = resolve();
-  return found.commit ? `commit:${found.commit}` : `features:${FEATURES.join(",")}`;
+  return found.commit ? `commit:${found.commit}` : `code:${codeFingerprint()}`;
 }
 
 function get() {
@@ -148,6 +190,7 @@ function get() {
     commitSource: found.source,
     short: found.commit ? found.commit.slice(0, 7) : "unknown",
     marker: marker(),
+    codeFingerprint: codeFingerprint(),
     bootId: BOOT_ID,
     bootedAt: new Date(BOOTED_AT).toISOString(),
     uptimeSeconds: Math.round((Date.now() - BOOTED_AT) / 1000),
