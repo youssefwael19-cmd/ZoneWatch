@@ -514,10 +514,14 @@ const FAMILIES = [
  *    stays a *candidate*. Turning a lab winner into a proven rule still needs
  *    30+ trades, 0.10R, t >= 2.5 and all three blocks positive on folds the
  *    lab never used to choose it.
- *  - The set is derived from the lab's current results, so a config that stops
- *    winning unseen bars stops being tested. The brain's "a rule must still
- *    exist" check drops the cells measured for it instead of leaving a verdict
- *    behind that refers to a rule nobody runs any more.
+ *  - The set is derived from the lab's current results, but it is never taken
+ *    away by them. A config that earned a place is recorded in promotions.json
+ *    and stays in front of the brain, so a later lab run that stops nominating
+ *    it cannot delete the cells already measured for it or retract a champion it
+ *    earned. Only a change to the rules themselves (RULES_VERSION) retires a
+ *    promotion, because then it is a claim about a different rule. The brain's
+ *    "a rule must still exist" check therefore still drops cells for a family
+ *    that is genuinely gone, but a lab update is not such a case.
  */
 
 const LAB_WINDOW = 200; // the same slice of history the lab walks

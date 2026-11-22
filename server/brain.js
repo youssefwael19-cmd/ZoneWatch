@@ -79,13 +79,21 @@ const state = { running: false, lastRunAt: 0, lastSymbol: null, error: null, bur
  * Every rule the brain tests: the hand-written library plus whatever the lab has
  * put ahead on unseen bars. A lab winner is only ever a *candidate* — it is
  * measured here under the same bar, and its own history earns or denies the
- * proof.
+ * proof. Promotions are kept on disk, so a later lab run that stops nominating
+ * a config does not take its measured cells away with it.
+ *
+ * A failure to read that list is tracked: "this rule does not exist" is only a
+ * fact when the list could actually be read.
  */
+let familiesError = null;
+
 function familiesNow() {
   try {
     const promoted = labMod.families();
+    familiesError = null;
     return promoted.length ? [...FAMILIES, ...promoted] : FAMILIES;
   } catch (err) {
+    familiesError = err.message;
     state.error = `lab families: ${err.message}`;
     return FAMILIES;
   }
@@ -116,26 +124,30 @@ function readBrain() {
 
     // A stored verdict may only ever cite a rule that still exists. If a
     // strategy was removed, its old proof goes with it rather than silently
-    // backing a live alert.
+    // backing a live alert. Skipped when the promotion list could not be read:
+    // a read failure is not evidence that a rule was removed, and deleting the
+    // cells on one would throw away proofs the app earned.
     const known = new Set(familiesNow().map((f) => f.id));
-    for (const [symbol, result] of Object.entries(results)) {
-      if (!result || typeof result !== "object") continue;
-      if (result.cells) {
-        for (const key of Object.keys(result.cells)) {
-          const family = String(key).split("|")[1];
-          if (!known.has(family)) delete result.cells[key];
+    if (!familiesError) {
+      for (const [symbol, result] of Object.entries(results)) {
+        if (!result || typeof result !== "object") continue;
+        if (result.cells) {
+          for (const key of Object.keys(result.cells)) {
+            const family = String(key).split("|")[1];
+            if (!known.has(family)) delete result.cells[key];
+          }
         }
-      }
-      if (result.champions) {
-        const stale = Object.values(result.champions).some(
-          (champion) => champion && !known.has(champion.family)
-        );
-        // Its verdict rested on a removed rule, so throw the whole result away
-        // and let the next run re-measure it — do not leave a market silently
-        // blocked on the strength of a strategy that no longer exists.
-        if (stale) {
-          delete results[symbol];
-          continue;
+        if (result.champions) {
+          const stale = Object.values(result.champions).some(
+            (champion) => champion && !known.has(champion.family)
+          );
+          // Its verdict rested on a removed rule, so throw the whole result away
+          // and let the next run re-measure it — do not leave a market silently
+          // blocked on the strength of a strategy that no longer exists.
+          if (stale) {
+            delete results[symbol];
+            continue;
+          }
         }
       }
     }

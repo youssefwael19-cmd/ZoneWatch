@@ -24,6 +24,7 @@ const candlesMod = require("./candles");
 const autozones = require("./autozones");
 const stopsMod = require("./stops");
 const { RULES_VERSION, labFamily, promoteLabConfigs } = require("./strategies");
+const promotions = require("./promotions");
 
 const LAB_FILE = require("./stateDir").file("lab.json");
 
@@ -320,12 +321,20 @@ async function maybeRun(instruments) {
  * The configs this lab has put ahead on unseen bars, handed to the brain as
  * families it can measure everywhere. Memoised for a minute: readBrain asks
  * often, and lab.json only changes when a market finishes its test.
+ *
+ * Today's nominations are folded into the standing list on disk, never
+ * substituted for it. A config that was promoted stays in front of the brain
+ * after a later lab run stops nominating it, so the cells already measured for
+ * it — and any champion it earned — are not deleted by a routine update. It
+ * still has to clear the same proof bar on every measurement; stickiness keeps
+ * the rule under test, it proves nothing.
  */
 let familyMemo = { at: 0, list: [] };
 
 function families() {
   if (Date.now() - familyMemo.at < 60 * 1000) return familyMemo.list;
-  const list = promoteLabConfigs(readLab().results).map((row) => labFamily(row.cfg));
+  const nominated = promoteLabConfigs(readLab().results);
+  const list = promotions.standings(nominated).map((entry) => labFamily(entry.cfg));
   familyMemo = { at: Date.now(), list };
   return list;
 }

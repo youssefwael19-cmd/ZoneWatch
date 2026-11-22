@@ -14,6 +14,7 @@ const exploration = require("../server/exploration");
 const learning = require("../server/learning");
 const ledger = require("../server/ledger");
 const strategies = require("../server/strategies");
+const promotions = require("../server/promotions");
 const audit = require("../server/audit");
 const brain = require("../server/brain");
 const buildInfo = require("../server/buildinfo");
@@ -320,6 +321,62 @@ check("a promoted family walks like any other rule", () => {
   // No candles, no zones: a rule that guessed anyway would be inventing trades.
   const ctx = { bars: [], atr: [] };
   assert.strictEqual(family.entryAt([], 500, ctx), null);
+});
+
+/* ---------------------- promotions that stick ---------------------- */
+
+const PROMOTED = { id: "lab_18_zw_2", cfg: ZW2, n: 77, expectancy: 0.487, markets: ["NASDAQ"] };
+const OTHER = { id: "lab_12_atr_2", cfg: { mult: 1.2, stopMode: "atr", rr: 2 }, n: 300, expectancy: 0.2, markets: ["USDJPY"] };
+
+check("a promotion survives a lab update that no longer nominates it", () => {
+  const first = promotions.merge(promotions.empty(), [PROMOTED], "2026-01-01T00:00:00.000Z");
+  assert.deepStrictEqual(first.added, [PROMOTED.id]);
+
+  const stored = { rulesVersion: strategies.RULES_VERSION, at: first.added.length ? "2026-01-01T00:00:00.000Z" : null, configs: first.configs };
+  const later = promotions.merge(stored, [], "2026-02-01T00:00:00.000Z");
+  assert.strictEqual(later.configs.length, 1, "a lab update must not remove a promotion");
+  assert.strictEqual(later.configs[0].id, PROMOTED.id);
+  assert.strictEqual(later.configs[0].firstPromotedAt, "2026-01-01T00:00:00.000Z");
+  assert.strictEqual(later.changed, false, "nothing new means no rewrite of the state file");
+});
+
+check("a new winner joins the standing promotions instead of replacing them", () => {
+  const stored = { rulesVersion: strategies.RULES_VERSION, configs: promotions.merge(promotions.empty(), [PROMOTED], "2026-01-01T00:00:00.000Z").configs };
+  const later = promotions.merge(stored, [OTHER], "2026-02-01T00:00:00.000Z");
+  assert.deepStrictEqual(later.configs.map((e) => e.id), [PROMOTED.id, OTHER.id]);
+  assert.deepStrictEqual(later.added, [OTHER.id]);
+  assert.strictEqual(later.changed, true);
+});
+
+check("re-qualifying keeps the promotion's original date and best record", () => {
+  const stored = { rulesVersion: strategies.RULES_VERSION, configs: promotions.merge(promotions.empty(), [PROMOTED], "2026-01-01T00:00:00.000Z").configs };
+  const weaker = promotions.merge(stored, [{ ...PROMOTED, n: 40, expectancy: 0.11 }], "2026-03-01T00:00:00.000Z");
+  assert.strictEqual(weaker.configs.length, 1, "a re-qualifying config is not duplicated");
+  assert.strictEqual(weaker.configs[0].firstPromotedAt, "2026-01-01T00:00:00.000Z");
+  assert.strictEqual(weaker.configs[0].lastQualifiedAt, "2026-03-01T00:00:00.000Z");
+  assert.strictEqual(weaker.configs[0].best.expectancy, 0.487, "a weaker run must not overwrite the record it earned");
+  assert.strictEqual(weaker.added.length, 0);
+
+  const stronger = promotions.merge(stored, [{ ...PROMOTED, expectancy: 0.6 }], "2026-03-01T00:00:00.000Z");
+  assert.strictEqual(stronger.configs[0].best.expectancy, 0.6);
+  assert.strictEqual(stronger.changed, true, "a better unseen record is worth writing down");
+});
+
+check("a stored promotion still names the rule the brain measured", () => {
+  const merged = promotions.merge(promotions.empty(), [PROMOTED], "2026-01-01T00:00:00.000Z");
+  const family = strategies.labFamily(merged.configs[0].cfg);
+  assert.strictEqual(family.id, PROMOTED.id);
+  assert.strictEqual(family.promoted, true);
+});
+
+check("a promotion from an older rule set is not carried into this build", () => {
+  const old = {
+    rulesVersion: strategies.RULES_VERSION - 1,
+    configs: promotions.merge(promotions.empty(), [PROMOTED], "2026-01-01T00:00:00.000Z").configs,
+  };
+  assert.deepStrictEqual(promotions.usable(old).configs, [], "the rule itself changed, so it must re-earn its place");
+  assert.deepStrictEqual(promotions.usable({ rulesVersion: strategies.RULES_VERSION, configs: [] }).configs, []);
+  assert.deepStrictEqual(promotions.usable(null).configs, []);
 });
 
 /* --------------------------- audit / build --------------------------- */

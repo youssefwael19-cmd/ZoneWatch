@@ -39,6 +39,7 @@ const FILES = [
   "learning.json",
   "health.json",
   "brain.json",
+  "promotions.json",
   "journal.json",
   "botjournal.json",
   "executor.json",
