@@ -160,6 +160,7 @@ function readBrain() {
 
     return {
       results,
+      barVersion: parsed.barVersion || null,
       updatedAt: parsed.updatedAt || null,
       // Kept so the caller can tell an out-of-date measurement from a current
       // one without re-reading the file: a new build is what sets these.
