@@ -369,6 +369,23 @@ check("a stored promotion still names the rule the brain measured", () => {
   assert.strictEqual(family.promoted, true);
 });
 
+check("the public report shows each standing promotion and its unseen record", () => {
+  const merged = promotions.merge(promotions.empty(), [PROMOTED], "2026-01-01T00:00:00.000Z");
+  const entry = merged.configs[0];
+
+  const kept = promotions.describe(entry, new Set());
+  assert.strictEqual(kept.id, PROMOTED.id);
+  assert.strictEqual(kept.firstPromotedAt, "2026-01-01T00:00:00.000Z");
+  assert.deepStrictEqual(kept.unseen, { n: 77, expectancy: 0.487, markets: ["NASDAQ"] });
+  assert.strictEqual(kept.currentlyNominated, false, "this rule is held by the list, not by a current result");
+
+  const nominated = promotions.describe(entry, new Set([PROMOTED.id]));
+  assert.strictEqual(nominated.currentlyNominated, true);
+
+  // Nothing in the published view may look like a credential to redact().
+  for (const key of Object.keys(kept)) assert.strictEqual(audit.redact({ [key]: "x" })[key], "x", key);
+});
+
 check("a promotion from an older rule set is not carried into this build", () => {
   const old = {
     rulesVersion: strategies.RULES_VERSION - 1,

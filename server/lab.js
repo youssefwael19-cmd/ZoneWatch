@@ -339,6 +339,18 @@ function families() {
   return list;
 }
 
+/**
+ * The standing promotions, read-only, for the public audit report: what each
+ * promoted rule is, when it first earned its place, and the unseen record that
+ * did it. `currentlyNominated` says whether today's lab run still picks it — a
+ * false there is a rule kept by the list rather than by a current result, which
+ * is exactly what "sticky" looks like from outside.
+ */
+function standingPromotions() {
+  const nominatedIds = new Set(promoteLabConfigs(readLab().results).map((row) => row.id));
+  return promotions.standingSummary(nominatedIds);
+}
+
 /** Is this market allowed to send signal alerts? Unknown markets are allowed. */
 function tradable(symbol) {
   const lab = readLab();
@@ -366,6 +378,7 @@ module.exports = {
   maybeRun,
   runFor,
   families,
+  standingPromotions,
   tradable,
   summary,
   evaluateMarket,

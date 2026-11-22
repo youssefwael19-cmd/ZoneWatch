@@ -131,6 +131,37 @@ function merge(stored, nominated, now = new Date().toISOString()) {
   };
 }
 
+/**
+ * One standing promotion as the public report shows it: the rule, when it first
+ * earned its place, whether the lab still nominates it, and the unseen record
+ * that put it there. `currentlyNominated: false` is the interesting case — it
+ * means the rule is being kept by this list rather than by a current result.
+ */
+function describe(entry, nominatedIds) {
+  if (!entry) return null;
+  const best = entry.best || null;
+  return {
+    id: entry.id,
+    cfg: { ...entry.cfg },
+    firstPromotedAt: entry.firstPromotedAt || null,
+    lastQualifiedAt: entry.lastQualifiedAt || null,
+    currentlyNominated: nominatedIds ? nominatedIds.has(entry.id) : null,
+    unseen: best ? { n: best.n, expectancy: best.expectancy, markets: best.markets.slice() } : null,
+  };
+}
+
+/**
+ * The standing list for a read-only report. Never writes: the lab itself records
+ * promotions when it nominates one, and a report is not a reason to touch state.
+ */
+function standingSummary(nominatedIds) {
+  const standing = readStanding();
+  return {
+    updatedAt: standing.at || null,
+    configs: standing.configs.map((entry) => describe(entry, nominatedIds)),
+  };
+}
+
 function readStanding() {
   try {
     const raw = fs.readFileSync(FILE, "utf-8").trim();
@@ -168,6 +199,8 @@ module.exports = {
   empty,
   usable,
   merge,
+  describe,
   readStanding,
+  standingSummary,
   standings,
 };
