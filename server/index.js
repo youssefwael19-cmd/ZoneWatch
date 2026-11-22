@@ -2363,8 +2363,10 @@ app.get("/api/audit", async (_req, res) => {
   }
 
   let lab = null;
+  let labSymbols = null;
   try {
     const summary = labMod.summary();
+    labSymbols = Object.keys(summary.results || {});
     // families() first: it is what records a newly nominated config, so the
     // standing list read after it includes everything this run promoted. The
     // ids are not published separately — lab.promotions carries each one with
@@ -2418,7 +2420,10 @@ app.get("/api/audit", async (_req, res) => {
       error: dirStatus.error,
       cloud: stateStore.status(),
     },
-    brain: brainMod.status(),
+    // The lab's markets are the universe the coverage report checks: a promoted
+    // rule the brain has no result for there was never measured, not a rule that
+    // chose not to trade.
+    brain: brainMod.status(labSymbols),
     lab,
     gates: snap
       ? {

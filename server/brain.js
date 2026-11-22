@@ -367,22 +367,79 @@ function markStale(markerValue) {
  *  - a champion naming a rule that is no longer in the list — a proof resting on
  *    a strategy that does not exist, which is exactly what readBrain prunes.
  *
+ * Coverage is per condition, because the two reasons a cell can be absent mean
+ * opposite things. A market measured after the rule was promoted that holds no
+ * cell in one condition is a real result: the rule took no trades in that tape.
+ * A market with no result at all, or one measured before the rule was promoted,
+ * was never measured for it — an absence of evidence, not evidence of no
+ * trades. Lumping those together would read as "the rule never trades in quiet
+ * markets" when it may simply not have been asked yet.
+ *
+ * `symbols` is the market universe to report on; without it only the markets
+ * already in the brain file can be named.
+ *
  * Reporting them is cheap and turns "the list looks right" into a fact.
  */
-function reconcilePromotions(results, families) {
+function reconcilePromotions(results, families, symbols) {
   const tested = new Set(families.map((f) => f.id));
-  const promoted = families.filter((f) => f.promoted).map((f) => f.id);
-  const coverage = new Map(promoted.map((id) => [id, { id, symbols: [], cells: 0, proven: 0 }]));
+  const promoted = families.filter((f) => f.promoted);
+  const markets = Array.isArray(symbols) && symbols.length ? [...new Set(symbols)] : Object.keys(results || {});
+  const coverage = new Map(
+    promoted.map((f) => [
+      f.id,
+      {
+        id: f.id,
+        promotedAt: f.promotedAt || null,
+        symbols: [],
+        cells: 0,
+        proven: 0,
+        conditions: regime.CONDITIONS.map((condition) => ({
+          condition,
+          cells: 0,
+          proven: 0,
+          withTrades: [],
+          noTrades: [],
+          unmeasured: [],
+        })),
+      },
+    ])
+  );
   const orphans = new Map();
 
-  for (const [symbol, result] of Object.entries(results || {})) {
-    for (const cell of Object.values((result && result.cells) || {})) {
-      const row = cell && coverage.get(cell.family);
-      if (!row) continue;
-      row.cells += 1;
-      if (cell.proven) row.proven += 1;
-      if (!row.symbols.includes(symbol)) row.symbols.push(symbol);
+  /** Was this market's measurement taken while the rule was under test? */
+  function measuredFor(result, row) {
+    const at = result ? new Date(result.at).getTime() : NaN;
+    if (!Number.isFinite(at)) return false;
+    if (!row.promotedAt) return true;
+    const since = new Date(row.promotedAt).getTime();
+    return !Number.isFinite(since) || at >= since;
+  }
+
+  for (const symbol of markets) {
+    const result = (results || {})[symbol];
+    for (const row of coverage.values()) {
+      const measured = measuredFor(result, row);
+      for (const bucket of row.conditions) {
+        const cell = result && result.cells && result.cells[`${bucket.condition}|${row.id}`];
+        if (cell) {
+          row.cells += 1;
+          bucket.cells += 1;
+          if (cell.proven) {
+            row.proven += 1;
+            bucket.proven += 1;
+          }
+          if (!row.symbols.includes(symbol)) row.symbols.push(symbol);
+          bucket.withTrades.push(symbol);
+        } else if (measured) {
+          bucket.noTrades.push(symbol);
+        } else {
+          bucket.unmeasured.push(symbol);
+        }
+      }
     }
+  }
+
+  for (const [symbol, result] of Object.entries(results || {})) {
     for (const [condition, champion] of Object.entries((result && result.champions) || {})) {
       if (!champion || tested.has(champion.family)) continue;
       orphans.set(`${symbol}|${condition}|${champion.family}`, {
@@ -395,7 +452,7 @@ function reconcilePromotions(results, families) {
   }
 
   return {
-    listed: promoted,
+    listed: promoted.map((f) => f.id),
     coverage: [...coverage.values()].map((row) => ({ ...row, markets: row.symbols.length })),
     missingCells: [...coverage.values()].filter((row) => row.cells === 0).map((row) => row.id),
     championsNotListed: [...orphans.values()],
@@ -407,7 +464,7 @@ function reconcilePromotions(results, families) {
  * This is the panel that answers "did the deploy make it re-measure?" without
  * needing the dashboard password.
  */
-function status() {
+function status(symbols) {
   const brain = readBrain();
   const families = familiesNow();
   const now = Date.now();
@@ -449,7 +506,7 @@ function status() {
     families: families.map((f) => ({ id: f.id, name: f.name, promoted: Boolean(f.promoted) })),
     markets,
     // Does the list of rules match the measurements on hand?
-    promotionAudit: reconcilePromotions(brain.results, families),
+    promotionAudit: reconcilePromotions(brain.results, families, symbols),
     pending: markets.filter((m) => m.stale).map((m) => m.symbol),
     proofBar: {
       trades: MIN_TRADES,

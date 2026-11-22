@@ -25,6 +25,10 @@ const TREND_THRESHOLD = 0.3;
 // version left a 40-60th percentile band unlabelled, which produced "unclear"
 // for whichever market happened to sit there.
 const VOL_SPLIT = 0.5;
+// The fixed grid the brain measures every rule on. Published so a coverage
+// report can tell "no trades in this condition" from "never measured here":
+// a measured market with no cell means the rule simply did not trade.
+const CONDITIONS = ["trending-volatile", "trending-quiet", "ranging-volatile", "ranging-quiet"];
 
 function atrSeries(bars, period = ATR_PERIOD) {
   const out = new Array(bars.length).fill(null);
@@ -133,6 +137,7 @@ module.exports = {
   emaSeries,
   efficiency,
   atrPercentile,
+  CONDITIONS,
   TREND_THRESHOLD,
   ER_LOOKBACK,
 };

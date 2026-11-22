@@ -14,6 +14,7 @@ const exploration = require("../server/exploration");
 const learning = require("../server/learning");
 const ledger = require("../server/ledger");
 const strategies = require("../server/strategies");
+const regime = require("../server/regime");
 const promotions = require("../server/promotions");
 const audit = require("../server/audit");
 const brain = require("../server/brain");
@@ -431,6 +432,53 @@ check("a champion naming a rule that is no longer listed is reported", () => {
   assert.deepStrictEqual(out.championsNotListed.map((c) => c.family), ["lab_gone"]);
   assert.strictEqual(out.championsNotListed[0].symbol, "TESTX");
   assert.deepStrictEqual(out.missingCells, ["lab_a"], "a rule with no cells at all is missing everywhere");
+});
+
+check("a condition with no trades is not confused with a cell never measured", () => {
+  const results = {
+    // Measured after the rule was promoted, and it traded in one condition.
+    EURUSD: {
+      at: "2026-02-01T00:00:00.000Z",
+      cells: { "trending-quiet|lab_a": { family: "lab_a", proven: false } },
+      champions: {},
+    },
+    // Measured after the rule was promoted, but it made no trade anywhere.
+    GBPUSD: { at: "2026-02-01T00:00:00.000Z", cells: {}, champions: {} },
+    // Measured before the rule was promoted, so it was never asked about it.
+    USDJPY: { at: "2026-01-01T00:00:00.000Z", cells: {}, champions: {} },
+  };
+  const families = [{ id: "lab_a", promoted: true, promotedAt: "2026-01-15T00:00:00.000Z" }];
+  const out = brain.reconcilePromotions(results, families, ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"]);
+
+  const row = out.coverage.find((r) => r.id === "lab_a");
+  assert.strictEqual(row.conditions.length, regime.CONDITIONS.length, "every condition must be reported");
+  assert.strictEqual(row.markets, 1, "only a market with a cell counts as covered");
+  assert.strictEqual(row.promotedAt, "2026-01-15T00:00:00.000Z");
+
+  const trending = row.conditions.find((c) => c.condition === "trending-quiet");
+  assert.deepStrictEqual(trending.withTrades, ["EURUSD"]);
+  assert.deepStrictEqual(trending.noTrades, ["GBPUSD"], "measured, the rule simply took no trade");
+  assert.deepStrictEqual(
+    trending.unmeasured,
+    ["USDJPY", "XAUUSD"],
+    "a pre-promotion measurement and a market with no result are both unmeasured"
+  );
+
+  const ranging = row.conditions.find((c) => c.condition === "ranging-quiet");
+  assert.deepStrictEqual(ranging.withTrades, []);
+  assert.deepStrictEqual(
+    ranging.noTrades,
+    ["EURUSD", "GBPUSD"],
+    "both markets were measured for this rule; neither cell exists because it made no trade in this tape"
+  );
+  assert.deepStrictEqual(ranging.unmeasured, ["USDJPY", "XAUUSD"]);
+
+  // With no market list the results' own keys are the universe.
+  const fallback = brain.reconcilePromotions(results, families).coverage.find((r) => r.id === "lab_a");
+  assert.deepStrictEqual(
+    fallback.conditions.find((c) => c.condition === "ranging-quiet").unmeasured,
+    ["USDJPY"]
+  );
 });
 
 /* --------------------------- audit / build --------------------------- */

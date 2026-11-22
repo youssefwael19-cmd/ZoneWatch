@@ -334,7 +334,13 @@ let familyMemo = { at: 0, list: [] };
 function families() {
   if (Date.now() - familyMemo.at < 60 * 1000) return familyMemo.list;
   const nominated = promoteLabConfigs(readLab().results);
-  const list = promotions.standings(nominated).map((entry) => labFamily(entry.cfg));
+  // promotedAt travels with the family so a coverage report can tell a market
+  // measured while the rule was under test (a missing cell there means the rule
+  // took no trades) from one measured before it was promoted (never measured).
+  const list = promotions.standings(nominated).map((entry) => ({
+    ...labFamily(entry.cfg),
+    promotedAt: entry.firstPromotedAt || null,
+  }));
   familyMemo = { at: Date.now(), list };
   return list;
 }
