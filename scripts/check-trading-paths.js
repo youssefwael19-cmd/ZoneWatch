@@ -14,6 +14,9 @@ const exploration = require("../server/exploration");
 const learning = require("../server/learning");
 const ledger = require("../server/ledger");
 const strategies = require("../server/strategies");
+const audit = require("../server/audit");
+const brain = require("../server/brain");
+const buildInfo = require("../server/buildinfo");
 
 let failures = 0;
 function check(name, fn) {
@@ -317,6 +320,52 @@ check("a promoted family walks like any other rule", () => {
   // No candles, no zones: a rule that guessed anyway would be inventing trades.
   const ctx = { bars: [], atr: [] };
   assert.strictEqual(family.entryAt([], 500, ctx), null);
+});
+
+/* --------------------------- audit / build --------------------------- */
+
+check("the audit report cannot publish a secret, however it is named", () => {
+  const out = audit.redact({
+    bridgeSecret: "abc123",
+    nested: { apiKey: "sk-live-xyz", token: "t", emptySecret: "" },
+    webhook: "https://discord.com/api/webhooks/123/abcdef",
+    harmless: "not a secret",
+  });
+  assert.strictEqual(out.bridgeSecret, audit.REDACTED);
+  assert.strictEqual(out.nested.apiKey, audit.REDACTED);
+  assert.strictEqual(out.nested.token, audit.REDACTED);
+  assert.strictEqual(out.nested.emptySecret, "", "an unset secret stays visibly unset");
+  assert.strictEqual(out.webhook, audit.REDACTED, "a webhook URL is a secret even unnamed");
+  assert.strictEqual(out.harmless, "not a secret");
+});
+
+check("the report keeps its shape and never mutates the input", () => {
+  const input = { ok: true, settings: { locked: true }, money: null };
+  const out = audit.report(input);
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.settings.locked, true);
+  assert.deepStrictEqual(out.incomplete, []);
+  assert.strictEqual(input.incomplete, undefined, "the input object must not be written to");
+});
+
+check("a build marker changes with the build, not with a restart", () => {
+  const first = buildInfo.get();
+  const second = buildInfo.get();
+  assert.strictEqual(first.marker, second.marker);
+  assert.ok(first.bootId && first.marker, "both must be present to compare runs");
+});
+
+check("a new build marks every measurement stale, the same build does not", () => {
+  const result = { at: new Date().toISOString() };
+  const fresh = { measuredFor: "commit:aaa", invalidatedAt: null };
+  assert.strictEqual(brain.isStale(result, fresh), false);
+
+  const invalidated = { measuredFor: "commit:bbb", invalidatedAt: new Date(Date.now() + 1000).toISOString() };
+  assert.strictEqual(brain.isStale(result, invalidated), true);
+
+  const old = { at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() };
+  assert.strictEqual(brain.isStale(old, { invalidatedAt: null }), true, "a day-old measurement is stale on its own");
+  assert.strictEqual(brain.isStale(null, {}), true, "nothing measured is stale");
 });
 
 console.log(failures ? `\n${failures} failed` : "\nall passed");

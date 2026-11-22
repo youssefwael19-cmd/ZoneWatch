@@ -94,7 +94,7 @@ function familiesNow() {
 function readBrain() {
   try {
     const raw = fs.readFileSync(FILE, "utf-8").trim();
-    if (!raw) return { results: {}, updatedAt: null };
+    if (!raw) return { results: {}, updatedAt: null, invalidatedAt: null, measuredFor: null };
     const parsed = JSON.parse(raw);
 
     // A stored verdict from an older rule set is not reproducible, so it is
@@ -103,7 +103,14 @@ function readBrain() {
     // waiting a day for the ordinary schedule to reach them.
     if (parsed.rulesVersion !== RULES_VERSION || parsed.barVersion !== BAR_VERSION) {
       state.burst = true;
-      return { results: {}, updatedAt: parsed.updatedAt || null };
+      // The numbers are gone, so the build that produced them is not "already
+      // measured" either: the next start marks this build stale.
+      return {
+        results: {},
+        updatedAt: parsed.updatedAt || null,
+        invalidatedAt: parsed.invalidatedAt || null,
+        measuredFor: null,
+      };
     }
     const results = parsed.results || {};
 
@@ -133,7 +140,14 @@ function readBrain() {
       }
     }
 
-    return { results, updatedAt: parsed.updatedAt || null };
+    return {
+      results,
+      updatedAt: parsed.updatedAt || null,
+      // Kept so the caller can tell an out-of-date measurement from a current
+      // one without re-reading the file: a new build is what sets these.
+      invalidatedAt: parsed.invalidatedAt || null,
+      measuredFor: parsed.measuredFor || null,
+    };
   } catch {
     return { results: {}, updatedAt: null };
   }
@@ -291,6 +305,100 @@ async function runFor(symbol, candleSymbol) {
   }
 }
 
+/**
+ * Is this market's measurement out of date?
+ *
+ * Two things age a measurement: the clock (TTL_MS) and a new build. A deploy
+ * changes the rules the numbers were produced under, so every stored verdict is
+ * re-measured rather than trusted; `invalidatedAt` is what marks that moment,
+ * so a plain restart of the same build does not repeat the work.
+ */
+function isStale(result, brain, now = Date.now()) {
+  if (!result || !result.at) return true;
+  const at = new Date(result.at).getTime();
+  if (!Number.isFinite(at)) return true;
+  if (now - at > TTL_MS) return true;
+  const invalidated = brain && brain.invalidatedAt ? new Date(brain.invalidatedAt).getTime() : NaN;
+  return Number.isFinite(invalidated) ? at < invalidated : false;
+}
+
+/**
+ * A new build is a reason to doubt every measurement, so mark them all stale.
+ *
+ * Idempotent against the build marker: the same build booting twice (a crash
+ * loop, a host restart) does not send the brain round eleven markets again, and
+ * a genuinely new commit does. The work is spread the ordinary way — one market
+ * per watch cycle — so a deploy never blocks the watcher.
+ */
+function markStale(markerValue) {
+  const brain = readBrain();
+  if (markerValue && brain.measuredFor === markerValue) {
+    return { changed: false, reason: "already measured for this build", measuredFor: brain.measuredFor };
+  }
+  const at = new Date().toISOString();
+  brain.invalidatedAt = at;
+  brain.measuredFor = markerValue || null;
+  writeBrain(brain);
+  state.burst = true;
+  return { changed: true, invalidatedAt: at, measuredFor: brain.measuredFor };
+}
+
+/**
+ * What the brain has actually measured, and what is still owed. Read-only.
+ * This is the panel that answers "did the deploy make it re-measure?" without
+ * needing the dashboard password.
+ */
+function status() {
+  const brain = readBrain();
+  const families = familiesNow();
+  const now = Date.now();
+  const markets = Object.entries(brain.results || {}).map(([symbol, r]) => {
+    const cells = Object.values((r && r.cells) || {});
+    const promoted = cells.filter((c) => String(c.family).indexOf("lab_") === 0);
+    const condition = r && r.current ? r.current.label : null;
+    const champion = r && r.champions && condition ? r.champions[condition] || null : null;
+    return {
+      symbol,
+      at: (r && r.at) || null,
+      bars: (r && r.bars) || null,
+      condition,
+      cells: cells.length,
+      provenCells: cells.filter((c) => c.proven).length,
+      promotedCells: promoted.length,
+      promotedProven: promoted.filter((c) => c.proven).length,
+      stale: isStale(r, brain, now),
+      champion: champion
+        ? {
+            family: champion.family,
+            name: champion.familyName,
+            n: champion.n,
+            expectancy: champion.expectancy,
+            tStat: champion.tStat,
+          }
+        : null,
+    };
+  });
+
+  return {
+    updatedAt: brain.updatedAt || null,
+    measuredFor: brain.measuredFor || null,
+    invalidatedAt: brain.invalidatedAt || null,
+    running: state.running,
+    lastRunAt: state.lastRunAt ? new Date(state.lastRunAt).toISOString() : null,
+    lastSymbol: state.lastSymbol,
+    error: state.error,
+    families: families.map((f) => ({ id: f.id, name: f.name, promoted: Boolean(f.promoted) })),
+    markets,
+    pending: markets.filter((m) => m.stale).map((m) => m.symbol),
+    proofBar: {
+      trades: MIN_TRADES,
+      expectancy: MIN_EXPECTANCY,
+      tStat: MIN_TSTAT,
+      folds: MIN_GOOD_FOLDS,
+    },
+  };
+}
+
 /** One stale market per RUN_GAP_MS, like the lab. */
 async function maybeRun(instruments = []) {
   if (state.running) return;
@@ -301,11 +409,7 @@ async function maybeRun(instruments = []) {
   if (Date.now() - state.lastRunAt < gap) return;
 
   const brain = readBrain();
-  const stale = instruments.find((inst) => {
-    const r = brain.results[inst.symbol];
-    if (!r) return true;
-    return Date.now() - new Date(r.at).getTime() > TTL_MS;
-  });
+  const stale = instruments.find((inst) => isStale(brain.results[inst.symbol], brain));
   if (!stale) {
     state.burst = false;
     return;
@@ -496,6 +600,9 @@ function summary() {
 
 module.exports = {
   maybeRun,
+  markStale,
+  isStale,
+  status,
   gate,
   proofFor,
   adjacentCondition,

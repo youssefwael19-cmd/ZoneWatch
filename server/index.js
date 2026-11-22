@@ -36,6 +36,8 @@ const brainMod = require("./brain");
 const gateMod = require("./gate");
 const explorationMod = require("./exploration");
 const ledgerMod = require("./ledger");
+const buildInfo = require("./buildinfo");
+const auditMod = require("./audit");
 const journal = require("./journal");
 const botNotes = require("./botjournal");
 const locksMod = require("./locks");
@@ -2318,6 +2320,176 @@ app.get("/api/export/signals.csv", (_req, res) => {
 });
 
 /** The learner: what the app has judged about its own past calls. */
+/*
+ * The audit report: one public, read-only answer to "is what I shipped actually
+ * running, and what does the app think right now?". Built for checking a change
+ * without a session: the build that is answering, what the brain has measured
+ * and what it still owes, the lab's verdicts, both paper books, the gates, the
+ * learner and the watcher's health. Nothing secret is published — settings are
+ * assembled by whitelist and then walked by auditMod.redact as a second line.
+ */
+app.get("/api/audit", async (_req, res) => {
+  const incomplete = [];
+  const prices = priceMapNow();
+
+  let account = null;
+  let shadow = null;
+  try {
+    account = executor.status(prices);
+    shadow = shadowMod.status(prices);
+  } catch (err) {
+    incomplete.push(`money: ${err.message}`);
+  }
+
+  let books = null;
+  if (account && shadow) {
+    try {
+      books = ledgerMod.reconcile({
+        tracker: tracker.load(),
+        journal: journal.readJournal().entries,
+        executor: account,
+        shadow,
+      }).books;
+    } catch (err) {
+      incomplete.push(`ledger: ${err.message}`);
+    }
+  }
+
+  let snap = null;
+  try {
+    snap = await getSnapshot({ maxAgeMs: 15000 });
+  } catch (err) {
+    incomplete.push(`watch: ${err.message}`);
+  }
+
+  let lab = null;
+  try {
+    const summary = labMod.summary();
+    lab = {
+      updatedAt: summary.updatedAt,
+      running: summary.running,
+      lastRunAt: summary.lastRunAt,
+      error: summary.error,
+      promoted: labMod.families().map((f) => ({ id: f.id, name: f.name })),
+      markets: Object.entries(summary.results || {}).map(([symbol, r]) => ({
+        symbol,
+        at: r.at,
+        tradable: r.tradable === true,
+        verdict: r.verdict,
+        tStat: r.tStat,
+        positiveFolds: r.positiveFolds,
+        oos: r.oos ? { n: r.oos.n, expectancy: r.oos.expectancy, winrate: r.oos.winrate } : null,
+      })),
+    };
+  } catch (err) {
+    incomplete.push(`lab: ${err.message}`);
+  }
+
+  let journalSummary = null;
+  try {
+    journalSummary = { ...journal.summary(), botNotes: botNotes.list({ limit: 1 }).length > 0 };
+  } catch (err) {
+    incomplete.push(`journal: ${err.message}`);
+  }
+
+  const execConfig = settings.getExecConfig();
+  const aiStatus = aiMod.status();
+  const dirStatus = stateDirMod.status();
+
+  const report = auditMod.report({
+    build: buildInfo.get(),
+    state: {
+      mode: dirStatus.mode,
+      files: dirStatus.files,
+      error: dirStatus.error,
+      cloud: stateStore.status(),
+    },
+    brain: brainMod.status(),
+    lab,
+    gates: snap
+      ? {
+          checkedAt: snap.checkedAt,
+          blockReason: snap.blockReason || null,
+          guard: snap.guard ? { stop: Boolean(snap.guard.stop), reason: snap.guard.reason } : null,
+          blackout: snap.blackout ? { active: Boolean(snap.blackout.active) } : null,
+          feed: snap.feed || null,
+          signals: (snap.signals || []).length,
+          held: snap.alertsHeldByBrain || [],
+          rows: ((snap.locks && snap.locks.rows) || []).map((r) => ({
+            symbol: r.symbol,
+            state: r.state,
+            stoppedBy: r.stoppedBy,
+            headline: r.headline,
+            openLocks: r.openLocks,
+            totalLocks: r.totalLocks,
+          })),
+        }
+      : null,
+    money: {
+      account: auditMod.bookTotals(account),
+      shadow: auditMod.bookTotals(shadow),
+      books,
+    },
+    journal: journalSummary,
+    learning: (() => {
+      try {
+        const summary = learning.summary();
+        return {
+          lastRunAt: summary.lastRunAt,
+          closedTrades: summary.closedTrades,
+          totalR: summary.totalR,
+          rows: summary.rows,
+          thresholds: summary.thresholds,
+        };
+      } catch (err) {
+        incomplete.push(`learning: ${err.message}`);
+        return null;
+      }
+    })(),
+    settings: {
+      markets: settings.getEnabledMarkets(),
+      brainGate: settings.getBrainGate(),
+      alertOnlyWhenOpen: settings.getAlertOnlyWhenOpen(),
+      unprovenMarkets: settings.getUnprovenMarkets(),
+      quietHours: settings.getQuietHours(),
+      autoZones: settings.getAutoZones(),
+      signalAlerts: settings.getSignalAlerts(),
+      // Named so the redaction pass in audit.js does not blank the one useful
+      // bit of it: whether the write half of the app has a lock.
+      locked: Boolean(settings.getAuth()),
+      exec: {
+        enabled: Boolean(execConfig.enabled),
+        mode: execConfig.mode,
+        accountBalance: execConfig.accountBalance,
+        riskPct: execConfig.riskPct,
+        maxPositions: execConfig.maxPositions,
+        maxDailyLossPct: execConfig.maxDailyLossPct,
+        exploration: execConfig.exploration,
+        liveEvidence: execConfig.liveEvidence,
+      },
+      assistant: { configured: Boolean(aiStatus.enabled), model: aiStatus.model },
+      discord: { configured: discord.configured() },
+      provider: market.providerInfo(),
+    },
+    health: (() => {
+      const beat = readHeartbeat();
+      const ageMs = beat && Number.isFinite(beat.at) ? Date.now() - beat.at : null;
+      return {
+        watcher: {
+          intervalSeconds: Math.round(WATCH_INTERVAL_MS / 1000),
+          lastCheck: beat ? beat.iso : null,
+          ageSeconds: ageMs == null ? null : Math.round(ageMs / 1000),
+          stale: ageMs == null ? true : ageMs > WATCH_INTERVAL_MS * 3,
+        },
+        uptimePing: { configured: Boolean(settings.getStatusPingUrl()), error: lastStatusPingError },
+      };
+    })(),
+  });
+
+  report.incomplete = incomplete;
+  res.json(auditMod.redact(report));
+});
+
 app.get("/api/learning", (_req, res) => {
   const learn = learning.summary();
   const lab = labMod.summary();
@@ -2931,6 +3103,21 @@ async function start() {
     if (backfilled) console.log(`[journal] back-filled ${backfilled} tracked result(s) with no entry`);
   } catch (err) {
     console.error(`[journal] back-fill failed: ${err.message}`);
+  }
+
+  // A new build invalidates every stored measurement: the rules the numbers
+  // came from are not the rules this process is running. The re-measure is
+  // spread one market per watch cycle, so a deploy never blocks the watcher,
+  // and the same build booting again does not repeat it.
+  try {
+    const marked = brainMod.markStale(buildInfo.marker());
+    if (marked.changed) {
+      console.log("[brain] new build — every market will be re-measured");
+    } else {
+      console.log(`[brain] measurements kept: ${marked.reason}`);
+    }
+  } catch (err) {
+    console.error(`[brain] could not mark stale: ${err.message}`);
   }
 
   // Roll call: every market's bot says what it watches and where it stands,
