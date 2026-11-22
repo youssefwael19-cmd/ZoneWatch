@@ -2366,8 +2366,10 @@ app.get("/api/audit", async (_req, res) => {
   try {
     const summary = labMod.summary();
     // families() first: it is what records a newly nominated config, so the
-    // standing list read after it includes everything this run promoted.
-    const promoted = labMod.families().map((f) => ({ id: f.id, name: f.name }));
+    // standing list read after it includes everything this run promoted. The
+    // ids are not published separately — lab.promotions carries each one with
+    // the record behind it, and repeating them here only invited them to drift.
+    labMod.families();
     let promotions = null;
     try {
       promotions = labMod.standingPromotions();
@@ -2379,9 +2381,9 @@ app.get("/api/audit", async (_req, res) => {
       running: summary.running,
       lastRunAt: summary.lastRunAt,
       error: summary.error,
-      promoted,
-      // The sticky list: each rule, when it first earned its place, and the
-      // unseen record behind it. Read-only.
+      // The sticky list: each rule, when it first earned its place, the unseen
+      // record behind it, and whether today's lab run still nominates it.
+      // Read-only.
       promotions,
       markets: Object.entries(summary.results || {}).map(([symbol, r]) => ({
         symbol,

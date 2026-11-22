@@ -356,6 +356,53 @@ function markStale(markerValue) {
 }
 
 /**
+ * Cross-check the rules the app says it is testing against the measurements it
+ * actually holds. Pure, so it can be checked without a brain file.
+ *
+ * Two things can only go wrong through a bug, and both are silent:
+ *
+ *  - a standing promotion with no measured cells anywhere — the rule is listed
+ *    as under test, but nothing was ever measured for it, so a market could sit
+ *    with no verdict and no way to see why;
+ *  - a champion naming a rule that is no longer in the list — a proof resting on
+ *    a strategy that does not exist, which is exactly what readBrain prunes.
+ *
+ * Reporting them is cheap and turns "the list looks right" into a fact.
+ */
+function reconcilePromotions(results, families) {
+  const tested = new Set(families.map((f) => f.id));
+  const promoted = families.filter((f) => f.promoted).map((f) => f.id);
+  const coverage = new Map(promoted.map((id) => [id, { id, symbols: [], cells: 0, proven: 0 }]));
+  const orphans = new Map();
+
+  for (const [symbol, result] of Object.entries(results || {})) {
+    for (const cell of Object.values((result && result.cells) || {})) {
+      const row = cell && coverage.get(cell.family);
+      if (!row) continue;
+      row.cells += 1;
+      if (cell.proven) row.proven += 1;
+      if (!row.symbols.includes(symbol)) row.symbols.push(symbol);
+    }
+    for (const [condition, champion] of Object.entries((result && result.champions) || {})) {
+      if (!champion || tested.has(champion.family)) continue;
+      orphans.set(`${symbol}|${condition}|${champion.family}`, {
+        symbol,
+        condition,
+        family: champion.family,
+        name: champion.familyName || null,
+      });
+    }
+  }
+
+  return {
+    listed: promoted,
+    coverage: [...coverage.values()].map((row) => ({ ...row, markets: row.symbols.length })),
+    missingCells: [...coverage.values()].filter((row) => row.cells === 0).map((row) => row.id),
+    championsNotListed: [...orphans.values()],
+  };
+}
+
+/**
  * What the brain has actually measured, and what is still owed. Read-only.
  * This is the panel that answers "did the deploy make it re-measure?" without
  * needing the dashboard password.
@@ -401,6 +448,8 @@ function status() {
     error: state.error,
     families: families.map((f) => ({ id: f.id, name: f.name, promoted: Boolean(f.promoted) })),
     markets,
+    // Does the list of rules match the measurements on hand?
+    promotionAudit: reconcilePromotions(brain.results, families),
     pending: markets.filter((m) => m.stale).map((m) => m.symbol),
     proofBar: {
       trades: MIN_TRADES,
@@ -613,6 +662,7 @@ function summary() {
 module.exports = {
   maybeRun,
   markStale,
+  reconcilePromotions,
   isStale,
   status,
   gate,

@@ -396,6 +396,43 @@ check("a promotion from an older rule set is not carried into this build", () =>
   assert.deepStrictEqual(promotions.usable(null).configs, []);
 });
 
+/* -------------------- promotions vs measured cells -------------------- */
+
+check("a promotion with no measured cells is reported, not assumed fine", () => {
+  const out = brain.reconcilePromotions(
+    {
+      TESTX: {
+        cells: {
+          "trending-quiet|lab_a": { family: "lab_a", proven: true },
+          "trending-quiet|sweep": { family: "sweep", proven: false },
+        },
+        champions: { "trending-quiet": { family: "lab_a", familyName: "A" } },
+      },
+    },
+    [{ id: "sweep" }, { id: "lab_a", promoted: true }, { id: "lab_b", promoted: true }]
+  );
+  assert.deepStrictEqual(out.listed, ["lab_a", "lab_b"]);
+  assert.deepStrictEqual(out.missingCells, ["lab_b"]);
+  const covered = out.coverage.find((row) => row.id === "lab_a");
+  assert.deepStrictEqual(covered.symbols, ["TESTX"]);
+  assert.strictEqual(covered.markets, 1);
+  assert.strictEqual(covered.cells, 1);
+  assert.strictEqual(covered.proven, 1);
+  assert.deepStrictEqual(out.championsNotListed, [], "a champion on a rule that is listed is fine");
+});
+
+check("a champion naming a rule that is no longer listed is reported", () => {
+  const out = brain.reconcilePromotions(
+    {
+      TESTX: { cells: {}, champions: { "trending-quiet": { family: "lab_gone", familyName: "Gone" } } },
+    },
+    [{ id: "sweep" }, { id: "lab_a", promoted: true }]
+  );
+  assert.deepStrictEqual(out.championsNotListed.map((c) => c.family), ["lab_gone"]);
+  assert.strictEqual(out.championsNotListed[0].symbol, "TESTX");
+  assert.deepStrictEqual(out.missingCells, ["lab_a"], "a rule with no cells at all is missing everywhere");
+});
+
 /* --------------------------- audit / build --------------------------- */
 
 check("the audit report cannot publish a secret, however it is named", () => {
