@@ -487,9 +487,11 @@ to say so rather than answer as if it had checked.
 ## Auto-trading
 
 Off by default, and paper mode until you change it. Signals the app would post
-can be placed as orders, with three limits that can only ever refuse a trade:
-0.5% of equity risked per trade (sized from the real stop distance), a hard
-daily loss cap, and one position per market. The kill switch survives restarts.
+can be placed as orders, with limits that can only ever refuse a trade: 0.5% of
+equity risked per trade (sized from the real stop distance), one position per
+market, and a daily stop that is **off by default** — switch it on with
+**Daily stop** in the paper-trade panel and it stops the day at the loss limit
+above it. The manual kill switch survives restarts either way.
 
 Every order is charged the broker's cut: half the spread on entry, the other
 half plus commission and swap on exit. Spreads come from the broker itself once

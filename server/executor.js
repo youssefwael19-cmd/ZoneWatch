@@ -289,10 +289,14 @@ function refusal(signal, state, priceBySymbol) {
     return `already holding ${signal.symbol}`;
   }
 
-  const limit = Number(config.maxDailyLossPct || 2);
-  const startEquity = Number(state.balance ?? config.accountBalance) || 1;
-  const lossPct = (-state.dayRealized / startEquity) * 100;
-  if (lossPct >= limit) return `daily loss limit reached (${lossPct.toFixed(2)}%)`;
+  // The daily stop is off unless the owner switched it on: it was removed for
+  // now, and the manual kill switch below is unaffected either way.
+  if (config.dailyStop === true) {
+    const limit = Number(config.maxDailyLossPct || 2);
+    const startEquity = Number(state.balance ?? config.accountBalance) || 1;
+    const lossPct = (-state.dayRealized / startEquity) * 100;
+    if (lossPct >= limit) return `daily loss limit reached (${lossPct.toFixed(2)}%)`;
+  }
 
   if (!Number.isFinite(priceOf(priceBySymbol, signal.symbol))) {
     // Paper fills are honest about this: without a current price there is no
@@ -977,9 +981,9 @@ function mark(priceBySymbol) {
     writeState(state);
   }
 
-  const limit = Number(config.maxDailyLossPct || 2);
+  const limit = config.dailyStop === true ? Number(config.maxDailyLossPct || 2) : null;
   const startEquity = Number(state.balance ?? config.accountBalance) || 1;
-  if ((state.dayRealized / startEquity) * 100 <= -limit && !state.killedAt) {
+  if (limit != null && (state.dayRealized / startEquity) * 100 <= -limit && !state.killedAt) {
     state.killedAt = new Date().toISOString();
     state.killReason = `daily loss limit reached (${((state.dayRealized / startEquity) * 100).toFixed(2)}%)`;
     writeState(state);
@@ -1385,6 +1389,7 @@ function status(priceBySymbol) {
     enabled: Boolean(config.enabled),
     mode: config.mode,
     riskPct: config.riskPct,
+    dailyStop: config.dailyStop === true,
     maxDailyLossPct: config.maxDailyLossPct,
     maxPositions: config.maxPositions,
     killSwitch: Boolean(state.killedAt),

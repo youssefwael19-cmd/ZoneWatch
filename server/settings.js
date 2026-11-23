@@ -597,6 +597,11 @@ const EXEC_DEFAULTS = {
   enabled: false,
   mode: "paper",
   riskPct: 0.5,
+  // The daily stop is a switch of its own, and off by default: the owner asked
+  // for it to be removed for now, with a way to turn it back on in the paper
+  // panel. The percentage below is kept, so switching it on restores the limit
+  // rather than needing the number typed again.
+  dailyStop: false,
   maxDailyLossPct: 2,
   maxPositions: 2,
   accountBalance: 1000,
@@ -645,6 +650,9 @@ function getExecConfig() {
   return {
     ...EXEC_DEFAULTS,
     ...exec,
+    // Stored values are not trusted to be booleans: an old string "false"
+    // must never switch the daily stop on.
+    dailyStop: exec.dailyStop === true,
     symbolOverrides: { ...EXEC_DEFAULTS.symbolOverrides, ...(exec.symbolOverrides || {}) },
     tv: { ...EXEC_DEFAULTS.tv, ...(exec.tv || {}) },
     direct: { ...EXEC_DEFAULTS.direct, ...(exec.direct || {}) },
@@ -677,6 +685,7 @@ function setExecConfig(patch = {}) {
   if (patch.maxDailyLossPct !== undefined) {
     next.maxDailyLossPct = clampNumber(patch.maxDailyLossPct, 0.5, 10, current.maxDailyLossPct);
   }
+  if (patch.dailyStop !== undefined) next.dailyStop = Boolean(patch.dailyStop);
   if (patch.maxPositions !== undefined) {
     next.maxPositions = Math.round(clampNumber(patch.maxPositions, 1, 5, current.maxPositions));
   }

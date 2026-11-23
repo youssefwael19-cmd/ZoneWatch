@@ -304,11 +304,12 @@ function resolve(state, prices, config, now) {
   if (state.closed.length > MAX_CLOSED) state.closed = state.closed.slice(-MAX_CLOSED);
   state.balance = Number((state.balance + closed.reduce((a, c) => a + c.pnl, 0)).toFixed(2));
 
-  // The same daily kill switch the live book has. It is part of the strategy
-  // being measured, so the experiment keeps it.
-  const limit = Number(config.maxDailyLossPct || 2);
+  // The same daily kill switch the live book has, and the same switch turns it
+  // on: it is part of the strategy being measured, so the experiment keeps it,
+  // and it stays off while the executor's daily stop is off.
+  const limit = config.dailyStop === true ? Number(config.maxDailyLossPct || 2) : null;
   const startEquity = Number(state.balance) || 1;
-  if ((state.dayRealized / startEquity) * 100 <= -limit && !state.killedAt) {
+  if (limit != null && (state.dayRealized / startEquity) * 100 <= -limit && !state.killedAt) {
     state.killedAt = now.toISOString();
     state.killReason = `daily loss limit reached (${((state.dayRealized / startEquity) * 100).toFixed(2)}%)`;
   }

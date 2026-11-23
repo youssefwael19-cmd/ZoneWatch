@@ -510,7 +510,7 @@
         Places the app's own signals as orders. It starts on a <strong>demo</strong>: paper mode needs nothing but a balance figure,
         bridge mode talks to MetaTrader 5 through the small service in <code>bridge/</code>, and direct mode calls a broker's own API
         (OANDA) from the cloud so no machine has to stay on. It will only ever trade a market the
-        brain gate has approved, never more than one position at a time per market, and it stops for the day once the loss limit is hit.
+        brain gate has approved, and never more than one position at a time per market. The daily stop is <strong>off</strong> for now — switch it back on below whenever you want it.
       </p>
 
       <div class="fields">
@@ -524,6 +524,9 @@
         </select></div>
         <div><label>Risk per trade (%)</label><input id="exRisk" type="number" step="0.1" min="0.01" max="3" /></div>
         <div><label>Daily loss limit (%)</label><input id="exDayLoss" type="number" step="0.1" min="0.5" max="10" /></div>
+        <div><label>Daily stop</label><label style="display:flex;gap:8px;align-items:center;height:34px">
+          <input id="exDailyStop" type="checkbox" style="width:auto" /> <span class="hint">stop for the day at the loss limit</span>
+        </label></div>
         <div><label>Max open positions</label><input id="exMax" type="number" step="1" min="1" max="5" /></div>
         <div><label>Account balance (paper)</label><input id="exBal" type="number" step="any" min="1" /></div>
         <div><label>Leverage (1 : x)</label><input id="exLev" type="number" step="100" min="1" max="3000" /></div>
@@ -1277,6 +1280,7 @@ document.addEventListener("click", async (event) => {
         enabled: document.getElementById("exOn").checked,
         mode: document.getElementById("exMode").value,
         riskPct: Number(document.getElementById("exRisk").value),
+        dailyStop: document.getElementById("exDailyStop").checked,
         maxDailyLossPct: Number(document.getElementById("exDayLoss").value),
         maxPositions: Number(document.getElementById("exMax").value),
         accountBalance: Number(document.getElementById("exBal").value),
@@ -2212,6 +2216,7 @@ async function loadExec() {
     document.getElementById("exMode").value = ["bridge", "direct"].includes(cfg.mode) ? cfg.mode : "paper";
     document.getElementById("exRisk").value = cfg.riskPct;
     document.getElementById("exDayLoss").value = cfg.maxDailyLossPct;
+    document.getElementById("exDailyStop").checked = cfg.dailyStop === true;
     document.getElementById("exMax").value = cfg.maxPositions;
     document.getElementById("exBal").value = cfg.accountBalance;
     document.getElementById("exLev").value = cfg.leverage;
@@ -2276,7 +2281,7 @@ async function loadExec() {
           ${s.refusedToday ? `<div class="hint" style="margin-top:2px;color:#f5b942">Skipped today: <strong>${s.refusedToday}</strong> refused setup${s.refusedToday === 1 ? "" : "s"} never became a trade because no size fit the risk cap${s.refusals && s.refusals[0] ? ` — latest ${s.refusals[0].symbol} ${s.refusals[0].side}: ${s.refusals[0].reason}` : ""}. They are not in the result above, so read it as a filtered sample.</div>` : ""}
         </div>`;
       })() : ""}
-      <div style="margin-top:4px">Risk ${d.riskPct}% per trade · daily limit ${d.maxDailyLossPct}% · broker ${d.broker}
+      <div style="margin-top:4px">Risk ${d.riskPct}% per trade · ${d.dailyStop ? `daily limit ${d.maxDailyLossPct}%` : "daily stop off"} · broker ${d.broker}
         ${d.margin ? `· margin 1:${d.margin.leverage} · used $${d.margin.used.toFixed(2)} (${d.margin.usedPct}% of equity) · free $${d.margin.free.toFixed(2)} · stop-out at ${d.margin.stopOutPct}% of margin` : ""}
         ${d.mode === "direct"
           ? `· API ${d.direct && d.direct.configured ? "configured" : "not configured"} ${d.direct && d.direct.accountId ? "(" + d.direct.accountId + ")" : ""}`

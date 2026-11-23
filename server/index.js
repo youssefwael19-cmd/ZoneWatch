@@ -2545,6 +2545,7 @@ app.get("/api/audit", async (_req, res) => {
         accountBalance: execConfig.accountBalance,
         riskPct: execConfig.riskPct,
         maxPositions: execConfig.maxPositions,
+        dailyStop: execConfig.dailyStop === true,
         maxDailyLossPct: execConfig.maxDailyLossPct,
         exploration: execConfig.exploration,
         liveEvidence: execConfig.liveEvidence,
