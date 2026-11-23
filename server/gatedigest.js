@@ -99,15 +99,15 @@ function buildGateDigest({ locks = {}, now = new Date() } = {}) {
   const count = (state) => rows.filter((row) => row.state === state).length;
   const day = now.toUTCString().slice(0, 16);
   const header = `**Zone Watch · gate digest · ${day} UTC**`;
+  const legend =
+    "_Order: hours → feed → news → loss guard → lab → correlation → proven rule → chop → cooldown. " +
+    "Reaction, thin stop and learner mute are judged once a setup exists._";
   const summary = rows.length
-    ? `${rows.length} markets: ${count("held")} held · ${count("partial")} partly open · ${count("open")} open.`
-    : "No markets were measured this cycle.";
-  const footer =
-    "_Order: market hours → feed → news → loss guard → strategy lab → correlation → proven rule → chop → cooldown. " +
-    "Reaction confirmation, thin stop and learner mute are judged only once a setup exists._";
+    ? `${rows.length} markets: ${count("held")} held · ${count("partial")} partly open · ${count("open")} open.\n${legend}`
+    : `No markets were measured this cycle.\n${legend}`;
 
   return {
-    messages: paginate([summary, ...rows.map(marketBlock), footer], header),
+    messages: paginate([summary, ...rows.map(marketBlock)], header),
     markets: rows.length,
   };
 }
