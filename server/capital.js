@@ -4,9 +4,10 @@
  * The owner asked for $500 of capital in all of the paper wallets. Those
  * balances live in the state folder behind the Settings password, so the change
  * cannot be made through the dashboard from here. This applies it on the next
- * boot instead, from a value kept in the repository (`capital.json`), and
- * records what it did in `capital.json` in the state folder so a restart never
- * re-applies an old figure over newer results.
+ * boot instead, from a value kept in the repository (`capital.json`, with a
+ * built-in fallback so a host that ships only the application directory still
+ * applies it), and records what it did in `capital.json` in the state folder so
+ * a restart never re-applies an old figure over newer results.
  *
  * "Capital" is three numbers that have to agree: the executor's starting
  * balance, the shadow book's starting balance, and the account size the signal
@@ -23,6 +24,10 @@ const shadow = require("./shadow");
 
 const SOURCE = path.join(__dirname, "..", "capital.json");
 const MARKER = require("./stateDir").file("capital.json");
+// The figure the owner asked for. Kept here as well as in capital.json because
+// a host may ship only the application directory, and the capital change must
+// not silently do nothing because one file did not make it into the image.
+const DEFAULT_CAPITAL = 500;
 
 /**
  * The requested figure, or null when the repository does not ask for one.
@@ -40,10 +45,9 @@ function target() {
   try {
     const parsed = JSON.parse(fs.readFileSync(SOURCE, "utf-8"));
     const amount = Number(parsed && parsed.paperCapital);
-    return amount > 0 ? Number(amount.toFixed(2)) : null;
-  } catch {
-    return null;
-  }
+    if (amount > 0) return Number(amount.toFixed(2));
+  } catch {}
+  return DEFAULT_CAPITAL;
 }
 
 function readMarker() {
