@@ -1611,13 +1611,10 @@ async function buildSnapshot() {
       labTradable: labRow ? labRow.tradable === true : null,
       labVerdict: labRow ? labRow.verdict : "not tested yet",
       unproven: unprovenMarkets.has(inst.symbol),
-      // A lab "no edge" is not silence while the exploration budget is open:
-      // the card and the digest both need to say the market can still take one
-      // small evidence trade.
-      exploreAvailable:
-        labRow && labRow.tradable !== true
-          ? explorationMod.allowsSymbol(exploreBudget, inst.symbol, exploreRules)
-          : false,
+      // Neither a lab "no edge" nor a missing champion is silence while the
+      // exploration budget is open: the card and the digest both need to say
+      // the market can still take one small evidence trade.
+      exploreAvailable: explorationMod.allowsSymbol(exploreBudget, inst.symbol, exploreRules),
       correlatedWith: partner || null,
       brainGateOn,
       brainCondition: brainRow ? brainRow.condition : null,

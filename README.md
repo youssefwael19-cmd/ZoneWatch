@@ -286,14 +286,15 @@ readings as **Held back** in the dashboard, so the two can never disagree:
 
 ```
 **Zone Watch · gate digest · Mon, 23 Nov 2026 21:00:00 UTC**
-11 markets: 9 held · 2 partly open · 0 open.
+11 markets: 1 held · 10 partly open · 0 open.
 
-**XAUUSD** — held
-• Strategy lab: no edge — -0.078R per trade (needs above 0.08R)
-• Proven rule: no rule has been measured to work in trending-volatile
+**XAUUSD** — partial
+• Strategy lab: no edge — -0.078R per trade (needs above 0.08R) — exploration only: one quarter-size trade to gather evidence
+• Proven rule: no rule is proven in ranging-volatile — exploration can still take one quarter-size trade
 
-**GBPUSD** — partial
-• Strategy lab: no edge — exploration only: one quarter-size trade to gather evidence
+**NASDAQ** — held
+• Market hours: no fresh price for 3495 minutes — the feed looks shut
+• Strategy lab: no edge — 77 unseen trades (needs 100) — exploration only: one quarter-size trade to gather evidence
 ```
 
 Only gates that are actually in the way are listed, so the first bullet is the

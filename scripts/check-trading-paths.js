@@ -662,15 +662,21 @@ const NO_EDGE = {
   cooldownMinutes: null,
 };
 
-check("the lab lock reads partly open when exploration can still trade", () => {
+check("exploration turns both the lab and the proven-rule locks partly open", () => {
   const row = locks.diagnoseMarket(NO_EDGE);
-  const lab = row.locks.find((l) => l.id === "lab");
-  assert.strictEqual(lab.state, "partial");
-  assert.ok(/exploration only/.test(lab.detail), lab.detail);
-  assert.strictEqual(row.stoppedBy, "Proven rule", "the proven-rule gate is still the first hard stop");
+  const lock = (id) => row.locks.find((l) => l.id === id);
+  assert.strictEqual(lock("lab").state, "partial");
+  assert.ok(/exploration only/.test(lock("lab").detail), lock("lab").detail);
+  assert.strictEqual(lock("brain").state, "partial");
+  assert.ok(/exploration can still take/.test(lock("brain").detail), lock("brain").detail);
+  assert.strictEqual(row.state, "partial");
+  assert.strictEqual(row.stoppedBy, null, "nothing hard-stops a setup while the budget is open");
 
+  // With the day's one trade spent, the same market is genuinely held again.
   const spent = locks.diagnoseMarket({ ...NO_EDGE, exploreAvailable: false });
   assert.strictEqual(spent.locks.find((l) => l.id === "lab").state, "held");
+  assert.strictEqual(spent.locks.find((l) => l.id === "brain").state, "held");
+  assert.strictEqual(spent.state, "held");
   assert.strictEqual(spent.stoppedBy, "Strategy lab");
 });
 
@@ -689,7 +695,8 @@ check("the gate digest names every market and only the gates in its way", () => 
   assert.ok(/Strategy lab: no edge/.test(text), "the lab reason is the point of the digest");
   assert.ok(/exploration only/.test(text), "a partly open lab says exploration is still available");
   assert.ok(!/Market hours: open/.test(text), "gates that are not in the way are left out");
-  assert.ok(/no rule has been measured to work in trending-volatile/.test(text), text);
+  assert.ok(/no rule is proven in trending-volatile/.test(text), text);
+  assert.ok(/2 markets: 0 held · 2 partly open · 0 open/.test(text), "a market exploration can reach is not called held");
   for (const message of messages) assert.ok(message.length <= gatedigest.MAX_CHARS, "Discord limit");
 });
 

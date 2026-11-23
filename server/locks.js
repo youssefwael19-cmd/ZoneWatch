@@ -116,6 +116,17 @@ function diagnoseMarket(facts = {}) {
       PARTIAL,
       `nothing proven in ${facts.brainCondition}; ${facts.brainAdjacent.name} next door buys half size`
     );
+  } else if (facts.exploreAvailable) {
+    // A refusal is still a refusal, but the exploration budget means the market
+    // is not silent: one small evidence trade can still be taken, and the card
+    // must not call that "held".
+    put(
+      "brain",
+      PARTIAL,
+      facts.brainCondition
+        ? `no rule is proven in ${facts.brainCondition} — exploration can still take one quarter-size trade`
+        : "this market has not been measured yet — exploration can still take one quarter-size trade"
+    );
   } else {
     put(
       "brain",
