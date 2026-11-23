@@ -73,4 +73,19 @@ function decide({
   return verdict;
 }
 
-module.exports = { decide, LIVE_MULTIPLE, EXPLORE_MULTIPLE };
+/**
+ * Is this setup worth putting through the gates at all?
+ *
+ * The lab used to decide that on its own, which meant a market it had silenced
+ * never reached the proven-rule gate — and so never reached the shadow book
+ * either, although pricing those refusals is the whole reason the shadow book
+ * exists. A setup is looked at when the lab passed it, the market is on the
+ * override list, the exploration budget can take it, or the shadow book is
+ * running and needs the gate's answer to measure. Being looked at is not the
+ * same as being sent: only the gate below can approve one.
+ */
+function worthAsking({ labApproved = false, unproven = false, explorable = false, shadowWatching = false } = {}) {
+  return Boolean(labApproved || unproven || explorable || shadowWatching);
+}
+
+module.exports = { decide, worthAsking, LIVE_MULTIPLE, EXPLORE_MULTIPLE };

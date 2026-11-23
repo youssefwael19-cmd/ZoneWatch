@@ -851,7 +851,22 @@ async function buildSnapshot() {
       exploreRules.enabled &&
       explorationMod.allowsSymbol(exploreBudget, signal.symbol, exploreRules);
 
-    if (changed && cooled && !alreadyOpen && (signal.labApproved || signal.unproven || explorable)) {
+    // The shadow book prices the refusals, so a refused setup has to reach it.
+    // While the shadow book is running, a market the lab silenced still sends
+    // its setups down the gate: the proven-rule gate refuses them (or takes its
+    // one exploration trade), and what it refuses is measured instead of being
+    // dropped one step earlier where the shadow book could never see it.
+    const shadowWatching = shadowMod.enabled(execConfig);
+    const shadowable = !signal.labApproved && shadowWatching;
+
+    const worthAsking = gateMod.worthAsking({
+      labApproved: signal.labApproved,
+      unproven: signal.unproven,
+      explorable,
+      shadowWatching: shadowable,
+    });
+
+    if (changed && cooled && !alreadyOpen && worthAsking) {
       newSignals.push(signal);
       lastSignalKey.set(signal.symbol, key);
       lastSignalSentAt.set(signal.symbol, Date.now());

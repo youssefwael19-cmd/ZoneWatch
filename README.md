@@ -519,7 +519,13 @@ The shadow book is the other half of the gate question. Every setup the
 proven-rule gate refuses is also paper-traded in its own ledger
 (`shadow.json`), with the same balance, risk, spread, slippage and stop rules,
 and each fill records the verdict that rejected it. It never places an order
-and never touches the live account. The daily recap reports its equity, today's
+and never touches the live account.
+
+The book needs the refusals to reach it, so while it is running the lab's
+verdict no longer keeps a setup away from the gate: a market the lab measured
+as having no edge still sends its setups through, the gate still refuses them
+(or takes its one exploration trade), and whatever it refuses is priced. Only
+what the gate approves is ever sent or traded. The daily recap reports its equity, today's
 money and win/loss record beside the live paper account, so the gate can be
 judged on what it prevented instead of taken on faith.
 

@@ -81,6 +81,22 @@ check("exploration only fires when the budget allows it", () => {
   assert.strictEqual(spent.allowed, false);
 });
 
+check("a setup the lab silenced still reaches the gate while the shadow book is measuring", () => {
+  assert.strictEqual(
+    gate.worthAsking({ labApproved: false, explorable: false, shadowWatching: true }),
+    true,
+    "the shadow book needs the refusal to price it"
+  );
+  assert.strictEqual(gate.worthAsking({ labApproved: false, explorable: true }), true);
+  assert.strictEqual(
+    gate.worthAsking({ labApproved: false, explorable: false, shadowWatching: false }),
+    false,
+    "with no consumer there is nothing to ask the gate about"
+  );
+  assert.strictEqual(gate.worthAsking({ labApproved: true }), true);
+  assert.strictEqual(gate.worthAsking({ unproven: true }), true);
+});
+
 check("a negative live book does not buy anything", () => {
   const out = gate.decide({
     symbol: "GBPUSD",

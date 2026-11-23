@@ -39,7 +39,10 @@ function checkText(name, haystack, needle) {
 }
 
 const settings = require("../server/settings");
-settings.setExecConfig({ enabled: true, mode: "paper", accountBalance: 200, riskPct: 0.5, maxDailyLossPct: 2, maxPositions: 2 });
+// maxPositions: 0 keeps the server this check boots from opening a real shadow
+// trade while the assertions run: this check is about the arithmetic on a
+// fixed ledger, and a live watch cycle would add its own position to it.
+settings.setExecConfig({ enabled: true, mode: "paper", accountBalance: 200, riskPct: 0.5, maxDailyLossPct: 2, maxPositions: 0 });
 const config = settings.getExecConfig();
 check("local exec enabled", config.enabled, true);
 check("local exec mode", config.mode, "paper");
