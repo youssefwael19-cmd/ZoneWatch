@@ -81,6 +81,14 @@ function diagnoseMarket(facts = {}) {
     put("lab", OPEN, "never tested — allowed until it is");
   } else if (facts.unproven) {
     put("lab", PARTIAL, `${facts.labVerdict || "no measured edge"} — posted anyway, labelled unproven`);
+  } else if (facts.exploreAvailable) {
+    // The lab said no, but the exploration budget is still open: the market is
+    // not silent, it is reduced to one small evidence trade.
+    put(
+      "lab",
+      PARTIAL,
+      `${facts.labVerdict || "no measured edge"} — exploration only: one quarter-size trade to gather evidence`
+    );
   } else {
     put("lab", HELD, facts.labVerdict || "no measured edge");
   }

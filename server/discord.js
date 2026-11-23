@@ -283,13 +283,21 @@ async function sendZoneAlert(alert) {
 async function sendSignal(signal) {
   const isBuy = signal.side === "BUY";
   const unproven = signal.unproven === true;
+  const exploring = signal.proofSource === "exploration";
+  const partial = Number(signal.riskMultiplier) > 0 && Number(signal.riskMultiplier) < 1;
+  const pct = Math.round(Number(signal.riskMultiplier) * 100);
   return post(
     {
       username: "Zone Watch",
       embeds: [
         {
-          title: `${unproven ? "⚠️ UNPROVEN · " : ""}${isBuy ? "🟢" : "🔴"} ${signal.side} ${signal.symbol} · ${signal.confidence}`,
+          title: `${exploring ? "🧪 EXPLORATION · " : unproven ? "⚠️ UNPROVEN · " : ""}${isBuy ? "🟢" : "🔴"} ${signal.side} ${signal.symbol} · ${signal.confidence}`,
           description:
+            (exploring
+              ? `**Exploration trade ${pct}% size.** No rule is proven for ${signal.symbol}, and the lab has not ` +
+                `found an edge there, so this is one small trade to gather evidence. It is not a recommendation ` +
+                `and it is never counted as proof.\n\n`
+              : "") +
             (unproven
               ? `**This market did not pass the app's own edge test.** ${signal.labVerdict || ""}\n` +
                 `It is sent because you listed it to bypass the gate. Treat it as a chart prompt, not a recommendation.\n\n`
@@ -338,21 +346,31 @@ async function sendSignal(signal) {
               inline: true,
             },
             { name: "RR", value: String(signal.riskReward), inline: true },
-            // A trade the app chose to half because the proof came from the
-            // next-door market condition has to say so, or it reads as an
-            // ordinary full-size call.
-            ...(Number(signal.riskMultiplier) > 0 && Number(signal.riskMultiplier) < 1
+            // A trade the app chose to cut has to say why, or it reads as an
+            // ordinary full-size call. Exploration and next-door proofs are
+            // different reasons and get different words.
+            ...(exploring && partial
               ? [
                   {
-                    name: "⚠️ Half size",
+                    name: "🧪 Exploration size",
                     value:
-                      `No rule is proven in this market's current condition. The proof comes from ` +
-                      `${(signal.adjacentProof && signal.adjacentProof.provenIn) || "the next-door condition"}, ` +
-                      `so the risk is cut to ${Math.round(Number(signal.riskMultiplier) * 100)}%.`,
+                      `No rule is proven here and the lab measured no edge, so this one is taken at ${pct}% ` +
+                      `of the normal risk to produce evidence — never counted as proof.`,
                     inline: false,
                   },
                 ]
-              : []),
+              : partial
+                ? [
+                    {
+                      name: "⚠️ Half size",
+                      value:
+                        `No rule is proven in this market's current condition. The proof comes from ` +
+                        `${(signal.adjacentProof && signal.adjacentProof.provenIn) || "the next-door condition"}, ` +
+                        `so the risk is cut to ${pct}%.`,
+                      inline: false,
+                    },
+                  ]
+                : []),
             ...linkedField(signal.linked),
             ...(signal.sizing
               ? [

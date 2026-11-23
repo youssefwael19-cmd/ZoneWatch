@@ -53,6 +53,7 @@ const stateStore = require("./stateStore");
 const auth = require("./auth");
 const digestMod = require("./digest");
 const dailyRecapMod = require("./dailyrecap");
+const gateDigestMod = require("./gatedigest");
 const websearchMod = require("./websearch");
 const paperReviewMod = require("./paperreview");
 const ivbSent = new Set();
@@ -771,6 +772,15 @@ async function buildSnapshot() {
   const unprovenMarkets = new Set(settings.getUnprovenMarkets());
   const labSummary = labMod.summary();
 
+  // One read of the execution settings per cycle. The signal funnel needs the
+  // exploration budget before anything is sized, and the gate reuses the same
+  // reading, so a setup can never be admitted by one number and sized by another.
+  const execConfig = settings.getExecConfig();
+  const liveCfg = execConfig.liveEvidence || {};
+  const exploreCfg = execConfig.exploration || {};
+  const exploreRules = explorationMod.config(exploreCfg);
+  const exploreBudget = exploreRules.enabled ? explorationMod.budget({ config: exploreCfg }) : null;
+
   // Signals
   const signals = [];
   const newSignals = [];
@@ -831,7 +841,17 @@ async function buildSnapshot() {
       signal.labVerdict = labResult ? labResult.verdict : "not tested yet";
     }
 
-    if (changed && cooled && !alreadyOpen && (signal.labApproved || signal.unproven)) {
+    // A lab verdict of "no edge" used to silence a market completely — which
+    // also silenced the one thing that could ever change that verdict. The
+    // exploration budget is the way past it: a quarter-size trade, tagged
+    // exploration, never counted as proof. The gate still has the final say
+    // and still spends the budget, so this only makes the setup a candidate.
+    const explorable =
+      !signal.labApproved &&
+      exploreRules.enabled &&
+      explorationMod.allowsSymbol(exploreBudget, signal.symbol, exploreRules);
+
+    if (changed && cooled && !alreadyOpen && (signal.labApproved || signal.unproven || explorable)) {
       newSignals.push(signal);
       lastSignalKey.set(signal.symbol, key);
       lastSignalSentAt.set(signal.symbol, Date.now());
@@ -984,9 +1004,6 @@ async function buildSnapshot() {
   // The market's own results, read once per cycle: whether a refusal may still
   // be taken at half size because the live book is positive. Reading it here
   // keeps a 10-second cycle from re-reading the tracker for every signal.
-  const execConfig = settings.getExecConfig();
-  const liveCfg = execConfig.liveEvidence || {};
-  const exploreCfg = execConfig.exploration || {};
   const liveEvidence = liveCfg.enabled
     ? learning.liveEvidenceAll(tracker.load().history, liveCfg)
     : {};
@@ -1230,10 +1247,11 @@ async function buildSnapshot() {
   let brainHeldSnapshot = brainHeld.slice(0, 25);
   let feedSnapshotStale = feed.stale;
   let feedSnapshotChecked = feed.checked;
+  let quietNow = false;
   if (discord.configured()) {
     const quiet = settings.getQuietHours();
     const utcHour = new Date().getUTCHours();
-    const quietNow =
+    quietNow =
       quiet.enabled &&
       (quiet.from <= quiet.to
         ? utcHour >= quiet.from && utcHour < quiet.to
@@ -1593,6 +1611,13 @@ async function buildSnapshot() {
       labTradable: labRow ? labRow.tradable === true : null,
       labVerdict: labRow ? labRow.verdict : "not tested yet",
       unproven: unprovenMarkets.has(inst.symbol),
+      // A lab "no edge" is not silence while the exploration budget is open:
+      // the card and the digest both need to say the market can still take one
+      // small evidence trade.
+      exploreAvailable:
+        labRow && labRow.tradable !== true
+          ? explorationMod.allowsSymbol(exploreBudget, inst.symbol, exploreRules)
+          : false,
       correlatedWith: partner || null,
       brainGateOn,
       brainCondition: brainRow ? brainRow.condition : null,
@@ -1604,6 +1629,26 @@ async function buildSnapshot() {
     };
   });
   const lockSummary = locksMod.explain(lockRows);
+
+  // The daily gate digest: one message naming every market and the gates that
+  // are holding it. Built from the same lock summary the card shows, so the two
+  // can never describe the day differently. Sent after the recap, once a day;
+  // a failed send is marked done so a broken webhook cannot become one retry
+  // every ten seconds until midnight.
+  if (
+    discord.configured() &&
+    discord.channelConfigured("daily") &&
+    !quietNow &&
+    gateDigestMod.shouldSend(new Date())
+  ) {
+    gateDigestMod.markSent();
+    try {
+      const digest = gateDigestMod.buildGateDigest({ locks: lockSummary });
+      for (const content of digest.messages) await discord.post({ content }, "daily");
+    } catch (err) {
+      console.error("gate digest:", err.message);
+    }
+  }
 
   snapshot = {
     ok: true,

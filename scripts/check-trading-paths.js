@@ -18,6 +18,8 @@ const regime = require("../server/regime");
 const promotions = require("../server/promotions");
 const audit = require("../server/audit");
 const brain = require("../server/brain");
+const locks = require("../server/locks");
+const gatedigest = require("../server/gatedigest");
 const paperreview = require("../server/paperreview");
 const buildInfo = require("../server/buildinfo");
 
@@ -132,6 +134,21 @@ check("config clamps nonsense instead of accepting it", () => {
 check("switching exploration off leaves no budget at all", () => {
   const cfg = exploration.config({ enabled: false });
   assert.strictEqual(cfg.enabled, false);
+});
+
+check("a market the lab marked no edge can still take its one exploration trade", () => {
+  const cfg = exploration.config({ perDay: 3, perSymbolPerDay: 1 });
+  const fresh = exploration.remainingFor([], DAY, cfg);
+  assert.strictEqual(exploration.allowsSymbol(fresh, "XAUUSD", cfg), true);
+
+  const used = exploration.remainingFor(
+    [{ at: "2026-11-21T09:00:00.000Z", symbol: "XAUUSD" }],
+    DAY,
+    cfg
+  );
+  assert.strictEqual(exploration.allowsSymbol(used, "XAUUSD", cfg), false, "one per market per day");
+  assert.strictEqual(exploration.allowsSymbol(used, "EURUSD", cfg), true, "another market still has room");
+  assert.strictEqual(exploration.allowsSymbol(null, "EURUSD", cfg), false, "no state, no trade");
 });
 
 /* ------------------------- live evidence ------------------------- */
@@ -623,6 +640,69 @@ check("a new build marks every measurement stale, the same build does not", () =
   const old = { at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() };
   assert.strictEqual(brain.isStale(old, { invalidatedAt: null }), true, "a day-old measurement is stale on its own");
   assert.strictEqual(brain.isStale(null, {}), true, "nothing measured is stale");
+});
+
+/* --------------------------- gate digest --------------------------- */
+
+const NO_EDGE = {
+  symbol: "XAUUSD",
+  marketOpen: true,
+  feedStale: false,
+  newsActive: false,
+  guardStop: false,
+  labTradable: false,
+  labVerdict: "no edge — -0.078R per trade (needs above 0.08R)",
+  exploreAvailable: true,
+  brainGateOn: true,
+  brainCondition: "trending-volatile",
+  brainChampion: null,
+  brainAdjacent: null,
+  chopHeld: false,
+  correlatedWith: null,
+  cooldownMinutes: null,
+};
+
+check("the lab lock reads partly open when exploration can still trade", () => {
+  const row = locks.diagnoseMarket(NO_EDGE);
+  const lab = row.locks.find((l) => l.id === "lab");
+  assert.strictEqual(lab.state, "partial");
+  assert.ok(/exploration only/.test(lab.detail), lab.detail);
+  assert.strictEqual(row.stoppedBy, "Proven rule", "the proven-rule gate is still the first hard stop");
+
+  const spent = locks.diagnoseMarket({ ...NO_EDGE, exploreAvailable: false });
+  assert.strictEqual(spent.locks.find((l) => l.id === "lab").state, "held");
+  assert.strictEqual(spent.stoppedBy, "Strategy lab");
+});
+
+check("the gate digest names every market and only the gates in its way", () => {
+  const rows = [
+    locks.diagnoseMarket(NO_EDGE),
+    locks.diagnoseMarket({ ...NO_EDGE, symbol: "GBPUSD", labTradable: true, labVerdict: "edge measured" }),
+  ];
+  const { messages, markets } = gatedigest.buildGateDigest({
+    locks: { rows },
+    now: new Date(Date.UTC(2026, 10, 23, 21)),
+  });
+  const text = messages.join("\n");
+  assert.strictEqual(markets, 2);
+  assert.ok(/XAUUSD/.test(text) && /GBPUSD/.test(text), text);
+  assert.ok(/Strategy lab: no edge/.test(text), "the lab reason is the point of the digest");
+  assert.ok(/exploration only/.test(text), "a partly open lab says exploration is still available");
+  assert.ok(!/Market hours: open/.test(text), "gates that are not in the way are left out");
+  assert.ok(/no rule has been measured to work in trending-volatile/.test(text), text);
+  for (const message of messages) assert.ok(message.length <= gatedigest.MAX_CHARS, "Discord limit");
+});
+
+check("the digest splits a long day into messages instead of dropping markets", () => {
+  const rows = Array.from({ length: 60 }, (_, i) => ({
+    symbol: `M${i}USDT`,
+    state: "held",
+    locks: [{ name: "Proven rule", state: "held", detail: "no rule has been measured to work in ranging-quiet" }],
+  }));
+  const { messages } = gatedigest.buildGateDigest({ locks: { rows }, now: new Date() });
+  assert.ok(messages.length > 1, "60 markets cannot fit in one message");
+  assert.ok(messages.join("\n").includes("M59USDT"), "the last market is not lost");
+  for (const message of messages) assert.ok(message.length <= gatedigest.MAX_CHARS, "Discord limit");
 });
 
 console.log(failures ? `\n${failures} failed` : "\nall passed");

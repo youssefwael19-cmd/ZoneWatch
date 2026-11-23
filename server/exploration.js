@@ -87,14 +87,22 @@ function budget({ now = Date.now(), config: patch = {} } = {}) {
   return { ...cfg, ...state };
 }
 
+/**
+ * May this symbol take an exploration trade, given a budget state that has
+ * already been read? Pure, so the signal funnel can ask the same question the
+ * gate will ask without re-reading the file for every instrument.
+ */
+function allowsSymbol(state, symbol, cfg) {
+  if (!state || !cfg || !cfg.enabled || cfg.perDay <= 0) return false;
+  if (state.remaining <= 0) return false;
+  const onSymbol = (state.today || []).filter((e) => e.symbol === symbol).length;
+  return onSymbol < cfg.perSymbolPerDay;
+}
+
 /** May this symbol take an exploration trade right now? */
 function hasBudget({ symbol, now = Date.now(), config: patch = {} } = {}) {
   const cfg = config(patch);
-  if (!cfg.enabled || cfg.perDay <= 0) return false;
-  const state = remainingFor(read(), now, cfg);
-  if (state.remaining <= 0) return false;
-  const onSymbol = state.today.filter((e) => e.symbol === symbol).length;
-  return onSymbol < cfg.perSymbolPerDay;
+  return allowsSymbol(remainingFor(read(), now, cfg), symbol, cfg);
 }
 
 /**
@@ -111,4 +119,4 @@ function take({ symbol, condition = null, now = Date.now(), config: patch = {} }
   return { ok: true, remaining: state.remaining };
 }
 
-module.exports = { budget, hasBudget, take, config, remainingFor, DEFAULTS };
+module.exports = { budget, hasBudget, allowsSymbol, take, config, remainingFor, DEFAULTS };

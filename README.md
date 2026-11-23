@@ -170,7 +170,7 @@ its own box, and news has its own section with a save and test button:
 | Signals | signal entries, approach warnings, IVB breakouts |
 | Results | every **win**, **loss** and expiry, with the pips and the money |
 | News | economic-calendar warnings, session and market open/close |
-| Daily recap | the 21:00 UTC daily recap |
+| Daily recap | the 21:00 UTC daily recap and the daily gate digest |
 | Weekly recap | the weekly recap and the weekly paper review |
 
 Any box left empty falls back to the default webhook, so nothing is lost by
@@ -278,6 +278,31 @@ settings posts it immediately; `POST /api/recap/daily/send` with
 `{"preview":true}` builds it without touching Discord. The day it last sent is
 stored in `dailyrecap.json`, so a restart cannot send the same day twice.
 
+### The daily gate digest
+
+Right after the recap, the same channel gets a gate digest: one line per market
+saying which gates are holding it and why. It is built from the same lock
+readings as **Held back** in the dashboard, so the two can never disagree:
+
+```
+**Zone Watch · gate digest · Mon, 23 Nov 2026 21:00:00 UTC**
+11 markets: 9 held · 2 partly open · 0 open.
+
+**XAUUSD** — held
+• Strategy lab: no edge — -0.078R per trade (needs above 0.08R)
+• Proven rule: no rule has been measured to work in trending-volatile
+
+**GBPUSD** — partial
+• Strategy lab: no edge — exploration only: one quarter-size trade to gather evidence
+```
+
+Only gates that are actually in the way are listed, so the first bullet is the
+one that stopped the market. A market whose lab verdict is "no edge" still
+shows the lab as partly open while the exploration budget has room, because it
+is not silent — it is reduced to one small evidence trade. Long days are split
+across messages rather than trimmed, and the day it last sent lives in
+`gatedigest.json` so a restart cannot double-send.
+
 ## Automatic zones
 
 The bot can draw its own supply and demand zones from 15-minute candles, so
@@ -358,6 +383,14 @@ Three answers, in order, and each one says which it gave:
    normal risk, tagged `exploration` in the journal and never counted as proof.
    Without it an unproven market produced nothing, so it could never produce the
    evidence that would make it proven — the app sat at three signals, all held.
+
+   This budget also reaches markets the **lab** has measured as having no edge.
+   Those markets used to be silenced before the brain was ever asked, which shut
+   the only door that could produce the live evidence to contradict the lab. Now
+   their setups still run the rest of the funnel (reaction, thin stop, chop rule,
+   proven rule) and, if nothing else allows them, can take the same quarter-size
+   exploration trade. They stay labelled `exploration`, still count against the
+   daily budget, and still never count as proof.
 
 Both lanes are switches in Settings (`POST /api/exec/config` with
 `{"exploration":{"enabled":false}}` or `{"liveEvidence":{"enabled":false}}`),
