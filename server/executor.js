@@ -1667,6 +1667,27 @@ function liveSpreads() {
   return readState().spreads || {};
 }
 
+/**
+ * Set the paper ledger's capital to a new figure, keeping the closed record.
+ *
+ * Sizing reads the configured balance, so a capital change has to move the
+ * ledger and the setting together or every later risk number describes an
+ * account that no longer exists. Only the paper ledger can be re-based: with a
+ * real broker the balance is the broker's and the app must not invent one.
+ */
+function rebase(balance) {
+  const amount = Number(balance);
+  if (!(amount > 0)) return { ok: false, reason: "the balance must be positive" };
+  if (settings.getExecConfig().mode !== "paper") {
+    return { ok: false, reason: "the broker holds this balance" };
+  }
+  const state = readState();
+  const before = state.balance == null ? null : Number(state.balance.toFixed(2));
+  state.balance = Number(amount.toFixed(2));
+  writeState(state);
+  return { ok: true, before, balance: state.balance };
+}
+
 module.exports = {
   maybeSyncAccount,
   liveSpreads,
@@ -1678,6 +1699,7 @@ module.exports = {
   status,
   kill,
   revive,
+  rebase,
   testBridge,
   syncAccount,
   syncSpreads,

@@ -92,7 +92,9 @@ const signed = (v) => `${(Number(v) || 0) > 0 ? "+" : ""}${money(v)}`;
 const PORT = 8107;
 const child = spawn(process.execPath, ["server/index.js"], {
   cwd: ROOT,
-  env: { ...process.env, PORT: String(PORT) },
+  // PAPER_CAPITAL=0 keeps the boot from re-basing this fixed ledger: the
+  // assertions are about the arithmetic on it, not about capital.
+  env: { ...process.env, PORT: String(PORT), PAPER_CAPITAL: "0" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";

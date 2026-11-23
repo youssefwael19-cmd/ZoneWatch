@@ -1,0 +1,18 @@
+{
+  "balance": 500,
+  "at": "2026-11-23T09:20:01.818Z",
+  "before": {
+    "accountBalance": 200,
+    "accountSize": 0
+  },
+  "executor": {
+    "ok": true,
+    "before": null,
+    "balance": 500
+  },
+  "shadow": {
+    "ok": true,
+    "before": 201.18,
+    "balance": 500
+  }
+}

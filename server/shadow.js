@@ -431,6 +431,20 @@ function reset() {
   return status();
 }
 
+/**
+ * Set the shadow book's capital to a new figure, keeping the closed record.
+ * The shadow book is always paper, so there is no broker balance to protect.
+ */
+function rebase(balance) {
+  const amount = Number(balance);
+  if (!(amount > 0)) return { ok: false, reason: "the balance must be positive" };
+  const state = readState();
+  const before = state.balance == null ? null : Number(state.balance.toFixed(2));
+  state.balance = Number(amount.toFixed(2));
+  writeState(state);
+  return { ok: true, before, balance: state.balance };
+}
+
 module.exports = {
   cycle,
   status,
@@ -438,5 +452,6 @@ module.exports = {
   enabled,
   readState,
   reset,
+  rebase,
   LOT_STEP,
 };

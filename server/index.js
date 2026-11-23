@@ -13,6 +13,7 @@ const market = require("./market");
 const zonesStore = require("./zones");
 const news = require("./news");
 const settings = require("./settings");
+const capitalMod = require("./capital");
 const discord = require("./discord");
 const discordCommandMod = require("./discordcommand");
 const candlesMod = require("./candles");
@@ -3174,6 +3175,23 @@ async function start() {
       `State store: supabase ${stateStore.TABLE} — restored ${restored.restored}, ` +
         `kept local ${restored.keptLocal}, pushed ${restored.pushed}`
     );
+  }
+
+  // The owner's capital for the paper wallets, from `capital.json` in the
+  // repository, applied once and recorded in the state folder.
+  try {
+    const capital = capitalMod.apply();
+    if (capital.applied) {
+      console.log(
+        `[capital] paper wallets set to ${capital.balance}: ` +
+          `executor ${capital.executor.before} -> ${capital.executor.balance}, ` +
+          `shadow ${capital.shadow.before} -> ${capital.shadow.balance}`
+      );
+    } else {
+      console.log(`[capital] ${capital.reason}`);
+    }
+  } catch (err) {
+    console.error(`[capital] ${err.message}`);
   }
 
   // Results the tracker scored before the journal existed have no entry, which

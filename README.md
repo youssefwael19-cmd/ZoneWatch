@@ -521,6 +521,13 @@ proven-rule gate refuses is also paper-traded in its own ledger
 and each fill records the verdict that rejected it. It never places an order
 and never touches the live account.
 
+Paper capital is set once from `capital.json` in the repository: on boot the
+app applies that figure to the executor's balance, the shadow book's balance and
+the account size signal sizing uses, then records it in `capital.json` in the
+state folder so a restart never re-applies an old number over newer results.
+Closed trades are kept — this changes the money behind the ledger, not its
+history. `PAPER_CAPITAL=0` in the environment skips the step.
+
 The book needs the refusals to reach it, so while it is running the lab's
 verdict no longer keeps a setup away from the gate: a market the lab measured
 as having no edge still sends its setups through, the gate still refuses them
