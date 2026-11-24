@@ -362,6 +362,17 @@ The older price-only rule scored three of thirteen tracked trades as wins that
 had already hit their stop, and reported a 100% win rate. If you see a suspicious
 win rate, check `resolution` before believing it.
 
+Every resolved signal also records its **exit path**: `mfeR` (the best excursion
+above entry, in R), `maeR` (the worst excursion below it), whether the target
+itself was touched (`targetHit`), whether the stop ladder moved (`trailMoved`),
+how many minutes it took to reach +1R, and the same signal replayed with a fixed
+stop (`noTrailOutcome`, `noTrailR`) as a counterfactual. The Journal tab's
+**Exit audit** turns those into the two questions a win rate cannot answer: how
+often a trade reached +1R before it ended, and whether the trail helped or hurt
+against leaving the stop where it opened. Rows written before the audit existed
+have no path and are reported as excluded, never as zeroes. This is measurement
+only; it changes no signal, stop or order.
+
 **Read this before using them.** These are mechanical confluence checks, not
 predictions. Nothing here accounts for the news, the session or what the higher
 timeframe is doing. Treat them as a prompt to look at the chart, never as a

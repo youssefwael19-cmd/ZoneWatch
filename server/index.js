@@ -2276,6 +2276,9 @@ app.get("/api/journal", (_req, res) => {
       executor: executor.status(prices),
       shadow: shadowMod.status(prices),
     }),
+    // What the closed signals did on the way to their exit. Measurement only:
+    // nothing here changes a signal, a stop or an order.
+    exit: tracker.exitAudit(),
   });
 });
 

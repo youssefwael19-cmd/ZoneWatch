@@ -766,6 +766,14 @@
         </table>
       </div>
       <div id="journalFailures" class="hint" style="margin-top:12px"></div>
+
+      <h3 style="margin:18px 0 6px">Exit audit</h3>
+      <p class="hint" style="margin:0 0 8px">
+        What each closed signal did before it ended: the best and worst excursion it reached, whether +1R came before the target,
+        and what the stop trail was worth against leaving the stop where it opened on the same trades. Measurement only — nothing
+        here changes how a signal is traded.
+      </p>
+      <div id="exitAudit" class="hint">No closed signals measured yet.</div>
     </div>
   </section>
 
@@ -2436,6 +2444,33 @@ async function loadJournal() {
       );
     }
     totals.innerHTML = parts.join(" · ");
+
+    const exitEl = document.getElementById("exitAudit");
+    if (exitEl) {
+      const ea = d.exit || {};
+      if (!ea.measured) {
+        exitEl.innerHTML = `No closed signal has a measured path yet. ${
+          ea.closed ? `${ea.closed} older closed row${ea.closed === 1 ? "" : "s"} predate this audit; ` : ""
+        }measurement starts with the next resolution.`;
+      } else {
+        const a = ea.after1R || {};
+        const t = ea.trail || {};
+        const r = (n) => `${Number(n) > 0 ? "+" : ""}${Number(n || 0).toFixed(2)}R`;
+        exitEl.innerHTML =
+          `<div><strong>${ea.reached1R.n} of ${ea.measured}</strong> closed signals reached +1R (${ea.reached1R.pct}%)` +
+          ` — of those, <strong>${a.target || 0}</strong> went on to the target, ${a.trailedWin || 0} won on the trail, ` +
+          `${a.breakeven || 0} came back to break-even, ${a.stopped || 0} stopped, ${a.expired || 0} expired. ` +
+          `<strong>${ea.neverReached1R}</strong> never reached +1R.</div>` +
+          `<div style="margin-top:4px">Average best excursion <strong>${r(ea.avgMfeR)}</strong> · worst <strong>${Number(ea.avgMaeR || 0).toFixed(2)}R</strong> · ` +
+          `time to exit <strong>${ea.avgTimeToExitMinutes} min</strong>.</div>` +
+          `<div style="margin-top:4px">Trail: moved on <strong>${t.engaged}</strong>; against a fixed stop on the same <strong>${t.pairs}</strong> trades it helped ` +
+          `<strong>${t.helped}</strong>, hurt <strong>${t.hurt}</strong>, changed nothing ${t.same} — net <strong>${r(t.deltaR)}</strong> ` +
+          `(${r(t.actualR)} actual vs ${r(t.noTrailR)} without).</div>` +
+          (ea.excluded
+            ? `<div style="margin-top:4px;color:#8ea0b5">${ea.excluded} older closed row${ea.excluded === 1 ? "" : "s"} had no path data and are excluded.</div>`
+            : "");
+      }
+    }
 
     const rows = [
       journalSection("Daily bias", d.byDailyBiasAgreement),

@@ -110,6 +110,11 @@ function add(signal) {
  * Bars are walked oldest-first and only those at or after the signal's open are
  * used. Returns null when there is no history to judge from.
  */
+function roundR(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Number(n.toFixed(4)) : null;
+}
+
 function pathOutcome(s, bars, openedAtMs) {
   if (!Array.isArray(bars) || !bars.length) return null;
 
@@ -120,8 +125,15 @@ function pathOutcome(s, bars, openedAtMs) {
   const openedWith = Number(s.stop);
   const risk = Math.abs(entry - openedWith);
   const canTrail = Number.isFinite(entry) && risk > 0;
+  const targetR = canTrail && Number.isFinite(Number(s.target)) ? Math.abs(Number(s.target) - entry) / risk : null;
   let stop = openedWith;
   let peakR = 0;
+  // Worst excursion since entry, in R. Negative means it went against the
+  // trade; zero means the entry was never breached. Stored so an exit can be
+  // judged on the whole path, not only on where it happened to end.
+  let troughR = 0;
+  let first1RAt = null;
+  let trailed = false;
 
   for (const bar of bars) {
     const at = Number(bar.t) < 1e12 ? Number(bar.t) * 1000 : Number(bar.t);
@@ -141,14 +153,81 @@ function pathOutcome(s, bars, openedAtMs) {
       // counting that as a win inflates the win rate the dashboard reports.
       const better = s.side === "BUY" ? stop > entry : stop < entry;
       const outcome = !canTrail ? "loss" : stop === entry ? "breakeven" : better ? "win" : "loss";
-      return { outcome, exit: stop, barAt: at, trailed: stop !== openedWith };
+      const stopR = canTrail ? (s.side === "BUY" ? stop - entry : entry - stop) / risk : -1;
+      return {
+        outcome,
+        exit: stop,
+        barAt: at,
+        trailed,
+        mfeR: roundR(peakR),
+        maeR: roundR(Math.min(troughR, stopR, 0)),
+        targetHit: false,
+        first1RAt,
+      };
     }
-    if (hitTarget) return { outcome: "win", exit: s.target, barAt: at };
+    if (hitTarget) {
+      return {
+        outcome: "win",
+        exit: s.target,
+        barAt: at,
+        trailed,
+        mfeR: roundR(Math.max(peakR, targetR || 0)),
+        maeR: roundR(Math.min(troughR, 0)),
+        targetHit: true,
+        // A bar that reaches the target crossed +1R too, even if the high was
+        // only sampled once in that bar. The delay is the same bar's close.
+        first1RAt: first1RAt == null ? at : first1RAt,
+      };
+    }
 
     if (canTrail) {
-      peakR = Math.max(peakR, s.side === "BUY" ? (high - entry) / risk : (entry - low) / risk);
-      stop = stopsMod.protect({ side: s.side, entry, stop, peakR, initialStop: openedWith });
+      const favourable = s.side === "BUY" ? (high - entry) / risk : (entry - low) / risk;
+      const adverse = s.side === "BUY" ? (low - entry) / risk : (entry - high) / risk;
+      peakR = Math.max(peakR, favourable);
+      troughR = Math.min(troughR, adverse);
+      if (first1RAt == null && peakR >= 1) first1RAt = at;
+      const next = stopsMod.protect({ side: s.side, entry, stop, peakR, initialStop: openedWith });
+      if (next !== stop) trailed = true;
+      stop = next;
     }
+  }
+  // No exit inside the bars seen, but the excursion is still evidence: an
+  // expiry or a still-open trade has a best and worst point too.
+  return {
+    outcome: null,
+    mfeR: roundR(peakR),
+    maeR: roundR(Math.min(troughR, 0)),
+    targetHit: false,
+    trailed,
+    first1RAt,
+  };
+}
+
+/**
+ * The same signal with its stop left where it opened — the counterfactual that
+ * says what the trail was worth. The target and the initial stop are the same
+ * levels, so the pair differs in exactly one rule.
+ */
+function fixedPath(s, bars, openedAtMs) {
+  if (!Array.isArray(bars) || !bars.length) return null;
+  const entry = Number(s.entry ?? s.price);
+  const initialStop = Number(s.stop);
+  const risk = Math.abs(entry - initialStop);
+  if (!(risk > 0) || !Number.isFinite(Number(s.target))) return null;
+  const targetR = Math.abs(Number(s.target) - entry) / risk;
+
+  for (const bar of bars) {
+    const at = Number(bar.t) < 1e12 ? Number(bar.t) * 1000 : Number(bar.t);
+    if (!Number.isFinite(at) || at + 60 * 1000 < openedAtMs) continue;
+    const high = Number(bar.h);
+    const low = Number(bar.l);
+    if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
+
+    const hitStop = s.side === "BUY" ? low <= initialStop : high >= initialStop;
+    const hitTarget = s.side === "BUY" ? high >= s.target : low <= s.target;
+    // A bar that touches both is a loss here too, for the same reason.
+    if (hitStop) return { outcome: "loss", exit: initialStop, barAt: at, r: -1 };
+    if (hitTarget) return { outcome: "win", exit: s.target, barAt: at, r: roundR(targetR) };
   }
   return null;
 }
@@ -179,9 +258,13 @@ function update(priceBySymbol, now = Date.now(), options = {}) {
     let barAt = null;
 
     const openedAtMs = new Date(s.openedAt).getTime();
-    const path = barsFor ? pathOutcome(s, barsFor(s.symbol), openedAtMs) : null;
+    const bars = barsFor ? barsFor(s.symbol) : null;
+    const path = bars ? pathOutcome(s, bars, openedAtMs) : null;
+    // The same trade with the stop left at its opening level. Only used for the
+    // audit; it can never change how this signal is scored.
+    const fixed = path ? fixedPath(s, bars, openedAtMs) : null;
 
-    if (path) {
+    if (path && path.outcome) {
       outcome = path.outcome;
       exit = path.exit;
       barAt = path.barAt;
@@ -235,6 +318,12 @@ function update(priceBySymbol, now = Date.now(), options = {}) {
               : outcome === "loss"
                 ? -1
                 : 0;
+      // Excursion at the closing price, for the price-based fallback where no
+      // candle path was available. It is a one-point measurement, not a path.
+      const runningR =
+        risk > 0 && Number.isFinite(Number(price))
+          ? (s.side === "BUY" ? Number(price) - entry : entry - Number(price)) / risk
+          : null;
       resolved.push({
         ...s,
         outcome,
@@ -243,6 +332,19 @@ function update(priceBySymbol, now = Date.now(), options = {}) {
         exit: Number(Number(exit).toPrecision(10)),
         priceAtClose: Number(Number(price).toPrecision(10)),
         rMultiple,
+        // The path, not just the ending: best and worst excursion in R, whether
+        // the target itself was touched, whether the stop ladder moved, and how
+        // long it took to get 1R. Exits can only be judged from these.
+        mfeR: path ? path.mfeR : roundR(runningR == null ? null : Math.max(0, runningR)),
+        maeR: path ? path.maeR : roundR(runningR == null ? null : Math.min(0, runningR)),
+        targetHit: path ? path.targetHit === true : outcome === "win",
+        trailMoved: Boolean(path && path.trailed),
+        minutesTo1R:
+          path && path.first1RAt ? Math.max(0, Math.round((path.first1RAt - openedAtMs) / 60000)) : null,
+        // Same signal, stop never moved. Null when that path never resolved in
+        // the bars seen, in which case there is no honest pair to compare.
+        noTrailOutcome: fixed ? fixed.outcome : null,
+        noTrailR: fixed && Number.isFinite(fixed.r) ? fixed.r : null,
         resolution: path ? "candles" : "price",
         touchedAt: barAt ? new Date(barAt).toISOString() : null,
         closedAt: new Date(now).toISOString(),
@@ -260,6 +362,81 @@ function update(priceBySymbol, now = Date.now(), options = {}) {
   }
 
   return { resolved, open: stillOpen };
+}
+
+/**
+ * The exit audit: what the closed signals did on the way to their exit.
+ *
+ * It answers two questions the win rate cannot: how often a trade got to +1R
+ * before it ended, and what the stop trail was worth compared with leaving the
+ * stop where it opened. The trail comparison is paired — same signal, same
+ * bars, only the stop rule differs — and only rows where both paths resolved
+ * are counted, so a one-sided sample cannot flatter it.
+ *
+ * Rows written before this audit existed have no excursion fields. They are
+ * counted as excluded, never as zeroes, because "never reached 1R" and "never
+ * measured" are different facts.
+ */
+function exitAudit(state = load()) {
+  const history = Array.isArray(state.history) ? state.history : [];
+  const closed = history.filter(
+    (h) => h.outcome === "win" || h.outcome === "loss" || h.outcome === "breakeven" || h.outcome === "expired"
+  );
+  // `Number(null)` is 0, so an old row with no excursion would otherwise be
+  // measured as a trade that never ran — exactly the fact this audit must not
+  // invent. Only an actual number counts.
+  const hasNumber = (value) => value != null && Number.isFinite(Number(value));
+  const measured = closed.filter((h) => hasNumber(h.mfeR));
+  const reached1 = measured.filter((h) => Number(h.mfeR) >= 1);
+  const targetHit = measured.filter((h) => h.targetHit === true);
+
+  const after1R = { target: 0, trailedWin: 0, breakeven: 0, stopped: 0, expired: 0 };
+  for (const h of reached1) {
+    if (h.targetHit) after1R.target += 1;
+    else if (h.outcome === "win") after1R.trailedWin += 1;
+    else if (h.outcome === "breakeven") after1R.breakeven += 1;
+    else if (h.outcome === "expired") after1R.expired += 1;
+    else after1R.stopped += 1;
+  }
+
+  const avg = (values) =>
+    values.length ? Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(2)) : null;
+  const pct = (n) => (measured.length ? Number(((n / measured.length) * 100).toFixed(1)) : null);
+
+  // Only rows with both outcomes are a pair. A trail that kept a trade open
+  // past the bars we have has no fixed-stop answer, so it cannot vote.
+  const trailRows = measured.filter((h) => h.trailMoved === true);
+  const paired = measured.filter((h) => hasNumber(h.noTrailR) && hasNumber(h.rMultiple));
+  const deltas = paired.map((h) => Number(h.rMultiple) - Number(h.noTrailR));
+  const helped = deltas.filter((d) => d > 0.005).length;
+  const hurt = deltas.filter((d) => d < -0.005).length;
+  const actualR = Number(paired.reduce((a, h) => a + Number(h.rMultiple), 0).toFixed(2));
+  const noTrailR = Number(paired.reduce((a, h) => a + Number(h.noTrailR), 0).toFixed(2));
+
+  return {
+    closed: closed.length,
+    measured: measured.length,
+    excluded: closed.length - measured.length,
+    reached1R: { n: reached1.length, pct: pct(reached1.length) },
+    after1R,
+    target: { n: targetHit.length, pct: pct(targetHit.length) },
+    neverReached1R: measured.length - reached1.length,
+    avgMfeR: avg(measured.map((h) => Number(h.mfeR))),
+    avgMaeR: avg(measured.map((h) => Number(h.maeR))),
+    avgTimeToExitMinutes: avg(
+      measured.map((h) => Number(h.heldMinutes)).filter((n) => Number.isFinite(n))
+    ),
+    trail: {
+      engaged: trailRows.length,
+      pairs: paired.length,
+      helped,
+      hurt,
+      same: paired.length - helped - hurt,
+      actualR,
+      noTrailR,
+      deltaR: Number((actualR - noTrailR).toFixed(2)),
+    },
+  };
 }
 
 function stats() {
@@ -281,4 +458,4 @@ function stats() {
   };
 }
 
-module.exports = { add, update, stats, load };
+module.exports = { add, update, stats, load, exitAudit };
