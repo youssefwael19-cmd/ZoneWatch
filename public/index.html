@@ -2279,6 +2279,7 @@ async function loadExec() {
           · ${wins}W/${losses}L · ${s.openCount} open · ${s.closedCount} closed
           <div class="hint" style="margin-top:2px">Setups the proven-rule gate refused, paper-traded in its own ledger with the same costs, slippage and risk. It never places an order. Line it up with the account above and the gate's cost — or its saving — is visible instead of assumed.</div>
           ${s.refusedToday ? `<div class="hint" style="margin-top:2px;color:#f5b942">Skipped today: <strong>${s.refusedToday}</strong> refused setup${s.refusedToday === 1 ? "" : "s"} never became a trade because no size fit the risk cap${s.refusals && s.refusals[0] ? ` — latest ${s.refusals[0].symbol} ${s.refusals[0].side}: ${s.refusals[0].reason}` : ""}. They are not in the result above, so read it as a filtered sample.</div>` : ""}
+          ${s.news && (s.news.open || s.news.closed) ? `<div class="hint" style="margin-top:2px">Held by a news blackout, still priced: <strong>${s.news.closed}</strong> closed (${s.news.wins}W/${s.news.losses}L, ${cash(s.news.pnl)}) · ${s.news.open} open. Every setup a blackout silenced is taken here at the same risk and the same costs, so avoiding the news can be compared with taking it.</div>` : ""}
         </div>`;
       })() : ""}
       <div style="margin-top:4px">Risk ${d.riskPct}% per trade · ${d.dailyStop ? `daily limit ${d.maxDailyLossPct}%` : "daily stop off"} · broker ${d.broker}

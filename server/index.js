@@ -785,6 +785,10 @@ async function buildSnapshot() {
   // Signals
   const signals = [];
   const newSignals = [];
+  // Setups a news blackout silenced. They are not alerts and never trade, but
+  // they are kept for the shadow book, so the blackout can be priced instead of
+  // just obeyed.
+  const newsHeldSignals = [];
   const openTrades = tracker.load().open || [];
   for (const inst of instruments) {
     const bars = candleBySymbol[inst.symbol];
@@ -819,7 +823,21 @@ async function buildSnapshot() {
     signal.providerSymbol = quotes.find((q) => q.symbol === inst.symbol)?.providerSymbol;
     signals.push(signal);
 
-    if (blockSignals) continue;
+    if (blockSignals) {
+      // A blackout used to drop the setup on this line, so the app never
+      // learned what avoiding the news cost or saved. Keep it, labelled with
+      // the event that held it, for the shadow book only: it cannot reach the
+      // tracker, Discord or the executor from there.
+      if (blackout.active) {
+        newsHeldSignals.push({
+          signal,
+          reason: `news blackout (${(blackout.events[0] || {}).title || "high-impact event"})`,
+          condition: null,
+          newsBlocked: true,
+        });
+      }
+      continue;
+    }
 
     // Auto zones are recomputed every cycle, so their bounds drift by a
     // fraction of a pip. Rounding the key to two pips keeps one setup as one
@@ -1580,7 +1598,7 @@ async function buildSnapshot() {
   // place an order or affect the live account, so a failure here must never
   // break the cycle.
   try {
-    shadowMod.cycle(gateHeldSignals, priceBySymbol);
+    shadowMod.cycle([...gateHeldSignals, ...newsHeldSignals], priceBySymbol);
   } catch (err) {
     console.error("shadow book:", err.message);
   }

@@ -523,6 +523,15 @@ proven-rule gate refuses is also paper-traded in its own ledger
 and each fill records the verdict that rejected it. It never places an order
 and never touches the live account.
 
+News blackouts are priced the same way. When a high-impact event puts the app
+into a blackout, the setups that appear during it used to be dropped before
+they were written down, so the filter had never been measured. They now go to
+the shadow book with the event named in `heldReason` and `newsBlocked: true`,
+at the same risk, spread and costs as any other shadow trade. They still cannot
+reach the tracker, Discord or the executor. The panel and the daily recap can
+then say what the blackout cost or saved, separately from what the gate cost or
+saved.
+
 Paper capital is set once from `capital.json` in the repository: on boot the
 app applies that figure to the executor's balance, the shadow book's balance and
 the account size signal sizing uses, then records it in `capital.json` in the

@@ -202,6 +202,11 @@ function openPosition(state, signal, held, config, prices, now) {
     openedAt: now.toISOString(),
     heldReason: held.reason || null,
     condition: held.condition || null,
+    // True when a news blackout, not the proven-rule gate, is what kept this
+    // setup out of the live book. Kept apart so the two refusals can be read
+    // separately: the gate's cost and the news filter's cost are different
+    // questions.
+    newsBlocked: held.newsBlocked === true,
     setup: signal.confidence || signal.type || "signal",
   };
   state.open.push(order);
@@ -348,6 +353,7 @@ function recordRefusal(state, signal, held, reason, config, prices, now) {
     riskPct: Number(config.riskPct ?? 0.5),
     condition: held.condition || null,
     heldReason: held.reason || null,
+    newsBlocked: held.newsBlocked === true,
     reason,
   });
   if (state.refusals.length > MAX_REFUSALS) state.refusals = state.refusals.slice(-MAX_REFUSALS);
@@ -394,6 +400,14 @@ function status(prices) {
   const refusals = Array.isArray(state.refusals) ? state.refusals : [];
   const dayRefusals = refusals.filter((r) => String(r.at || "").slice(0, 10) === dayKey(now));
 
+  // The blackout's own record, kept apart from the gate's. Same fills, same
+  // costs, same risk: the only difference is that news held these back, so the
+  // numbers answer "was avoiding the news worth it?" rather than "was the gate
+  // right?" — the two filters get judged on their own.
+  const newsOpen = state.open.filter((p) => p.newsBlocked === true);
+  const newsClosed = state.closed.filter((c) => c.newsBlocked === true);
+  const newsPnl = Number(newsClosed.reduce((a, c) => a + (Number(c.pnl) || 0), 0).toFixed(2));
+
   return {
     enabled: enabled(config),
     balance: state.balance == null ? null : Number(state.balance.toFixed(2)),
@@ -412,6 +426,14 @@ function status(prices) {
       : null,
     killSwitch: Boolean(state.killedAt),
     killReason: state.killReason,
+    news: {
+      open: newsOpen.length,
+      closed: newsClosed.length,
+      wins: newsClosed.filter((c) => c.outcome === "win").length,
+      losses: newsClosed.filter((c) => c.outcome === "loss").length,
+      pnl: newsPnl,
+      lastAt: newsClosed.length ? newsClosed[newsClosed.length - 1].closedAt : null,
+    },
     // Setups that never became trades because no size fit the risk cap. Shown
     // beside the result so the sample cannot be read as the whole story.
     refusedCount: refusals.length,
