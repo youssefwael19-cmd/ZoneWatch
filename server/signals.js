@@ -202,10 +202,20 @@ function evaluateSignal({
   }
   reasons.push(confirmation.reason);
 
-  // Structure used by the configuration that survived walk-forward testing:
-  // stop placed half a zone-width beyond the far edge, target at 2R.
-  const width = Math.max(zone.high - zone.low, atr * 0.1);
-  const stop = side === "BUY" ? zone.low - width * 0.5 : zone.high + width * 0.5;
+  // Stop placement has to survive a wick through the level, not just the zone
+  // edge. It sits beyond both the recent 20-bar sweep extreme and the far zone
+  // edge, with half an ATR of clearance, so a stop hunt that takes out the low
+  // of the range does not take the trade with it. The target stays 2R, but R
+  // is measured from this wider stop.
+  const recent = candles.slice(-20);
+  const lows = recent.map((b) => Number(b.l)).filter(Number.isFinite);
+  const highs = recent.map((b) => Number(b.h)).filter(Number.isFinite);
+  const sweepLow = lows.length ? Math.min(...lows) : zone.low;
+  const sweepHigh = highs.length ? Math.max(...highs) : zone.high;
+  const stop =
+    side === "BUY"
+      ? Math.min(zone.low, sweepLow) - atr * 0.5
+      : Math.max(zone.high, sweepHigh) + atr * 0.5;
   const riskPerUnit = Math.abs(price - stop);
   const target = side === "BUY" ? price + riskPerUnit * 2 : price - riskPerUnit * 2;
 

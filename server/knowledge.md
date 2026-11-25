@@ -7,8 +7,9 @@ Everything in this file was measured by this project, not copied from a vendor.
 - Entry: price inside an automatic supply/demand zone (order block from a
   displacement candle greater than 1.4 ATR, zone = last opposite-coloured base
   candle, broken zones discarded, overlaps merged).
-- Stop: half a zone-width beyond the far edge of the zone.
-- Target: 2R.
+- Stop: beyond both the recent 20-bar sweep extreme and the far zone edge,
+  with half an ATR of clearance.
+- Target: 2R, measured from that wider stop.
 - Higher-timeframe filter: 1-hour EMA20 vs EMA50 must agree with the direction.
 
 ## Walk-forward results (tuning on early data, scoring only on unseen data)

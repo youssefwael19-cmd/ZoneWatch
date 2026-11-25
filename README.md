@@ -129,6 +129,101 @@ is the futures contract, which trades a few dollars away from spot XAU/USD. The
 app automatically shifts detected zones by that difference so levels still line
 up with the price you are watching.
 
+### Candle history from OANDA (optional)
+
+Zones, signals, the lab and the research scripts all read candle history, not
+the live quote. That history comes from Yahoo by default. If you have an OANDA
+account — the free **practice** account is enough, and it is the same token the
+direct broker uses — the app can read those candles from the broker instead:
+
+```bash
+OANDA_API_TOKEN=your_practice_token npm start
+```
+
+With a token set, the ten instruments OANDA lists move to broker candles:
+
+| App symbol | OANDA instrument |
+| --- | --- |
+| XAUUSD | `XAU_USD` |
+| NASDAQ | `NAS100_USD` |
+| EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, AUDJPY, NZDJPY | `EUR_USD`, `GBP_USD`, `USD_JPY`, … |
+
+BTCUSD stays on Yahoo: OANDA no longer lists crypto instruments. Any symbol
+OANDA does not recognise also stays on Yahoo — a mapping is never guessed.
+
+| Variable | What it does |
+| --- | --- |
+| `OANDA_API_TOKEN` | The only switch. With no token, every instrument reads Yahoo. |
+| `OANDA_ENVIRONMENT` | `practice` (default) or `live`. The practice host is used unless you ask for live. |
+| `CANDLE_PROVIDER=yahoo` | Force Yahoo even though a token is saved, e.g. to compare feeds for a day without deleting the token. |
+
+Bars are cached for three minutes, and long ranges are paged from OANDA in
+5,000-bar requests, so a year of hourly history is complete rather than
+silently cut short. Only market data is read: no order, stop or account call is
+made from this path.
+
+If OANDA rejects the token, does not offer an instrument on your account, or is
+unreachable, that instrument falls back to Yahoo and logs one warning. A
+credential problem costs freshness, not the dashboard.
+
+Two scale notes, because broker data is not the same series as the feed it
+replaces:
+
+- Nasdaq candles switch from the cash index (`^NDX`) to OANDA's `NAS100_USD`
+  CFD. They track each other closely but are not identical, so levels can sit
+  a few points apart.
+- Gold candles switch from the `GC=F` futures contract to spot `XAU_USD`. The
+  two differ by the futures basis, which moves.
+
+If a pair only has to be consistent with itself, that is fine — the zones and
+stops on it are all built from the same bars. Redraw a market's zones after
+switching if you want them to sit exactly where the new series trades.
+
+### Candle history from Deriv (no account)
+
+OANDA needs an account. Deriv's market-data API does not: `ticks_history` is
+unauthenticated, so candle history can come from Deriv with no login, key or
+account of any kind.
+
+```bash
+CANDLE_PROVIDER=deriv npm start
+```
+
+It speaks Deriv's public WebSocket API
+(`wss://api.derivws.com/trading/v1/options/ws/public`) and asks for
+`style: "candles"` in 5,000-bar pages, walking backwards with `end` until the
+requested range is covered. That is enough depth for the app's windows — a year
+of hourly bars is about two pages.
+
+| App symbol | Deriv symbol |
+| --- | --- |
+| XAUUSD | `frxXAUUSD` |
+| NASDAQ | `OTC_NDX` |
+| EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, AUDJPY, NZDJPY | `frxEURUSD`, `frxGBPUSD`, … |
+| BTCUSD | `cryBTCUSD` |
+
+| Variable | What it does |
+| --- | --- |
+| `CANDLE_PROVIDER=deriv` | Read candles from Deriv instead of Yahoo/OANDA. |
+
+Deriv's socket needs a WebSocket client, which Node 22 and newer ship. On Node
+20 the provider logs one warning and falls back to Yahoo rather than failing
+the dashboard, as it also does when Deriv refuses or cannot be reached. The
+warning is logged once per instrument, and only the market-data call is made —
+no account, order or proposal request is sent.
+
+Two scale notes, because this is again a different series:
+
+- Gold moves from the `GC=F` futures contract to Deriv's spot `frxXAUUSD`.
+- Nasdaq moves from the cash index (`^NDX`) to Deriv's `OTC_NDX` US Tech 100
+  CFD. They track closely but are not the same series, so redraw zones after
+  switching if you want exact levels.
+
+Deriv's CFDs also quote only while their market is open, so a 5-day intraday
+request contains fewer bars than Yahoo's series — about 170 fifteen-minute bars
+on the Nasdaq rather than 480. Indicators use the bars that exist; closed hours
+are not padded with flat candles.
+
 ## TradingView charts
 
 The Watch tab embeds TradingView's free chart widget for viewing. Those charts
@@ -342,7 +437,8 @@ When price reaches a zone, the bot scores a small set of conditions:
 | Zone came from a strong displacement (≥2 ATR) | +1 |
 
 Six points maximum. Below 3 no signal is shown at all. Each signal carries an
-entry, a stop just beyond the far edge of the zone, and a 2R target.
+entry, a stop beyond the recent 20-bar sweep extreme and the zone edge with
+half an ATR of clearance, and a 2R target measured from that wider risk unit.
 
 ### How a signal is scored after it is posted
 
@@ -500,7 +596,8 @@ to say so rather than answer as if it had checked.
 Off by default, and paper mode until you change it. Signals the app would post
 can be placed as orders, with limits that can only ever refuse a trade: 0.5% of
 equity risked per trade (sized from the real stop distance), one position per
-market, and a daily stop that is **off by default** — switch it on with
+market, no stop closer than four spreads, and a daily stop that is **off by
+default** — switch it on with
 **Daily stop** in the paper-trade panel and it stops the day at the loss limit
 above it. The manual kill switch survives restarts either way.
 
