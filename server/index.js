@@ -1770,6 +1770,18 @@ app.get("/api/health", (_req, res) =>
 );
 app.get("/api/instruments", (_req, res) => res.json({ ok: true, ...fullInfo() }));
 
+// Which candle feed each market actually read last. Public and secret-free,
+// because the readout is only useful if it can be seen without a password.
+app.get("/api/candle-feeds", (_req, res) => {
+  const feeds = market.instrumentList().map((inst) => ({
+    symbol: inst.symbol,
+    label: inst.label,
+    candleSymbol: inst.candleSymbol,
+    ...candlesMod.feedInfo(inst.candleSymbol),
+  }));
+  res.json({ ok: true, feeds });
+});
+
 app.get("/api/watch", async (_req, res) => {
   try {
     res.json(await getSnapshot());

@@ -246,6 +246,32 @@ function candlesReply(req, bars) {
     await candles.getCandles("USDCAD=X", "1h", "1mo");
     check("a second call is served from cache", FakeSocket.sockets.length, socketsUsed);
 
+    // --- The dashboard readout follows the fetch that actually happened ----
+    candles.clearCache();
+    check("before a read the feed is the configured one", candles.feedInfo("GC=F").provider, "deriv");
+    check("before a read there is no timestamp", candles.feedInfo("GC=F").checkedAt, null);
+    FakeSocket.reset();
+    FakeSocket.reply = (req) => candlesReply(req, pageEndingAt(nowHour, 2, H));
+    await candles.getCandles("GC=F", "1h", "1mo");
+    let feed = candles.feedInfo("GC=F");
+    check("a successful read reports Deriv", feed.provider, "deriv");
+    check("the readout names the Deriv instrument", feed.providerSymbol, "frxXAUUSD");
+    check("a successful read is not a fallback", feed.fallback, false);
+    check("the readout carries the bar count", feed.bars, 2);
+    check("the readout carries a timestamp", typeof feed.checkedAt, "string");
+
+    candles.clearCache();
+    FakeSocket.reset();
+    FakeSocket.reply = (req) => ({ msg_type: "ticks_history", req_id: req.req_id, error: { message: "nope" } });
+    global.fetch = async () => jsonResponse(yahooJson([yahooBar(nowHour)]));
+    await candles.getCandles("GC=F", "1h", "1mo");
+    feed = candles.feedInfo("GC=F");
+    check("a fallback read reports Yahoo", feed.provider, "yahoo");
+    check("a fallback read is flagged", feed.fallback, true);
+    check("a fallback read carries the reason", /nope/.test(feed.reason), true);
+    candles.clearCache();
+    check("clearing the cache forgets the read", candles.feedInfo("GC=F").checkedAt, null);
+
     // --- Only market data is read ------------------------------------------
     const allRequests = FakeSocket.sockets.flatMap((s) => s.sent);
     check("every request is a ticks_history call", allRequests.every((r) => Boolean(r.ticks_history)), true);

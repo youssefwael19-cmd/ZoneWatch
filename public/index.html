@@ -349,6 +349,12 @@
         </div>
 
         <div class="panel">
+          <h2>Candle feeds <span class="hint" id="candleFeedMeta" style="letter-spacing:0;text-transform:none"></span></h2>
+          <p class="hint" style="margin:-6px 0 10px">Where each market's history actually comes from, after any fallback. Zones, signals and the lab all read these bars.</p>
+          <div id="candleFeeds" class="empty">Checking…</div>
+        </div>
+
+        <div class="panel">
           <h2>What is holding each market <span class="hint" id="lockMeta" style="letter-spacing:0;text-transform:none"></span></h2>
           <p class="hint" style="margin:-6px 0 10px">The first gate that would stop a setup in that market, in the order the app applies them. Confirmation, thin stops and the learner only exist once there is a setup, so they are not judged here.</p>
           <div id="lockRows" class="empty">Checking the gates…</div>
@@ -2704,6 +2710,8 @@ async function refreshWatch() {
     // Every poll, the money strip would be noise; every ~30s is enough to see a
     // trade open or close without re-asking on every ten-second refresh.
     if (!window._zwMoneyAt || Date.now() - window._zwMoneyAt > 30000) loadMoney();
+    // The candle feed only changes when a fetch happens, so once a minute is plenty.
+    if (!window._zwFeedsAt || Date.now() - window._zwFeedsAt > 60000) { window._zwFeedsAt = Date.now(); loadCandleFeeds(); }
     renderZoneStates(data.zones || []);
     if (!window._zwFirstLoadDone) {
       window._zwFirstLoadDone = true;
@@ -2728,6 +2736,56 @@ async function refreshWatch() {
     document.getElementById("statusPill").textContent = "error: " + err.message;
     setHealth("h-feed", "bad", "unreachable");
     setHealth("h-watcher", "bad", "unreachable");
+  }
+}
+
+/**
+ * Where each market's candles actually come from. The server records the
+ * source of the last successful fetch, so a broker that fell back to Yahoo is
+ * visible here instead of looking healthy.
+ */
+async function loadCandleFeeds() {
+  const el = document.getElementById("candleFeeds");
+  if (!el) return;
+  try {
+    const d = await api("/api/candle-feeds");
+    const feeds = d.feeds || [];
+    if (!feeds.length) { el.className = "empty"; el.textContent = "No markets."; return; }
+
+    const name = (p) => ({ oanda: "OANDA", deriv: "Deriv", yahoo: "Yahoo" }[p] || p);
+    const counts = {};
+    let fallbacks = 0;
+    feeds.forEach((f) => {
+      const label = name(f.provider);
+      counts[label] = (counts[label] || 0) + 1;
+      if (f.fallback) fallbacks++;
+    });
+    const meta = document.getElementById("candleFeedMeta");
+    if (meta) {
+      meta.textContent = Object.entries(counts).map(([p, n]) => `${p} × ${n}`).join(" · ")
+        + (fallbacks ? ` · ${fallbacks} fallback` : "");
+    }
+
+    const when = (iso) => iso
+      ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+      : "not read yet";
+
+    el.className = "";
+    el.innerHTML = `<table><thead><tr><th>Market</th><th>Feed</th><th>Candle symbol</th><th>Last bar</th></tr></thead><tbody>` +
+      feeds.map((f) => {
+        const badge = f.fallback
+          ? `<span class="badge b-approaching" title="${botEsc(f.reason || "")}">Yahoo · fallback</span>`
+          : `<span class="badge b-far" title="configured: ${botEsc(f.configured)}">${botEsc(name(f.provider))}</span>`;
+        return `<tr>
+          <td>${botEsc(f.symbol)}</td>
+          <td>${badge}</td>
+          <td class="mono">${botEsc(f.providerSymbol)}</td>
+          <td class="mono">${botEsc(when(f.lastBar))}</td>
+        </tr>`;
+      }).join("") + `</tbody></table>`;
+  } catch (err) {
+    el.className = "empty";
+    el.textContent = `Could not load candle feeds: ${err.message}`;
   }
 }
 
