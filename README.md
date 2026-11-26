@@ -424,8 +424,9 @@ Changing the timeframe requires a restart and a fresh lab run. Stored verdicts
 carry their timeframe and rule set, and a verdict from another timeframe is
 treated as untested — which means held, not allowed.
 
-A redeploy, a rule change or a provider switch retires the verdicts that were
-measured on the old inputs. Every affected market is then measured back to back,
+A redeploy, a rule change, a live-filter or cost change, or a provider switch
+retires the verdicts that were measured on the old inputs. Every affected market
+is then measured back to back,
 one per watch cycle, instead of one per 45 minutes — a restart that invalidates
 five markets refills in a few minutes rather than a few hours. A market that
 fails is tried once per change and its error is kept, so a broken feed cannot
@@ -576,8 +577,8 @@ watch cycle, instead of one per half hour: a redeploy that retires all eleven
 refills in minutes, not half a day. A market that fails is tried once per change
 with its error kept, so a broken feed cannot spin the brain.
 
-`/api/brain` reports that in `pending`: one row per market with no usable
-verdict, the `reason` (`entry series changed (1y/deriv → 1y/yahoo)`, `rule list
+`/api/brain` reports that in `pending` (and the dashboard shows it under **Not
+measured**): one row per market with no usable verdict, the `reason` (`entry series changed (1y/deriv → 1y/yahoo)`, `rule list
 changed (added lab_orb)`, `measured before the last build change`, `never
 measured`), `open` for whether the market is trading now, and `error` for the
 last failure while measuring it. An empty `pending` means every market has a

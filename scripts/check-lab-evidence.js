@@ -208,6 +208,34 @@ check("a provider switch changes the entry-series signature", () => {
   );
 });
 
+check("a live filter or cost change changes the lab signature", () => {
+  const inst = [{ symbol: "EURUSD", provider: "deriv", providerSymbol: "frxEURUSD" }];
+  const gate = lab.gateBar();
+  const sig = (rules, costs) => lab.seriesSignature(inst, { rules, gate, costs });
+  const base = sig({ mtfFilter: true, minConfluence: 0 }, { EURUSD: "1,1,1,1" });
+
+  assert(
+    base === sig({ mtfFilter: true, minConfluence: 0 }, { EURUSD: "1,1,1,1" }),
+    "the same inputs produced a different signature"
+  );
+  assert(
+    base !== sig({ mtfFilter: false, minConfluence: 0 }, { EURUSD: "1,1,1,1" }),
+    "a live-filter change would not re-arm the lab"
+  );
+  assert(
+    base !== sig({ mtfFilter: true, minConfluence: 2 }, { EURUSD: "1,1,1,1" }),
+    "a confluence change would not re-arm the lab"
+  );
+  assert(
+    base !== sig({ mtfFilter: true, minConfluence: 0 }, { EURUSD: "9,1,1,1" }),
+    "a spread change would not re-arm the lab"
+  );
+  assert(
+    base !== sig({ mtfFilter: true, minConfluence: 0 }, { EURUSD: "1,1,3,1" }),
+    "a commission change would not re-arm the lab"
+  );
+});
+
 check("an unmeasured market names the input that moved", () => {
   const expected = clone(BASE);
   const base = { expected, rulesVersion: lab.LAB_RULES_VERSION, timeframe: "15m" };

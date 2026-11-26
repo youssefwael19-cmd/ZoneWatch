@@ -535,17 +535,34 @@ function needsMeasure(inst, brain, families, now = Date.now()) {
   return !meetsCurrent(stored, expectedFor(inst, families));
 }
 
+/** The cost inputs a verdict was charged, as one compact string. */
+function costFingerprint(symbol) {
+  const costs = costModelFor(symbol);
+  return COST_KEYS.map((key) => Number(costs[key] || 0)).join(",");
+}
+
+/** The rule list the brain tests, with promotions marked so they count as a change. */
+function familySignature(families = familiesNow()) {
+  return families.map((f) => `${f.id}${f.promoted ? "+" : ""}`).join(",");
+}
+
 /**
- * Every input that changes a verdict, as one string. When it changes — a rules
- * bump, a promotion, a provider switch — markets this process already
- * re-measured did so under the old inputs, so they queue again.
+ * Every input that changes a verdict, as one string: the rules, the rule list,
+ * each market's feed and the cost model it is charged. When any of it changes —
+ * a rules bump, a promotion, a provider switch, a cost change — markets this
+ * process already re-measured did so under the old inputs, so they queue again.
+ *
+ * `input` exists so the signature can be checked without writing settings;
+ * omitted fields come from the running configuration.
  */
-function signatureFor(instruments) {
-  const families = familiesNow()
-    .map((f) => `${f.id}${f.promoted ? "+" : ""}`)
-    .join(",");
+function signatureFor(instruments, input = {}) {
+  const families = input.families || familySignature();
+  const costs = input.costs || null;
   const feeds = instruments.map(
-    (inst) => `${inst.symbol}:${inst.candleSymbol}:${candlesMod.sourceFor(inst.candleSymbol).source}`
+    (inst) =>
+      `${inst.symbol}:${inst.candleSymbol}:${candlesMod.sourceFor(inst.candleSymbol).source}:${
+        costs && costs[inst.symbol] != null ? costs[inst.symbol] : costFingerprint(inst.symbol)
+      }`
   );
   return [RULES_VERSION, BAR_VERSION, "1h", "1y", families, ...feeds].join("|");
 }
@@ -617,25 +634,37 @@ function pendingReport(instruments = market.instrumentList()) {
   const rows = [];
 
   for (const inst of instruments) {
-    const kept = brain.results[inst.symbol] || null;
-    const stored = raw && raw.results ? raw.results[inst.symbol] || null : null;
-    const reason = whyUnmeasured({
-      stored,
-      kept,
-      expected: expectedFor(inst, families),
-      rulesVersion: raw ? raw.rulesVersion : null,
-      barVersion: raw ? raw.barVersion : null,
-      invalidatedAt: brain.invalidatedAt || null,
-      now,
-    });
-    if (!reason) continue;
-    rows.push({
-      symbol: inst.symbol,
-      reason,
-      open: sessions.instrumentMarketOpen(inst.symbol),
-      storedAt: stored ? stored.at || null : null,
-      error: state.errors[inst.symbol] || null,
-    });
+    try {
+      const kept = brain.results[inst.symbol] || null;
+      const stored = raw && raw.results ? raw.results[inst.symbol] || null : null;
+      const reason = whyUnmeasured({
+        stored,
+        kept,
+        expected: expectedFor(inst, families),
+        rulesVersion: raw ? raw.rulesVersion : null,
+        barVersion: raw ? raw.barVersion : null,
+        invalidatedAt: brain.invalidatedAt || null,
+        now,
+      });
+      if (!reason) continue;
+      rows.push({
+        symbol: inst.symbol,
+        reason,
+        open: sessions.instrumentMarketOpen(inst.symbol),
+        storedAt: stored ? stored.at || null : null,
+        error: state.errors[inst.symbol] || null,
+      });
+    } catch (err) {
+      // A display report must not take the endpoint down with it, and a market
+      // that could not be checked is unmeasured rather than silently omitted.
+      rows.push({
+        symbol: inst.symbol,
+        reason: `could not check: ${err.message}`,
+        open: null,
+        storedAt: null,
+        error: state.errors[inst.symbol] || null,
+      });
+    }
   }
 
   return rows;
@@ -773,8 +802,12 @@ function reconcilePromotions(results, families, symbols) {
 function status(symbols) {
   const brain = readBrain();
   const families = familiesNow();
+  const instruments = market.instrumentList();
   const now = Date.now();
   const markets = Object.entries(brain.results || {}).map(([symbol, r]) => {
+    // The same test the scheduler uses, so this readout cannot call a market
+    // current that /api/brain is about to list as pending.
+    const inst = instruments.find((i) => i.symbol === symbol);
     const cells = Object.values((r && r.cells) || {});
     const promoted = cells.filter((c) => String(c.family).indexOf("lab_") === 0);
     const condition = r && r.current ? r.current.label : null;
@@ -788,7 +821,7 @@ function status(symbols) {
       provenCells: cells.filter((c) => c.proven).length,
       promotedCells: promoted.length,
       promotedProven: promoted.filter((c) => c.proven).length,
-      stale: isStale(r, brain, now),
+      stale: inst ? needsMeasure(inst, brain, families, now) : true,
       champion: champion
         ? {
             family: champion.family,
@@ -854,6 +887,9 @@ async function maybeRun(instruments = []) {
     const target = fresh[0];
     state.tried.add(target.symbol);
     await runFor(target.symbol, target.candleSymbol);
+    // A flag left true until the next cycle would claim work is still queued
+    // after the backlog has just been cleared.
+    state.burst = fresh.length > 1;
   } else if (stale.length && Date.now() - state.lastRunAt >= RUN_GAP_MS) {
     await runFor(stale[0].symbol, stale[0].candleSymbol);
   }

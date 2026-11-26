@@ -654,6 +654,11 @@ check("a provider or market switch changes the brain signature", () => {
     brain.signatureFor(b),
     "an unchanged signature would not re-arm when the feed changed"
   );
+  assert.notStrictEqual(
+    brain.signatureFor(a, { costs: { EURUSD: "1,1,1,1" } }),
+    brain.signatureFor(a, { costs: { EURUSD: "9,1,1,1" } }),
+    "a cost change would not re-arm the brain"
+  );
 });
 
 check("an unmeasured brain market names the input that moved", () => {

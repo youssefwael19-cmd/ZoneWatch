@@ -725,6 +725,7 @@
               <tbody id="brainBody"><tr><td colspan="5" class="hint">Nothing tested yet.</td></tr></tbody>
             </table>
           </div>
+          <div class="hint" id="brainPending" style="margin-top:8px"></div>
           <div class="hint" id="brainMsg"></div>
         </div>
 
@@ -2540,6 +2541,25 @@ async function loadBrain() {
   if (!body) return;
   try {
     const d = await api("/api/brain");
+    // A market with no verdict has no champion and no gate. Name it and say why,
+    // so it does not look like a market that simply has nothing to trade.
+    const pending = (d.pending || []).filter((p) => p && p.symbol);
+    const pendingEl = document.getElementById("brainPending");
+    if (pendingEl) {
+      pendingEl.innerHTML = pending.length
+        ? '<strong style="font-size:13px;display:block;margin-bottom:4px">Not measured</strong>' +
+          pending
+            .map((p) => {
+              const bits = [
+                p.reason,
+                p.open === false ? "market closed" : "",
+                p.error ? `last error: ${p.error}` : "",
+              ].filter(Boolean);
+              return `<div><strong>${p.symbol}</strong> — ${bits.join(" · ")}</div>`;
+            })
+            .join("")
+        : "";
+    }
     const rows = d.conditions || [];
     if (!rows.length) {
       body.innerHTML = `<tr><td colspan="5" class="hint">Nothing tested yet — press “Test now” on a market, or let the app work through them in the background.</td></tr>`;

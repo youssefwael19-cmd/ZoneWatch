@@ -1055,19 +1055,45 @@ function isStale(lab, inst, tf, now = Date.now()) {
   return !Number.isFinite(at) || now - at > RESULT_TTL_MS;
 }
 
+/** The cost inputs that change a verdict's numbers, as one compact string. */
+function costFingerprint(symbol) {
+  const cost = currentCost(symbol);
+  return [cost.spread, cost.slippage, cost.commissionPerLot, cost.valuePerUnit].join(",");
+}
+
 /**
- * The entry series every market would be measured on, as one string. When it
- * changes — a rules bump, a provider switch in settings, a different range —
- * anything this process already re-measured measured the old inputs.
+ * Every input a verdict depends on, as one string: the rule set, the live
+ * filters, the gate bar, the cost model and each market's feed. When any of it
+ * changes — a rules bump, a filter toggled in settings, a cost or provider
+ * change, a different range — anything this process already re-measured
+ * measured the old inputs and has to queue again.
+ *
+ * `input` exists so the signature can be checked without writing settings;
+ * omitted fields come from the running configuration.
  */
-function seriesSignature(instruments) {
+function seriesSignature(instruments, input = {}) {
   const plan = timeframes.plan(timeframes.entry());
+  const rules = input.rules || liveRuleState();
+  const gate = input.gate || gateBar();
+  const costs = input.costs || null;
   return [
     LAB_RULES_VERSION,
     plan.timeframe,
     plan.labRange,
     plan.fallbackRange,
-    ...instruments.map((i) => `${i.symbol}:${i.provider}:${i.providerSymbol}`),
+    rules.mtfFilter ? "mtf" : "nomtf",
+    rules.minConfluence,
+    gate.trades,
+    gate.expectancy,
+    gate.tStat,
+    gate.positiveFolds,
+    gate.blocks,
+    ...instruments.map(
+      (i) =>
+        `${i.symbol}:${i.provider}:${i.providerSymbol}:${
+          costs && costs[i.symbol] != null ? costs[i.symbol] : costFingerprint(i.symbol)
+        }`
+    ),
   ].join("|");
 }
 
@@ -1131,29 +1157,41 @@ function pendingReport(instruments = market.instrumentList()) {
   const rows = [];
 
   for (const inst of instruments) {
-    const kept = lab.results[inst.symbol];
-    const stored = raw && raw.results ? raw.results[inst.symbol] || null : null;
-    const range = stored && stored.evidence && stored.evidence.entry ? stored.evidence.entry.range : null;
-    const expected =
-      range === plan.labRange || range === plan.fallbackRange
-        ? evidenceFor(inst.symbol, plan, range)
-        : evidenceFor(inst.symbol, plan);
-    const reason = whyUnmeasured({
-      stored,
-      kept,
-      expected,
-      rulesVersion: raw ? raw.rulesVersion : null,
-      timeframe: tf,
-      now,
-    });
-    if (!reason) continue;
-    rows.push({
-      symbol: inst.symbol,
-      reason,
-      open: sessions.instrumentMarketOpen(inst.symbol),
-      storedAt: stored ? stored.at || null : null,
-      error: state.errors[inst.symbol] || null,
-    });
+    try {
+      const kept = lab.results[inst.symbol];
+      const stored = raw && raw.results ? raw.results[inst.symbol] || null : null;
+      const range = stored && stored.evidence && stored.evidence.entry ? stored.evidence.entry.range : null;
+      const expected =
+        range === plan.labRange || range === plan.fallbackRange
+          ? evidenceFor(inst.symbol, plan, range)
+          : evidenceFor(inst.symbol, plan);
+      const reason = whyUnmeasured({
+        stored,
+        kept,
+        expected,
+        rulesVersion: raw ? raw.rulesVersion : null,
+        timeframe: tf,
+        now,
+      });
+      if (!reason) continue;
+      rows.push({
+        symbol: inst.symbol,
+        reason,
+        open: sessions.instrumentMarketOpen(inst.symbol),
+        storedAt: stored ? stored.at || null : null,
+        error: state.errors[inst.symbol] || null,
+      });
+    } catch (err) {
+      // A display report must not take the endpoint down with it, and a market
+      // that could not be checked is unmeasured rather than silently omitted.
+      rows.push({
+        symbol: inst.symbol,
+        reason: `could not check: ${err.message}`,
+        open: null,
+        storedAt: null,
+        error: state.errors[inst.symbol] || null,
+      });
+    }
   }
 
   return rows;
@@ -1247,6 +1285,9 @@ async function maybeRun(instruments) {
     const target = fresh[0];
     state.tried.add(target.symbol);
     await runFor(target.symbol, target.candleSymbol, tf);
+    // A flag left true until the next cycle would claim work is still queued
+    // after the backlog has just been cleared.
+    state.burst = fresh.length > 1;
   } else if (stale.length && now - state.lastRunAt >= RUN_GAP_MS) {
     await runFor(stale[0].symbol, stale[0].candleSymbol, tf);
   }
