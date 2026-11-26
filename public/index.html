@@ -3307,7 +3307,25 @@ async function loadLab() {
     const emptyResearch = entries.length && !research.length
       ? '<div class="hint" style="margin-top:14px">No research family tested yet — use Test NASDAQ ORB.</div>'
       : "";
-    host.innerHTML = liveHtml + researchHtml + researchError + emptyResearch;
+    // A market without a verdict sends no signals. Say which markets those are
+    // and why, so a closed market and a broken feed do not look the same.
+    const pending = (data.pending || []).filter((p) => p && p.symbol);
+    const pendingHtml = pending.length
+      ? '<div style="margin-top:18px"><strong style="font-size:13px">Not measured</strong>' +
+        '<div class="hint">No verdict means no signals here. The reason names what retired the last one.</div>' +
+        pending
+          .map((p) => {
+            const bits = [
+              p.reason,
+              p.open === false ? "market closed" : "",
+              p.error ? `last error: ${p.error}` : "",
+            ].filter(Boolean);
+            return `<div class="hint" style="margin-top:6px"><strong>${p.symbol}</strong> — ${bits.join(" · ")}</div>`;
+          })
+          .join("") +
+        "</div>"
+      : "";
+    host.innerHTML = liveHtml + pendingHtml + researchHtml + researchError + emptyResearch;
   } catch {
     /* leave whatever is on screen */
   }

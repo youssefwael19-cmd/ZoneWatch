@@ -91,6 +91,14 @@ const state = {
   error: null,
   researchError: null,
   burst: false,
+  // The entry series every market would be measured on right now. When it
+  // moves, verdicts this process already replaced measured the old one.
+  signature: null,
+  // Markets re-measured since this process started, so one broken feed cannot
+  // make the backlog run forever.
+  tried: new Set(),
+  // Last failure per market, so a market with no verdict has a reason.
+  errors: {},
 };
 
 function liveRuleState() {
@@ -264,6 +272,16 @@ function sameResearchEvidence(stored, expected) {
   return sameSeries(stored.entry, expected.entry, "entry");
 }
 
+/** The file as written, including verdicts this build no longer trusts. */
+function readLabRaw() {
+  try {
+    const raw = fs.readFileSync(LAB_FILE, "utf-8").trim();
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read only verdicts that this process can still stand behind: same rule
  * version, timeframe, live filters, cost model and candle sources. Anything
@@ -272,17 +290,14 @@ function sameResearchEvidence(stored, expected) {
  */
 function readLab() {
   try {
-    const raw = fs.readFileSync(LAB_FILE, "utf-8").trim();
-    if (!raw) return { results: {}, research: {}, updatedAt: null };
-    const parsed = JSON.parse(raw);
+    const parsed = readLabRaw();
+    if (!parsed) return { results: {}, research: {}, updatedAt: null };
     if (parsed.rulesVersion !== LAB_RULES_VERSION) {
-      state.burst = true;
       return { results: {}, research: {}, updatedAt: parsed.updatedAt || null };
     }
 
     const plan = timeframes.plan(timeframes.entry());
     const results = {};
-    let dropped = false;
     for (const [symbol, r] of Object.entries(parsed.results || {})) {
       const range = r && r.evidence && r.evidence.entry ? r.evidence.entry.range : null;
       const expected =
@@ -291,8 +306,6 @@ function readLab() {
           : null;
       if (r && sameEvidence(r.evidence, expected)) {
         results[symbol] = r;
-      } else {
-        dropped = true;
       }
     }
 
@@ -308,11 +321,8 @@ function readLab() {
           : null;
       if (r && sameResearchEvidence(r.evidence, expected)) {
         research[key] = r;
-      } else {
-        dropped = true;
       }
     }
-    if (dropped) state.burst = true;
     return { results, research, updatedAt: parsed.updatedAt || null };
   } catch {
     return { results: {}, research: {}, updatedAt: null };
@@ -1035,6 +1045,120 @@ async function evaluateOrb(symbol, candleSymbol) {
   };
 }
 
+/* ------------------------ what is missing ----------------------- */
+
+/** Does this market need measuring under the inputs this process holds? */
+function isStale(lab, inst, tf, now = Date.now()) {
+  const r = lab.results[inst.symbol];
+  if (!r || r.timeframe !== tf) return true;
+  const at = new Date(r.at).getTime();
+  return !Number.isFinite(at) || now - at > RESULT_TTL_MS;
+}
+
+/**
+ * The entry series every market would be measured on, as one string. When it
+ * changes — a rules bump, a provider switch in settings, a different range —
+ * anything this process already re-measured measured the old inputs.
+ */
+function seriesSignature(instruments) {
+  const plan = timeframes.plan(timeframes.entry());
+  return [
+    LAB_RULES_VERSION,
+    plan.timeframe,
+    plan.labRange,
+    plan.fallbackRange,
+    ...instruments.map((i) => `${i.symbol}:${i.provider}:${i.providerSymbol}`),
+  ].join("|");
+}
+
+/**
+ * Why a market has no verdict this build will use, naming the input that moved
+ * rather than saying "not measured". `kept` is the verdict readLab() accepted,
+ * `stored` is whatever the file holds for that market, and `expected` is what
+ * the next run would record now.
+ */
+function whyUnmeasured({ stored, kept, expected, rulesVersion, timeframe, now = Date.now() }) {
+  if (kept) {
+    const age = now - new Date(kept.at).getTime();
+    return Number.isFinite(age) && age > RESULT_TTL_MS
+      ? `verdict is ${Math.round(age / 3600000)}h old`
+      : null;
+  }
+  if (rulesVersion && rulesVersion !== LAB_RULES_VERSION) {
+    return `rules changed (${rulesVersion} → ${LAB_RULES_VERSION})`;
+  }
+  if (!stored) return "never measured";
+  if (stored.timeframe !== timeframe) {
+    return `measured on ${stored.timeframe || "an unknown timeframe"}, not ${timeframe}`;
+  }
+  // A stored verdict keeps its evidence under `.evidence`; the expected record
+  // from evidenceFor() is itself that evidence. Accept either shape.
+  const ev = stored.evidence || stored;
+  if (!expected) return "evidence changed";
+
+  const was = ev.entry || {};
+  const want = expected.entry || {};
+  if (was.range !== want.range || was.configuredProvider !== want.configuredProvider) {
+    return `entry series changed (${was.range}/${was.configuredProvider} → ${want.range}/${want.configuredProvider})`;
+  }
+  if (was.provider !== want.provider || was.fallback !== want.fallback) {
+    return `entry feed changed (${was.provider} → ${want.provider}${want.fallback ? " fallback" : ""})`;
+  }
+  if (!sameFlat(ev.cost, expected.cost, COST_KEYS)) return "cost model changed";
+  if (!sameFlat(ev.rules, expected.rules, ["mtfFilter", "minConfluence"])) {
+    return "live filters changed";
+  }
+  if (!sameFlat(ev.gate, expected.gate, Object.keys(expected.gate))) {
+    return "gate thresholds changed";
+  }
+  if (!sameSeries(ev.daily, expected.daily, "daily")) return "daily series changed";
+  return "evidence changed";
+}
+
+/**
+ * Every market with nothing usable behind it, and why. The lab fails closed, so
+ * an unmeasured market sends no signals; this answers "is that a holiday, a
+ * feed, or just the queue?" — `reason` names the input that retired the last
+ * verdict, `open` says whether the market is trading now, and `error` is the
+ * last failure this process hit while measuring it.
+ */
+function pendingReport(instruments = market.instrumentList()) {
+  const raw = readLabRaw();
+  const lab = readLab();
+  const tf = timeframes.entry();
+  const plan = timeframes.plan(tf);
+  const now = Date.now();
+  const rows = [];
+
+  for (const inst of instruments) {
+    const kept = lab.results[inst.symbol];
+    const stored = raw && raw.results ? raw.results[inst.symbol] || null : null;
+    const range = stored && stored.evidence && stored.evidence.entry ? stored.evidence.entry.range : null;
+    const expected =
+      range === plan.labRange || range === plan.fallbackRange
+        ? evidenceFor(inst.symbol, plan, range)
+        : evidenceFor(inst.symbol, plan);
+    const reason = whyUnmeasured({
+      stored,
+      kept,
+      expected,
+      rulesVersion: raw ? raw.rulesVersion : null,
+      timeframe: tf,
+      now,
+    });
+    if (!reason) continue;
+    rows.push({
+      symbol: inst.symbol,
+      reason,
+      open: sessions.instrumentMarketOpen(inst.symbol),
+      storedAt: stored ? stored.at || null : null,
+      error: state.errors[inst.symbol] || null,
+    });
+  }
+
+  return rows;
+}
+
 /* --------------------------- scheduling ------------------------- */
 
 async function runFor(symbol, candleSymbol, timeframe = timeframes.entry()) {
@@ -1047,9 +1171,11 @@ async function runFor(symbol, candleSymbol, timeframe = timeframes.entry()) {
     lab.updatedAt = new Date().toISOString();
     writeLab(lab);
     state.error = null;
+    delete state.errors[symbol];
     return result;
   } catch (err) {
     state.error = `${symbol}: ${err.message}`;
+    state.errors[symbol] = err.message;
     return null;
   } finally {
     state.running = false;
@@ -1096,19 +1222,34 @@ async function runOrbFor(candleSymbol) {
 /** Called every watch cycle. One stale market per 45 minutes, or a burst after a rule change. */
 async function maybeRun(instruments) {
   if (state.running) return;
-  const gap = state.burst ? 0 : RUN_GAP_MS;
-  if (Date.now() - state.lastRunAt < gap) return;
+
+  const signature = seriesSignature(instruments);
+  if (signature !== state.signature) {
+    // A fresh process, a rule change or a provider switch: markets this process
+    // already re-measured did so on different inputs, so they queue again.
+    state.signature = signature;
+    state.tried.clear();
+  }
 
   const tf = timeframes.entry();
   const lab = readLab();
   const now = Date.now();
+  const stale = instruments.filter((inst) => isStale(lab, inst, tf, now));
 
-  const stale = instruments.find((inst) => {
-    const r = lab.results[inst.symbol];
-    if (!r || r.timeframe !== tf) return true;
-    return now - new Date(r.at).getTime() > RESULT_TTL_MS;
-  });
-  if (stale) await runFor(stale.symbol, stale.candleSymbol, tf);
+  // Every market with nothing this build can stand behind is measured back to
+  // back, once each, instead of one per 45 minutes. A redeploy that retires
+  // several verdicts therefore refills in a few minutes, not a few hours. A
+  // market that fails is recorded in state.errors and not retried until the
+  // inputs change again, so a broken feed cannot spin the lab.
+  const fresh = stale.filter((inst) => !state.tried.has(inst.symbol));
+  state.burst = fresh.length > 0;
+  if (fresh.length) {
+    const target = fresh[0];
+    state.tried.add(target.symbol);
+    await runFor(target.symbol, target.candleSymbol, tf);
+  } else if (stale.length && now - state.lastRunAt >= RUN_GAP_MS) {
+    await runFor(stale[0].symbol, stale[0].candleSymbol, tf);
+  }
 
   const after = Date.now();
   const orb = readLab().research[researchKey(ORB_SYMBOL)];
@@ -1118,7 +1259,6 @@ async function maybeRun(instruments) {
     const nasdaq = instruments.find((inst) => inst.symbol === ORB_SYMBOL);
     if (nasdaq) await runOrbFor(nasdaq.candleSymbol);
   }
-  if (!stale) state.burst = false;
 }
 
 /**
@@ -1155,8 +1295,13 @@ function summary() {
     lastSymbol: state.lastSymbol,
     error: state.error,
     researchError: state.researchError,
+    bursting: state.burst,
     results: lab.results,
     research: lab.research,
+    // Markets with no verdict this build will use, each with the reason. An
+    // empty list means every market is measured; `open:false` says a closure,
+    // not a broken feed, is in play.
+    pending: pendingReport(),
     gate: Object.fromEntries(
       Object.entries(lab.results).map(([symbol, r]) => [symbol, r.tradable === true])
     ),
@@ -1179,7 +1324,12 @@ module.exports = {
   orbTradesFromBars,
   researchKey,
   gateBar,
+  isStale,
+  seriesSignature,
+  whyUnmeasured,
+  pendingReport,
   LAB_RULES_VERSION,
+  RESULT_TTL_MS,
   ORB_SYMBOL,
   ORB_FAMILY,
   ORB_TIMEFRAME,

@@ -85,6 +85,11 @@ function variantMany(section, patch) {
   return copy;
 }
 
+/** A stored lab result: the evidence plus the fields the file keeps beside it. */
+function record(evidence, extra = {}) {
+  return { timeframe: "15m", at: new Date().toISOString(), evidence, ...extra };
+}
+
 /** A record passes only when it still matches itself exactly. */
 function accepted(stored) {
   return lab.sameEvidence(stored, BASE);
@@ -175,6 +180,97 @@ check("a changed gate threshold is untested", () => {
   assert(!accepted(variant("gate", "tStat", 1.5)), "t-stat change was accepted");
   assert(!accepted(variant("gate", "positiveFolds", 1)), "fold change was accepted");
   assert(!accepted(variant("gate", "blocks", 4)), "block change was accepted");
+});
+
+check("a market with no usable verdict is stale, a fresh one is not", () => {
+  const now = Date.now();
+  const fresh = { timeframe: "15m", at: new Date(now - 1000).toISOString() };
+  const old = { timeframe: "15m", at: new Date(now - lab.RESULT_TTL_MS - 1000).toISOString() };
+  assert(!lab.isStale({ results: { EURUSD: fresh } }, { symbol: "EURUSD" }, "15m", now), "a fresh verdict was called stale");
+  assert(lab.isStale({ results: {} }, { symbol: "EURUSD" }, "15m", now), "a missing verdict was called fresh");
+  assert(lab.isStale({ results: { EURUSD: old } }, { symbol: "EURUSD" }, "15m", now), "an expired verdict was called fresh");
+  assert(
+    lab.isStale({ results: { EURUSD: { ...fresh, timeframe: "5m" } } }, { symbol: "EURUSD" }, "15m", now),
+    "a verdict from another timeframe was called fresh"
+  );
+});
+
+check("a provider switch changes the entry-series signature", () => {
+  const deriv = [{ symbol: "EURUSD", provider: "deriv", providerSymbol: "frxEURUSD" }];
+  const yahoo = [{ symbol: "EURUSD", provider: "yahoo", providerSymbol: "EURUSD=X" }];
+  assert(
+    lab.seriesSignature(deriv) !== lab.seriesSignature(yahoo),
+    "switching the feed left the signature unchanged, so no market would re-measure"
+  );
+  assert(
+    lab.seriesSignature(deriv) === lab.seriesSignature([...deriv]),
+    "the same inputs produced a different signature"
+  );
+});
+
+check("an unmeasured market names the input that moved", () => {
+  const expected = clone(BASE);
+  const base = { expected, rulesVersion: lab.LAB_RULES_VERSION, timeframe: "15m" };
+
+  assert(
+    lab.whyUnmeasured({ ...base, stored: record(BASE), kept: record(BASE) }) === null,
+    "a usable verdict was reported as pending"
+  );
+  assert(
+    lab.whyUnmeasured({ ...base, stored: null, kept: null }) === "never measured",
+    "a market that was never measured got another reason"
+  );
+  assert(
+    /rules changed/.test(
+      lab.whyUnmeasured({ ...base, stored: record(BASE), kept: null, rulesVersion: "live-rules-v1" })
+    ),
+    "a rules bump was not named"
+  );
+  assert(
+    /measured on 5m/.test(
+      lab.whyUnmeasured({ ...base, stored: record(BASE, { timeframe: "5m" }), kept: null })
+    ),
+    "a verdict from another timeframe was not named"
+  );
+
+  const rangeChanged = lab.whyUnmeasured({
+    ...base,
+    stored: record(variant("entry", "range", "60d")),
+    kept: null,
+  });
+  assert(/entry series changed/.test(rangeChanged), `range change reason was ${rangeChanged}`);
+  assert(/60d/.test(rangeChanged) && /1y/.test(rangeChanged), `reason did not name both ranges: ${rangeChanged}`);
+
+  const feedChanged = lab.whyUnmeasured({
+    ...base,
+    stored: record(variant("entry", "configuredProvider", "yahoo")),
+    kept: null,
+  });
+  assert(/entry series changed/.test(feedChanged), `feed change reason was ${feedChanged}`);
+  assert(/yahoo/.test(feedChanged), `reason did not name the old feed: ${feedChanged}`);
+
+  assert(
+    lab.whyUnmeasured({ ...base, stored: record(variant("cost", "spread", 0.0009)), kept: null }) ===
+      "cost model changed",
+    "a cost change was not named"
+  );
+  assert(
+    lab.whyUnmeasured({ ...base, stored: record(variant("rules", "mtfFilter", false)), kept: null }) ===
+      "live filters changed",
+    "a live-filter change was not named"
+  );
+  assert(
+    lab.whyUnmeasured({ ...base, stored: record(variant("gate", "tStat", 1.5)), kept: null }) ===
+      "gate thresholds changed",
+    "a gate change was not named"
+  );
+
+  const expired = lab.whyUnmeasured({
+    ...base,
+    stored: record(BASE),
+    kept: record(BASE, { at: new Date(Date.now() - lab.RESULT_TTL_MS - 3600000).toISOString() }),
+  });
+  assert(/h old/.test(expired), `an expired verdict got reason ${expired}`);
 });
 
 if (failures) {

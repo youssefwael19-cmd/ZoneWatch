@@ -424,6 +424,21 @@ Changing the timeframe requires a restart and a fresh lab run. Stored verdicts
 carry their timeframe and rule set, and a verdict from another timeframe is
 treated as untested — which means held, not allowed.
 
+A redeploy, a rule change or a provider switch retires the verdicts that were
+measured on the old inputs. Every affected market is then measured back to back,
+one per watch cycle, instead of one per 45 minutes — a restart that invalidates
+five markets refills in a few minutes rather than a few hours. A market that
+fails is tried once per change and its error is kept, so a broken feed cannot
+spin the lab.
+
+`/api/lab` reports that state in `pending`: one row per market with no usable
+verdict, the `reason` (for example `entry series changed (60d/yahoo → 1y/deriv)`,
+`rules changed (...)`, `never measured`), `open` for whether the market is
+trading right now — a holiday shows as `open: false` rather than as a feed
+fault — and `error` for the last failure while measuring it. An empty `pending`
+means every market has a verdict this build stands behind. The dashboard shows
+the same list under **Not measured**.
+
 ### Research families
 
 The lab can also measure a rule that is not live. The first is the NASDAQ
