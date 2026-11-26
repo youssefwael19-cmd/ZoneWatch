@@ -22,6 +22,8 @@ digest.json
 newscalendar.json
 paperreview.json
 dailyrecap.json
+botjournal.json
+promotions.json
 state-backup/
 
 # Secrets
