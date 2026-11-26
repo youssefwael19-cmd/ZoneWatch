@@ -374,6 +374,9 @@ async function evaluateMarket(symbol, candleSymbol, opts = {}) {
     symbol,
     at: new Date().toISOString(),
     bars: bars.length,
+    // The window actually measured, which can be shorter than 1y if the feed
+    // served less. Recorded so a verdict cannot imply history it never saw.
+    covered: candlesMod.coverageOf(bars),
     // The inputs this measurement was taken on. Recorded so a later provider
     // switch or rule-list change can be detected from the file instead of
     // leaving a verdict that describes a feed no longer being used.

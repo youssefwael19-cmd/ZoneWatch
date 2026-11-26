@@ -432,6 +432,11 @@ five markets refills in a few minutes rather than a few hours. A market that
 fails is tried once per change and its error is kept, so a broken feed cannot
 spin the lab.
 
+Every verdict also records `covered` — the first and last bar it was measured
+on, plus the count — because a provider can answer a range request with far less
+history than the range implies. The dashboard shows it as `data from → to`, so a
+"2y" study on three months of bars cannot pass for two years.
+
 `/api/lab` reports that state in `pending`: one row per market with no usable
 verdict, the `reason` (for example `entry series changed (60d/yahoo → 1y/deriv)`,
 `rules changed (...)`, `never measured`), `open` for whether the market is

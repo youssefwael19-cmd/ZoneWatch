@@ -123,9 +123,35 @@ function rememberSeries(ticker, interval, range, configured, used, bars, extra =
     depthFallback: Boolean(extra.depthFallback),
     actualKnown: true,
     bars: bars.length,
+    firstBar: bars.length ? bars[0].t : null,
     lastBar: bars.length ? bars[bars.length - 1].t : null,
     at: new Date().toISOString(),
   });
+}
+
+/**
+ * The period a bar array actually covers.
+ *
+ * A provider can answer a range request with far fewer bars than that range
+ * implies — Deriv serves about three months of 5m for a "2y" request — so a
+ * verdict has to say what it measured, not only what it asked for.
+ */
+function coverageOf(bars) {
+  const list = Array.isArray(bars) ? bars : [];
+  let from = Infinity;
+  let to = -Infinity;
+  for (const bar of list) {
+    const t = Number(bar && bar.t);
+    if (!Number.isFinite(t)) continue;
+    if (t < from) from = t;
+    if (t > to) to = t;
+  }
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  return {
+    from: new Date(from).toISOString(),
+    to: new Date(to).toISOString(),
+    bars: list.length,
+  };
 }
 
 /** The source actually used for one ticker/interval/range, or null if not read yet. */
@@ -516,6 +542,7 @@ module.exports = {
   getCandles,
   getYahooCandles,
   seriesInfo,
+  coverageOf,
   feedInfo,
   clearCache,
   sourceFor,

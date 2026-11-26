@@ -208,6 +208,23 @@ check("a provider switch changes the entry-series signature", () => {
   );
 });
 
+check("a result records the window its bars actually cover", () => {
+  const candles = require("../server/candles");
+  const bar = (t) => ({ t, o: 1, h: 1, l: 1, c: 1 });
+
+  assert(candles.coverageOf([]) === null, "an empty series reported coverage");
+  assert(candles.coverageOf(null) === null, "a missing series reported coverage");
+
+  const span = candles.coverageOf([bar(3000), bar(1000), bar(2000)]);
+  assert(span && span.bars === 3, "the bar count was wrong");
+  assert(span.from === new Date(1000).toISOString(), `from was ${span.from}`);
+  assert(span.to === new Date(3000).toISOString(), `to was ${span.to}`);
+  assert(
+    candles.coverageOf([bar(1000), { t: "x" }, bar(4000)]).to === new Date(4000).toISOString(),
+    "an unreadable timestamp widened the span"
+  );
+});
+
 check("a live filter or cost change changes the lab signature", () => {
   const inst = [{ symbol: "EURUSD", provider: "deriv", providerSymbol: "frxEURUSD" }];
   const gate = lab.gateBar();

@@ -906,6 +906,9 @@ async function evaluateMarket(symbol, candleSymbol, timeframe = timeframes.entry
     symbol,
     timeframe: plan.timeframe,
     at: new Date().toISOString(),
+    // The window actually measured, which can be shorter than the range asked
+    // for. "1y" on a provider that serves eight months is not a year.
+    covered: candlesMod.coverageOf(bars),
     rules,
     evidence,
     oos,
@@ -1010,6 +1013,8 @@ async function evaluateOrb(symbol, candleSymbol) {
     live: false,
     at: new Date().toISOString(),
     range: series.range,
+    // What the provider actually served for that range request.
+    covered: candlesMod.coverageOf(bars),
     rule: { ...ORB_RULE },
     evidence: {
       kind: "research",

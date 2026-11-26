@@ -3273,6 +3273,9 @@ async function loadLab() {
         const gross = x.gross || {};
         const meta = [
           x.timeframe || data.timeframe,
+          x.covered
+            ? `data ${String(x.covered.from).slice(0, 10)} → ${String(x.covered.to).slice(0, 10)}`
+            : "",
           oos.n != null ? `${oos.n} trades` : "",
           oos.expectancy != null ? `${oos.expectancy}R net` : "",
           gross.expectancy != null ? `${gross.expectancy}R gross` : "",
@@ -3299,6 +3302,9 @@ async function loadLab() {
             const meta = [
               x.timeframe || "5m",
               x.range ? `${x.range} requested` : "",
+              x.covered
+                ? `data ${String(x.covered.from).slice(0, 10)} → ${String(x.covered.to).slice(0, 10)}`
+                : "",
               x.evidence && x.evidence.entry && x.evidence.entry.bars
                 ? `${x.evidence.entry.bars} 5m bars`
                 : "",
