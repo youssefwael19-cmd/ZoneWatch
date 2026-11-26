@@ -282,14 +282,16 @@ function summarize(closed = [], config = null, live = null, now = new Date()) {
  * @param {object} args.config exec config
  * @param {object} [args.live] live spreads from the bridge
  * @param {number} [args.targetR] reward multiple (default 2)
- * @param {number} [args.referenceWinRate] win rate to project at (default 0.411)
+ * @param {number} [args.referenceWinRate] win rate to project at (default 0.40)
+ *   A round sensitivity reference, not a measured edge. The lab is the source of
+ *   measured win rates; this column only answers "what would this cost at 40%?".
  */
 function breakEvenTable({
   markets = [],
   config = null,
   live = null,
   targetR = 2,
-  referenceWinRate = 0.411,
+  referenceWinRate = 0.4,
 } = {}) {
   const { commissionPerLot } = costConfig(config);
 

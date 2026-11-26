@@ -64,7 +64,10 @@ function evaluate({ quotes = [], movedAt = new Map(), now = Date.now() } = {}) {
   const nowDate = new Date(now);
 
   const rows = quotes.map((q) => {
-    const market = marketFor(q.symbol, nowDate);
+    // A provider that says the market is shut knows better than our clock: a
+    // frozen quote is then expected, not a dead feed.
+    const closedByProvider = q.marketClosed === true;
+    const market = closedByProvider ? { open: false, openedAt: null } : marketFor(q.symbol, nowDate);
 
     const feedAt = q.lastMarketUpdate ? new Date(q.lastMarketUpdate).getTime() : null;
     const moved = movedAt instanceof Map ? movedAt.get(q.symbol) : null;

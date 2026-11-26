@@ -5,8 +5,9 @@
  *   Yahoo  : default. Key-free chart endpoint that returns OHLC arrays.
  *   OANDA  : used when OANDA_API_TOKEN is set. The free practice account is
  *            enough, and it is the same token the direct broker uses.
- *   Deriv  : used when CANDLE_PROVIDER=deriv. Its market-data socket needs no
- *            login, key or account at all.
+ *   Deriv  : chosen in Settings (or CANDLE_PROVIDER=deriv as the default before
+ *            a choice is saved). Its market-data socket needs no login, key or
+ *            account at all.
  *
  * Only market data is read from the broker feeds — no account, order or stop
  * call is made from this path. A ticker that is not in the exact map below
@@ -18,6 +19,9 @@
  * of the last successful fetch is kept per ticker so the dashboard can show
  * where a market's candles really came from.
  */
+
+const { openDeriv } = require("./derivsocket");
+const settings = require("./settings");
 
 const CACHE_TTL_MS = 3 * 60 * 1000;
 const PAGE_SIZE = 5000;
@@ -39,9 +43,6 @@ const INSTRUMENTS = {
   // OANDA no longer lists crypto; Deriv does.
   "BTC-USD": { deriv: "cryBTCUSD" },
 };
-
-// Deriv's public market-data socket. No login, key or app id is needed.
-const DERIV_ENDPOINT = "wss://api.derivws.com/trading/v1/options/ws/public";
 
 const OANDA_BASE = {
   practice: "https://api-fxpractice.oanda.com",
@@ -83,6 +84,7 @@ const INTERVAL_MINUTES = {
 const RANGE_DAYS = {
   "1d": 1,
   "5d": 5,
+  "7d": 7,
   "1mo": 31,
   "3mo": 92,
   "6mo": 183,
@@ -98,6 +100,39 @@ const DERIV_MAX_PAGES = 16;
 const cache = new Map();
 const warned = new Set();
 const lastUse = new Map();
+// Exact source of each interval/range actually used. Unlike lastUse (one
+// summary per symbol, overwritten by whichever range was fetched last), this is
+// keyed by the series so the lab can record and re-check the bars it measured.
+const seriesUse = new Map();
+
+function seriesKey(ticker, interval, range) {
+  return `${ticker}|${interval}|${range}`;
+}
+
+function rememberSeries(ticker, interval, range, configured, used, bars, extra = {}) {
+  seriesUse.set(seriesKey(ticker, interval, range), {
+    ticker,
+    interval,
+    range,
+    configuredProvider: configured.source,
+    configuredSymbol: configured.symbol || ticker,
+    provider: used.source,
+    providerSymbol: used.symbol || ticker,
+    fallback: Boolean(used.fallback),
+    reason: used.reason || extra.reason || null,
+    depthFallback: Boolean(extra.depthFallback),
+    actualKnown: true,
+    bars: bars.length,
+    lastBar: bars.length ? bars[bars.length - 1].t : null,
+    at: new Date().toISOString(),
+  });
+}
+
+/** The source actually used for one ticker/interval/range, or null if not read yet. */
+function seriesInfo(ticker, interval, range) {
+  const seen = seriesUse.get(seriesKey(ticker, interval, range));
+  return seen ? { ...seen } : null;
+}
 
 function parseChart(json) {
   const result = json && json.chart && json.chart.result && json.chart.result[0];
@@ -122,6 +157,13 @@ function parseChart(json) {
 }
 
 async function fetchYahoo(ticker, interval, range) {
+  // Yahoo has no 4h interval. Four 1h bars, bucketed on the clock, are the
+  // same candle the broker feeds serve, so a 4h entry works on every source.
+  if (interval === "4h") {
+    const hourly = await fetchYahoo(ticker, "1h", range);
+    return aggregateBars(hourly, 4 * 60 * 60 * 1000);
+  }
+
   const url =
     "https://query1.finance.yahoo.com/v8/finance/chart/" +
     encodeURIComponent(ticker) +
@@ -139,6 +181,24 @@ async function fetchYahoo(ticker, interval, range) {
   return bars;
 }
 
+/** Fold consecutive bars into fixed UTC buckets, keeping OHLC and summing volume. */
+function aggregateBars(bars, span) {
+  const out = [];
+  for (const bar of bars) {
+    const bucket = Math.floor(bar.t / span) * span;
+    const last = out[out.length - 1];
+    if (last && last.t === bucket) {
+      last.h = Math.max(last.h, bar.h);
+      last.l = Math.min(last.l, bar.l);
+      last.c = bar.c;
+      last.v += bar.v || 0;
+    } else {
+      out.push({ t: bucket, o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v || 0 });
+    }
+  }
+  return out;
+}
+
 function oandaConfig() {
   const token = String(process.env.OANDA_API_TOKEN || "").trim();
   if (!token) return null;
@@ -146,10 +206,33 @@ function oandaConfig() {
   return { token, environment, base: OANDA_BASE[environment] };
 }
 
-function candleProvider() {
+const CANDLE_CHOICES = ["auto", "yahoo", "oanda", "deriv"];
+
+function envCandleProvider() {
   const value = String(process.env.CANDLE_PROVIDER || "").toLowerCase();
-  if (value === "yahoo" || value === "oanda" || value === "deriv") return value;
-  return "auto";
+  return CANDLE_CHOICES.includes(value) ? value : "";
+}
+
+/**
+ * The choice saved in Settings wins. CANDLE_PROVIDER is only the default for a
+ * server that has never saved one, so changing the feed in the dashboard is not
+ * silently undone by an environment variable on the next request.
+ */
+function candleProvider() {
+  return settings.getCandleProvider() || envCandleProvider() || "auto";
+}
+
+/** What is in effect, where it came from, and what the Settings control offers. */
+function candleProviderInfo() {
+  const saved = settings.getCandleProvider();
+  const env = envCandleProvider();
+  return {
+    choice: saved || env || "auto",
+    saved,
+    env,
+    source: saved ? "settings" : env ? "env" : "default",
+    options: CANDLE_CHOICES,
+  };
 }
 
 /**
@@ -281,116 +364,6 @@ function parseDerivCandles(raw) {
   return bars;
 }
 
-/**
- * Open one Deriv socket and hand back a request/response pair. The socket is
- * reused for every page of a fetch, then closed, so a paged request costs one
- * connection rather than one per page.
- */
-function openDeriv(url) {
-  if (typeof WebSocket !== "function") {
-    // Node 20 and older ship no WebSocket client, and the failure otherwise
-    // looks like a network problem rather than a runtime that is too old.
-    return Promise.reject(
-      new Error(`this Node build (${process.version}) has no WebSocket client; Deriv candles need Node 22 or newer`)
-    );
-  }
-
-  let socket;
-  try {
-    socket = new WebSocket(url);
-  } catch (err) {
-    return Promise.reject(err);
-  }
-
-  let nextId = 1;
-  let closed = false;
-  let connectTimer = null;
-  const pending = new Map();
-  const open = {};
-  const opened = new Promise((resolve, reject) => {
-    open.resolve = resolve;
-    open.reject = reject;
-  });
-  opened.catch(() => {}); // failures are reported through request(), not here
-
-  const listen = (type, fn) => {
-    if (typeof socket.addEventListener === "function") socket.addEventListener(type, fn);
-    else if (typeof socket.on === "function") socket.on(type, fn);
-  };
-
-  const fail = (err) => {
-    clearTimeout(connectTimer);
-    closed = true;
-    open.reject(err);
-    for (const p of pending.values()) {
-      clearTimeout(p.timer);
-      p.reject(err);
-    }
-    pending.clear();
-  };
-
-  connectTimer = setTimeout(() => {
-    fail(new Error("Deriv did not open a socket in 15s"));
-    try {
-      socket.close();
-    } catch {
-      /* already gone */
-    }
-  }, 15000);
-
-  listen("open", () => {
-    clearTimeout(connectTimer);
-    open.resolve();
-  });
-  listen("message", (event) => {
-    let json;
-    try {
-      json = JSON.parse(event && event.data !== undefined ? event.data : event);
-    } catch {
-      return;
-    }
-    const p = pending.get(Number(json && json.req_id));
-    if (!p) return;
-    pending.delete(p.id);
-    clearTimeout(p.timer);
-    p.resolve(json);
-  });
-  listen("error", () =>
-    fail(new Error("could not reach Deriv; the network may be blocking wss://api.derivws.com"))
-  );
-  listen("close", () => fail(new Error("Deriv closed the socket before answering")));
-
-  return Promise.resolve({
-    async request(payload) {
-      await opened;
-      if (closed) throw new Error("Deriv socket is closed");
-      const id = nextId++;
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(id);
-          reject(new Error("Deriv did not answer in 15s"));
-        }, 15000);
-        pending.set(id, { id, timer, resolve, reject });
-        try {
-          socket.send(JSON.stringify({ ...payload, req_id: id }));
-        } catch (err) {
-          clearTimeout(timer);
-          pending.delete(id);
-          reject(err);
-        }
-      });
-    },
-    close() {
-      closed = true;
-      try {
-        socket.close();
-      } catch {
-        /* already gone */
-      }
-    },
-  });
-}
-
 async function fetchDeriv(ticker, symbol, interval, range) {
   const granularity = DERIV_GRANULARITY[interval];
   if (!granularity) throw new Error(`Deriv has no ${interval} candles`);
@@ -399,7 +372,7 @@ async function fetchDeriv(ticker, symbol, interval, range) {
   const byTime = new Map();
   let end = "latest";
 
-  const session = await openDeriv(DERIV_ENDPOINT);
+  const session = await openDeriv();
   try {
     for (let page = 0; page < DERIV_MAX_PAGES && byTime.size < wanted; page++) {
       const json = await session.request({
@@ -448,7 +421,7 @@ function warnOnce(ticker, label, message) {
 
 /**
  * @param {string} ticker  Yahoo symbol, e.g. "^NDX" or "XAUUSD=X"
- * @param {string} interval  1m, 5m, 15m, 30m, 1h, 1d
+ * @param {string} interval  1m, 5m, 15m, 30m, 1h, 4h, 1d
  * @param {string} range     1d, 5d, 1mo, 3mo
  */
 async function getCandles(ticker, interval = "15m", range = "5d") {
@@ -477,6 +450,7 @@ async function getCandles(ticker, interval = "15m", range = "5d") {
     }
   }
 
+  rememberSeries(ticker, interval, range, chosen, used, bars);
   lastUse.set(ticker, {
     source: used.source,
     symbol: used.symbol || ticker,
@@ -514,6 +488,38 @@ function clearCache() {
   cache.clear();
   warned.clear();
   lastUse.clear();
+  seriesUse.clear();
 }
 
-module.exports = { getCandles, feedInfo, clearCache };
+/** Yahoo history without touching the candle-feed readout. The lab uses this
+ * only for the daily bias series, which needs more history than some broker
+ * daily feeds return; the entry series still comes from the configured feed. */
+async function getYahooCandles(ticker, interval, range, opts = {}) {
+  const bars = await fetchYahoo(ticker, interval, range);
+  // A caller that records the deliberate depth fallback itself can keep this
+  // read from overwriting the configured series' identity.
+  if (opts.record === false) return bars;
+  const configured = sourceFor(ticker);
+  rememberSeries(
+    ticker,
+    interval,
+    range,
+    configured,
+    { source: "yahoo", symbol: ticker, reason: opts.reason || null },
+    bars,
+    { depthFallback: opts.depthFallback === true, reason: opts.reason || null }
+  );
+  return bars;
+}
+
+module.exports = {
+  getCandles,
+  getYahooCandles,
+  seriesInfo,
+  feedInfo,
+  clearCache,
+  sourceFor,
+  candleProvider,
+  candleProviderInfo,
+  aggregateBars,
+};

@@ -74,7 +74,7 @@ function londonOrNewYork(now = new Date()) {
  */
 function confluence({ side, htfTrend, dayBias, volExpanded, inSession, touches }) {
   const checks = [
-    { name: "1h trend", ok: Boolean(htfTrend) && (side === "BUY" ? htfTrend === "up" : htfTrend === "down") },
+    { name: "higher-timeframe trend", ok: Boolean(htfTrend) && (side === "BUY" ? htfTrend === "up" : htfTrend === "down") },
     { name: "daily bias", ok: Boolean(dayBias) && (side === "BUY" ? dayBias === "up" : dayBias === "down") },
     { name: "volatility", ok: volExpanded === true },
     { name: "session", ok: inSession === true },
@@ -96,7 +96,7 @@ function confluence({ side, htfTrend, dayBias, volExpanded, inSession, touches }
  * The signal is still returned when this fails, marked unconfirmed, so the
  * caller can hold it and the shadow book can measure what the wait was worth.
  */
-function latestBarConfirmation({ side, candles }) {
+function latestBarConfirmation({ side, candles, now = Date.now(), barMs }) {
   if (!Array.isArray(candles) || !candles.length) {
     return { ok: false, reason: "no bar to confirm the reaction" };
   }
@@ -107,11 +107,14 @@ function latestBarConfirmation({ side, candles }) {
   // instead of assumed, so this works for every timeframe the app fetches.
   const last = candles[candles.length - 1];
   const prev = candles.length > 1 ? candles[candles.length - 2] : null;
+  // The entry timeframe is passed in when known. Inferring the span from the
+  // last two bars is wrong across a weekend or a market holiday: a Monday bar
+  // would look three days long and the check would read Friday's bar instead.
+  const passedSpan = Number(barMs);
+  const inferredSpan = prev && Number(last.t) && Number(prev.t) ? Number(last.t) - Number(prev.t) : 0;
+  const span = passedSpan > 0 ? passedSpan : inferredSpan;
   let bar = last;
-  if (prev && Number(last.t) && Number(prev.t)) {
-    const span = Number(last.t) - Number(prev.t);
-    if (span > 0 && Number(last.t) + span > Date.now()) bar = prev;
-  }
+  if (span > 0 && Number(last.t) + span > now) bar = prev || last;
 
   const open = Number(bar.o);
   const close = Number(bar.c);
@@ -149,9 +152,15 @@ function evaluateSignal({
   dailyBars,
   requireHtf = false,
   minConfluence = 0,
+  at = Date.now(),
+  barMs,
+  htfTrend: htfTrendOverride,
+  dayBias: dayBiasOverride,
 }) {
   if (!Array.isArray(candles) || candles.length < 60) return null;
   if (!Number.isFinite(price)) return null;
+
+  const atMs = at instanceof Date ? at.getTime() : Number(at) || Date.now();
 
   const atr = atrValue(candles, 14) || 0;
   if (!atr) return null;
@@ -170,22 +179,24 @@ function evaluateSignal({
   const zone = candidates[0];
   const side = zone.type === "demand" ? "BUY" : "SELL";
 
-  // Higher-timeframe agreement: skip signals fighting the 1h trend.
-  const htfTrend = trendOf(htfBars);
+  // Higher-timeframe agreement: skip signals fighting the 1h trend. The lab
+  // passes the trend it computed from the full series, so the backtest and the
+  // live watcher use the same rule instead of two EMA seeds.
+  const htfTrend = htfTrendOverride !== undefined ? htfTrendOverride : trendOf(htfBars);
   if (requireHtf && htfTrend) {
     const against =
       (side === "BUY" && htfTrend === "down") || (side === "SELL" && htfTrend === "up");
     if (against) return null;
   }
 
-  const dayBias = dailyBias(dailyBars);
+  const dayBias = dayBiasOverride !== undefined ? dayBiasOverride : dailyBias(dailyBars);
   const volExpanded = volatilityExpanded(candles);
-  const inSession = londonOrNewYork();
+  const inSession = londonOrNewYork(new Date(atMs));
   const conf = confluence({ side, htfTrend, dayBias, volExpanded, inSession, touches: zone.touches });
 
   if (minConfluence > 0 && conf.score < minConfluence) return null;
 
-  const confirmation = latestBarConfirmation({ side, candles });
+  const confirmation = latestBarConfirmation({ side, candles, now: atMs, barMs });
 
   const reasons = [];
   reasons.push(`Price is INSIDE ${zone.type} zone ${zone.low.toFixed(decimals)}–${zone.high.toFixed(decimals)}`);
@@ -238,9 +249,10 @@ function evaluateSignal({
     dailyBias: dayBias,
     confluence: conf,
     reasons,
-    at: new Date().toISOString(),
-    disclaimer:
-      "Walk-forward tested: 41.1% winrate at 1:2, +0.234R per trade over 158 unseen trades. Small sample — positive but fragile. Not financial advice.",
+    at: new Date(atMs).toISOString(),
+    // The lab and the live watcher fill this from the current lab verdict; a
+    // fixed performance claim here would go stale the moment the data changes.
+    timeframe: null,
   };
 }
 

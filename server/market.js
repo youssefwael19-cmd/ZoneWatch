@@ -22,6 +22,8 @@ const fs = require("fs");
 const settings = require("./settings");
 const stateDir = require("./stateDir");
 const { writeJson } = require("./atomicWrite");
+const candles = require("./candles");
+const derivQuotes = require("./derivquotes");
 
 const DEFAULTS = {
   XAUUSD: {
@@ -155,7 +157,7 @@ const DEFAULTS = {
   },
 };
 
-const THROTTLE_MS = { twelvedata: 120000, yahoo: 5000, demo: 0 };
+const THROTTLE_MS = { twelvedata: 120000, yahoo: 5000, deriv: 5000, demo: 0 };
 const TWELVE_DAILY_LIMIT = 780; // leave headroom under 800
 
 const demoState = {
@@ -173,6 +175,12 @@ const demoState = {
 };
 
 const priceCache = new Map();
+
+// The last quote actually served per symbol, cached or not. priceCache only
+// keeps good prices, so it cannot answer "is this market showing a simulated
+// or stale number right now?". The candle-feed readout needs that answer to
+// sit next to the candle source.
+const lastQuote = new Map();
 
 /*
  * Twelve Data's free plan allows roughly 800 calls a day. This counter used to
@@ -212,7 +220,25 @@ function apiKey() {
   return process.env.TWELVE_DATA_API_KEY || settings.getKey() || "";
 }
 
+/**
+ * The Deriv instrument when this market's candles are on Deriv, else null.
+ * Quotes reuse the candle layer's exact symbol instead of keeping a second
+ * mapping that could drift away from the bars.
+ */
+function derivSymbolFor(symbol) {
+  const cfg = DEFAULTS[symbol];
+  if (!cfg) return null;
+  const chosen = candles.sourceFor(cfg.yahoo);
+  return chosen.source === "deriv" ? chosen.symbol : null;
+}
+
 function providerFor(symbol) {
+  // One series per market: when the candles are Deriv, the live price must be
+  // the identical Deriv instrument. This runs before the saved provider so a
+  // Yahoo or Twelve Data setting cannot put the two sides back on different
+  // feeds by accident.
+  if (derivSymbolFor(symbol)) return "deriv";
+
   const saved = settings.getProviders();
   if (saved && typeof saved[symbol] === "string" && saved[symbol]) {
     const chosen = saved[symbol];
@@ -230,6 +256,10 @@ function providerSymbolFor(symbol, provider) {
   const cfg = DEFAULTS[symbol];
   if (!cfg) return symbol;
   const prov = provider || providerFor(symbol);
+
+  // A saved quote symbol would put a Deriv quote on a different instrument
+  // from the Deriv candles, so the candle's own symbol wins here.
+  if (prov === "deriv") return derivSymbolFor(symbol) || symbol;
 
   const saved = settings.getSymbols();
   if (saved && typeof saved[symbol] === "string" && saved[symbol].trim()) {
@@ -383,6 +413,40 @@ async function twelveDataQuote(symbol) {
   };
 }
 
+async function derivQuote(symbol) {
+  const cfg = DEFAULTS[symbol];
+  const ticker = derivSymbolFor(symbol);
+  if (!cfg || !ticker) throw new Error(`No Deriv instrument for ${symbol}`);
+
+  const tick = await derivQuotes.getTick(ticker);
+  const price = Number(tick.price);
+  if (!Number.isFinite(price)) throw new Error(`No Deriv price for ${ticker}`);
+
+  const round = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Number(n.toFixed(cfg.decimals)) : null;
+  };
+  const marketTime = Number(tick.epoch) * 1000;
+  return {
+    symbol,
+    label: cfg.label,
+    decimals: cfg.decimals,
+    unit: cfg.unit,
+    price: round(price),
+    bid: round(tick.bid),
+    ask: round(tick.ask),
+    providerSymbol: ticker,
+    source: "deriv",
+    stale: false,
+    lastMarketUpdate: Number.isFinite(marketTime) ? new Date(marketTime).toISOString() : null,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function marketClosedMessage(message) {
+  return /market is (?:presently )?closed|presently closed|market closed/i.test(String(message || ""));
+}
+
 function errorQuote(symbol, provider, message) {
   const cfg = DEFAULTS[symbol] || {};
   return {
@@ -396,12 +460,13 @@ function errorQuote(symbol, provider, message) {
     providerSymbol: providerSymbolFor(symbol, provider),
     source: provider,
     stale: true,
+    marketClosed: marketClosedMessage(message),
     error: message,
     timestamp: new Date().toISOString(),
   };
 }
 
-async function getQuote(symbol) {
+async function readQuote(symbol) {
   const provider = providerFor(symbol);
   const now = Date.now();
   const cfgGap = DEFAULTS[symbol] && DEFAULTS[symbol].minUpdateMs;
@@ -437,6 +502,7 @@ async function getQuote(symbol) {
   try {
     if (provider === "demo") quote = demoQuote(symbol);
     else if (provider === "yahoo") quote = await yahooQuote(symbol);
+    else if (provider === "deriv") quote = await derivQuote(symbol);
     else quote = await twelveDataQuote(symbol);
   } catch (err) {
     // Fall back to the last known good price rather than showing nothing.
@@ -446,6 +512,7 @@ async function getQuote(symbol) {
         fromCache: true,
         cacheAgeMs: now - cached.at,
         warning: err.message,
+        marketClosed: marketClosedMessage(err.message),
       };
     }
     return errorQuote(symbol, provider, err.message);
@@ -453,6 +520,45 @@ async function getQuote(symbol) {
 
   if (quote.price != null) priceCache.set(symbol, { at: now, provider, quote });
   return quote;
+}
+
+/**
+ * Every served quote is remembered here, including a cached one and its
+ * warning, so the dashboard can show the real live feed rather than the
+ * configured provider. Recording happens at the one door all quotes go
+ * through, instead of at each of readQuote's return paths.
+ */
+async function getQuote(symbol) {
+  const quote = await readQuote(symbol);
+  lastQuote.set(symbol, {
+    source: quote.source,
+    providerSymbol: quote.providerSymbol,
+    fromCache: Boolean(quote.fromCache),
+    cacheAgeMs: Number.isFinite(Number(quote.cacheAgeMs)) ? Number(quote.cacheAgeMs) : 0,
+    stale: Boolean(quote.stale),
+    warning: quote.warning || quote.error || null,
+    at: Date.now(),
+  });
+  return quote;
+}
+
+/**
+ * Where one market's live price actually came from: the last served quote,
+ * or the configured provider before the first read. Secret-free.
+ */
+function quoteInfo(symbol) {
+  const seen = lastQuote.get(symbol);
+  if (seen) return seen;
+  const provider = providerFor(symbol);
+  return {
+    source: provider,
+    providerSymbol: providerSymbolFor(symbol, provider),
+    fromCache: false,
+    cacheAgeMs: 0,
+    stale: false,
+    warning: null,
+    at: null,
+  };
 }
 
 async function getQuotes(symbols) {
@@ -500,6 +606,7 @@ module.exports = {
   instrumentList,
   getQuote,
   getQuotes,
+  quoteInfo,
   providerInfo,
   testAll,
   providerFor,

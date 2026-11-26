@@ -77,18 +77,23 @@ function diagnoseMarket(facts = {}) {
   // delivery promise, so it is reported as partial rather than open.
   if (facts.labTradable === true) {
     put("lab", OPEN, facts.labVerdict ? `edge: ${facts.labVerdict}` : "edge measured");
-  } else if (facts.labTradable == null) {
-    put("lab", OPEN, "never tested — allowed until it is");
   } else if (facts.unproven) {
+    // The explicit override is a delivery promise, even when the lab has no
+    // verdict at all: the signal goes out labelled unproven.
     put("lab", PARTIAL, `${facts.labVerdict || "no measured edge"} — posted anyway, labelled unproven`);
   } else if (facts.exploreAvailable) {
-    // The lab said no, but the exploration budget is still open: the market is
-    // not silent, it is reduced to one small evidence trade.
+    // The lab said no, or has not tested the market yet, but the exploration
+    // budget is still open: the market is not silent, it is reduced to one
+    // small evidence trade.
     put(
       "lab",
       PARTIAL,
-      `${facts.labVerdict || "no measured edge"} — exploration only: one quarter-size trade to gather evidence`
+      `${facts.labTradable == null ? "not tested yet" : facts.labVerdict || "no measured edge"} — exploration only: one quarter-size trade to gather evidence`
     );
+  } else if (facts.labTradable == null) {
+    // No verdict is not a licence to trade. The old card said "allowed until it
+    // is"; that was the fail-open hole this gate exists to close.
+    put("lab", HELD, "not tested yet — held until the lab measures it");
   } else {
     put("lab", HELD, facts.labVerdict || "no measured edge");
   }

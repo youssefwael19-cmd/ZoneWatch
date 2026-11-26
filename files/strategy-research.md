@@ -83,8 +83,8 @@ currency pair with an interest differential.
 
 So the honest read: **your instruments suit trend following, which has the
 strongest evidence base; they do not suit zone scalping, which has none.** That
-matches what our own testing found — zone entries at 15-minute resolution measured
-41% at 1:2 out of sample, which is thin.
+matches what our own testing found: the app's 15-minute zone testing has not
+produced a market that clears its evidence gate.
 
 ## Caveat that matters most
 

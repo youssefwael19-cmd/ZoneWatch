@@ -7,25 +7,24 @@ Everything in this file was measured by this project, not copied from a vendor.
 - Entry: price inside an automatic supply/demand zone (order block from a
   displacement candle greater than 1.4 ATR, zone = last opposite-coloured base
   candle, broken zones discarded, overlaps merged).
+- Confirmation: the last closed bar must have finished with the trade.
 - Stop: beyond both the recent 20-bar sweep extreme and the far zone edge,
   with half an ATR of clearance.
 - Target: 2R, measured from that wider stop.
-- Higher-timeframe filter: 1-hour EMA20 vs EMA50 must agree with the direction.
+- Higher-timeframe filter: one step above the entry timeframe (default 15m →
+  1h; 5m → 30m; 1h → 4h; 4h → 1d) using EMA20 vs EMA50. Set with
+  `ENTRY_TIMEFRAME`.
 
-## Walk-forward results (tuning on early data, scoring only on unseen data)
+## Lab results (fixed live rule, no tuning grid)
 
-- 0.6R version, 6 months, 3 blocks: 44.6% win, -0.108R per trade. No edge.
-- 2R version, 1 year, 180 configurations: 41.1% win, +0.234R per trade over 158
-  unseen trades. Positive but small, wide uncertainty.
-- 2R version with 1,440 configurations and zone-quality filters: 36.5% win,
-  +0.094R. Worse than the smaller grid — evidence of overfitting.
-- 2R version across 4 instruments, 2,266 trades: 33.6% win at min confluence 0
-  (+0.009R). Requiring higher confluence scores made it worse: min 3 gave 30.3%
-  and -0.091R.
-
-Interpretation: the zone strategy is approximately break-even before costs and
-negative after spread. Confluence filters (trend, daily bias, volatility,
-session, freshness) did not improve it.
+The lab calls the live signal function and the live cost-aware resolver. It
+walks the deepest history each feed provides, one trade at a time with the live
+30-minute cooldown and 24-hour expiry, and applies spread, slippage and
+commission. As of 25 November 2026, 15m entries: none of the 11 markets cleared
+the gate. The best net result was XAUUSD at +0.089R per trade over 103 trades,
+but t = 0.74; NASDAQ was +0.063R over 59 trades. Every other market was negative
+net of modelled costs. The old grid-study numbers are retired: they measured a
+different, overlapping-trade strategy and are not evidence for this rule.
 
 ## Order flow and levels
 
@@ -44,8 +43,9 @@ session, freshness) did not improve it.
 
 A market may send signal alerts only if, on unseen data, it has at least 100
 trades, expectancy above 0.08R per trade, t-statistic of 2 or more, and at least
-one profitable block. The lab re-tests every market daily and can block a market
-that used to pass.
+two of three entry blocks positive. The lab re-tests every market daily and can
+block a market that used to pass. No verdict, or a verdict stored for another
+timeframe or rule set, means held — never allowed by default.
 
 ## Published evidence referenced
 

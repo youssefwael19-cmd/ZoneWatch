@@ -93,13 +93,130 @@ function fmtTime(mins) {
   return `${pad(h)}:${pad(m)} UTC`;
 }
 
+/* ------------------------------------------------------------------ *
+ * US cash-equity calendar
+ *
+ * The FX week is 24/5, but the Nasdaq cash session also stops on exchange
+ * holidays and closes early on three days a year. Without this the feed
+ * watchdog called a frozen Thanksgiving quote "stale" while the session clock
+ * said the market was open.
+ * ------------------------------------------------------------------ */
+
+function dateKey(date) {
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+/** Gregorian Easter Sunday, used only to place Good Friday. */
+function easterSunday(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+/** A fixed-date holiday, moved to Friday/Monday when it lands on a weekend. */
+function observedFixedDate(year, month, day) {
+  const date = new Date(Date.UTC(year, month, day));
+  const dow = date.getUTCDay();
+  if (dow === 6) date.setUTCDate(date.getUTCDate() - 1);
+  else if (dow === 0) date.setUTCDate(date.getUTCDate() + 1);
+  return date;
+}
+
+const holidayCache = new Map();
+
+function usEquityHolidayMap(year) {
+  const hit = holidayCache.get(year);
+  if (hit) return hit;
+  const map = new Map();
+  const add = (date, name) => map.set(dateKey(date), name);
+  add(observedFixedDate(year, 0, 1), "New Year's Day");
+  add(new Date(Date.UTC(year, 0, nthWeekdayOfMonth(year, 0, 1, 3))), "Martin Luther King Jr. Day");
+  add(new Date(Date.UTC(year, 1, nthWeekdayOfMonth(year, 1, 1, 3))), "Presidents' Day");
+  const goodFriday = easterSunday(year);
+  goodFriday.setUTCDate(goodFriday.getUTCDate() - 2);
+  add(goodFriday, "Good Friday");
+  add(new Date(Date.UTC(year, 4, lastWeekdayOfMonth(year, 4, 1))), "Memorial Day");
+  add(observedFixedDate(year, 5, 19), "Juneteenth");
+  add(observedFixedDate(year, 6, 4), "Independence Day");
+  add(new Date(Date.UTC(year, 8, nthWeekdayOfMonth(year, 8, 1, 1))), "Labor Day");
+  add(new Date(Date.UTC(year, 10, nthWeekdayOfMonth(year, 10, 4, 4))), "Thanksgiving");
+  add(observedFixedDate(year, 11, 25), "Christmas Day");
+  holidayCache.set(year, map);
+  return map;
+}
+
+function usEquityHoliday(date) {
+  const key = dateKey(date);
+  const year = date.getUTCFullYear();
+  // Dec 31 belongs to next year's map when New Year's Day falls on a Saturday.
+  return usEquityHolidayMap(year).get(key) || usEquityHolidayMap(year + 1).get(key) || null;
+}
+
+/** Whether the NYSE/Nasdaq cash session closes at 13:00 New York time. */
+function usEquityEarlyClose(date) {
+  if (usEquityHoliday(date)) return false;
+  const year = date.getUTCFullYear();
+  const key = dateKey(date);
+  const weekday = (d) => d.getUTCDay() >= 1 && d.getUTCDay() <= 5;
+
+  const thanksgiving = new Date(Date.UTC(year, 10, nthWeekdayOfMonth(year, 10, 4, 4)));
+  const blackFriday = new Date(thanksgiving);
+  blackFriday.setUTCDate(thanksgiving.getUTCDate() + 1);
+  if (key === dateKey(blackFriday)) return true;
+
+  const christmasEve = new Date(Date.UTC(year, 11, 24));
+  if (key === dateKey(christmasEve) && weekday(christmasEve) && weekday(new Date(Date.UTC(year, 11, 25)))) return true;
+
+  const julyThird = new Date(Date.UTC(year, 6, 3));
+  if (key === dateKey(julyThird) && weekday(julyThird) && weekday(new Date(Date.UTC(year, 6, 4)))) return true;
+
+  return false;
+}
+
+function usEquityCloseMinutes(date) {
+  if (!usEquityEarlyClose(date)) return null;
+  return isUSADst(date) ? 17 * 60 : 18 * 60; // 13:00 New York
+}
+
+/** The session open state, including exchange holidays and early closes. */
+function sessionIsOpen(def, now) {
+  if (!isOpen(def, now)) return false;
+  if (def.name !== "NASDAQ") return true;
+  if (usEquityHoliday(now)) return false;
+  const early = usEquityCloseMinutes(now);
+  if (early == null) return true;
+  const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
+  return mins < early;
+}
+
+/** The close time to display, shortened on a 13:00 New York half-day. */
+function sessionCloseMinutes(def, now) {
+  if (def.name === "NASDAQ") {
+    const early = usEquityCloseMinutes(now);
+    if (early != null) return early;
+  }
+  return def.close;
+}
+
 function getSessionStates(now = new Date()) {
   const defs = sessionDefs(now);
   return defs.map((d) => ({
     name: d.name,
-    open: isOpen(d, now),
+    open: sessionIsOpen(d, now),
     openTime: fmtTime(d.open),
-    closeTime: fmtTime(d.close),
+    closeTime: fmtTime(sessionCloseMinutes(d, now)),
   }));
 }
 
@@ -123,7 +240,7 @@ function instrumentMarketOpen(symbol, now = new Date()) {
   const name = instrumentSession(symbol);
   if (!name) return marketState(now);
   const def = sessionDefs(now).find((d) => d.name === name);
-  return def ? isOpen(def, now) : marketState(now);
+  return def ? sessionIsOpen(def, now) : marketState(now);
 }
 
 /**
@@ -135,7 +252,7 @@ function sessionOpenedAt(symbol, now = new Date()) {
   const name = instrumentSession(symbol);
   if (!name) return null;
   const def = sessionDefs(now).find((d) => d.name === name);
-  if (!def || !isOpen(def, now)) return null;
+  if (!def || !sessionIsOpen(def, now)) return null;
   const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   return dayStart + def.open * 60000;
 }
@@ -158,7 +275,7 @@ function detectSessionEvents(prevStates, now = new Date()) {
   const states = new Map();
 
   for (const d of defs) {
-    const open = isOpen(d, now);
+    const open = sessionIsOpen(d, now);
     const prev = prevStates.get(d.name);
 
     states.set(d.name, open);
@@ -172,14 +289,14 @@ function detectSessionEvents(prevStates, now = new Date()) {
         type: "open",
         at: now.toISOString(),
         time: fmtTime(d.open),
-        closeTime: fmtTime(d.close),
+        closeTime: fmtTime(sessionCloseMinutes(d, now)),
       });
     } else if (prev && !open) {
       events.push({
         name: d.name,
         type: "close",
         at: now.toISOString(),
-        time: fmtTime(d.close),
+        time: fmtTime(sessionCloseMinutes(d, now)),
         openTime: fmtTime(d.open),
       });
     }
@@ -269,6 +386,7 @@ module.exports = {
   ALWAYS_OPEN,
   weeklyOpenFor,
   getSessionStates,
+  sessionCloseMinutes,
   detectSessionEvents,
   detectMarketEvents,
   marketState,

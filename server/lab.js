@@ -1,78 +1,329 @@
 /**
- * Strategy lab — the app tests itself.
+ * Strategy lab — the app tests the rules it actually trades.
  *
- * Once per day, in the background and one market at a time, the watcher takes
- * a year of hourly candles, tunes a small grid on older data, and scores it on
- * data it has never seen (walk-forward). The verdict is written to lab.json and
- * shown in the dashboard.
+ * The first version of this lab tested a different strategy: hourly bars, a
+ * close inside a zone, and a zone-width or ATR stop. The live watcher sends 15m
+ * entries with a higher-timeframe filter, a last-bar confirmation and a sweep
+ * stop, and the paper book pays spread, slippage and commission. A verdict from
+ * the older study could not be evidence for the live rule, so this version
+ * calls signals.evaluateSignal() directly and resolves every trade with the
+ * same cost-aware resolver the brain uses.
  *
- * Crucially the app is allowed to conclude "no edge". If a market's
- * out-of-sample expectancy is not clearly positive, signal alerts for that
- * market are suppressed automatically. That is the whole point: the app decides
- * on evidence instead of enthusiasm.
+ * The rules are fixed, so there is nothing to tune. The year (or the deepest
+ * history the feed allows) is split into three out-of-sample blocks, one trade
+ * at a time, with the live 30-minute cooldown. That removes the overlapping
+ * trades that made the old t-stat look stronger than it was. The app is still
+ * allowed to conclude "no edge"; a market with no verdict is not allowed to
+ * send signals at all.
  *
- * The grid is deliberately small. A big grid finds edges that do not exist —
- * research/edge_search2.js demonstrated exactly that (1,440 configs scored
- * worse out of sample than 180).
+ * The entry timeframe is timeframes.entry(), normally 15m, and the lab records
+ * it. Every verdict also carries the exact cost model and the entry/daily
+ * series it was measured on. readLab() rebuilds those inputs from the current
+ * settings and providers and drops any verdict that no longer matches, so a
+ * spread, commission, feed or timeframe change makes old evidence untested
+ * instead of letting it stand.
+ *
+ * Research families are measured in this file but are not live rules. Their
+ * verdicts live under `research`, with their own evidence check; the live
+ * `results` bucket and tradable() never read them. The first is the NASDAQ
+ * opening-range breakout on 5m bars.
  */
 
 const fs = require("fs");
-const path = require("path");
 const { writeJson } = require("./atomicWrite");
 
 const candlesMod = require("./candles");
 const autozones = require("./autozones");
-const stopsMod = require("./stops");
-const { RULES_VERSION, labFamily, promoteLabConfigs } = require("./strategies");
+const signalsMod = require("./signals");
+const strategies = require("./strategies");
+const costsMod = require("./costs");
+const settings = require("./settings");
+const market = require("./market");
 const promotions = require("./promotions");
+const sessions = require("./sessions");
+const timeframes = require("./timeframes");
 
 const LAB_FILE = require("./stateDir").file("lab.json");
 
-const WINDOW = 200;
-const MAX_HOLD = 72;
-const FOLDS = 3;
-const MIN_TRAIN_TRADES = 15;
-
-// The evidence bar for sending a signal. Raised deliberately: a market now
-// needs a large unseen sample, a meaningful expectancy, and statistical
-// significance before the app will put it on your phone.
-const MIN_TEST_TRADES = 100; // was 20
-const MIN_EXPECTANCY = 0.08; // R per trade, was 0.02
-const MIN_TSTAT = 2; // expectancy must be ~2 standard errors from zero
-const MIN_POSITIVE_FOLDS = 1; // at least one unseen block must be profitable
-const RUN_GAP_MS = 45 * 60 * 1000; // one market every 45 minutes
+// 2: verdicts carry the exact cost model and candle sources they used. A
+// verdict stored without them cannot be checked, so the bump retires it.
+const LAB_RULES_VERSION = "live-rules-v2";
+const BLOCKS = 3;
+const MIN_TEST_TRADES = 100;
+const MIN_EXPECTANCY = 0.08; // R per trade, net of modelled costs
+const MIN_TSTAT = 2;
+const MIN_POSITIVE_FOLDS = 2;
+const RUN_GAP_MS = 45 * 60 * 1000;
 const RESULT_TTL_MS = 24 * 60 * 60 * 1000;
+const MIN_HISTORY = 600;
+const DAILY_RANGE = "10y";
 
-const GRID = [];
-for (const mult of [1.2, 1.4, 1.8]) {
-  for (const stopMode of ["zone_width", "atr"]) {
-    for (const rr of [1, 2]) GRID.push({ mult, stopMode, rr });
-  }
+// A research family is measured by the same gate but is never read by the live
+// watcher. It is stored under `research`, not `results`, so no unrelated
+// verdict can make a market tradable. The first family is the NASDAQ opening
+// range breakout: a 15-minute range from three 5m bars, the first completed 5m
+// close outside it, the range midpoint as the stop, 1R as the target, and a
+// flat exit at that session's last bar.
+const ORB_SYMBOL = "NASDAQ";
+const ORB_FAMILY = "orb";
+const ORB_TIMEFRAME = "5m";
+const ORB_RULES_VERSION = "orb-v1";
+const ORB_OPENING_BARS = 3;
+const ORB_TARGET_R = 1;
+const ORB_RULE = Object.freeze({
+  openingBars: ORB_OPENING_BARS,
+  targetR: ORB_TARGET_R,
+  stop: "opening_range_mid",
+  exit: "flat_by_close",
+  oneTradePerSession: true,
+});
+// Broker feeds carry years of 5m history. Yahoo caps 5m at 60 days, which is
+// not enough sessions for the 100-trade gate; trying the broker ranges there
+// only produces failed requests, so Yahoo starts at the range it can answer.
+const ORB_RANGES = ["2y", "1y", "6mo", "3mo", "60d"];
+const ORB_YAHOO_RANGES = ["60d", "3mo"];
+const ORB_TTL_MS = 12 * 60 * 60 * 1000;
+
+const state = {
+  running: false,
+  lastRunAt: 0,
+  lastSymbol: null,
+  error: null,
+  researchError: null,
+  burst: false,
+};
+
+function liveRuleState() {
+  const t = settings.getTradingConfig();
+  return {
+    mtfFilter: t.mtfFilter === true,
+    minConfluence: Number(t.minConfluence) || 0,
+  };
 }
 
-const state = { running: false, lastRunAt: 0, lastSymbol: null, error: null, burst: false };
+/* -------------------------- evidence gate -------------------------- */
 
+/** The cost fields a verdict is bound to. Every one must match exactly. */
+const COST_KEYS = [
+  "spread",
+  "slippage",
+  "commissionPerLot",
+  "valuePerUnit",
+  "spreadKnown",
+  "spreadSource",
+  "slippageSource",
+];
+
+function gateBar() {
+  return {
+    trades: MIN_TEST_TRADES,
+    expectancy: MIN_EXPECTANCY,
+    tStat: MIN_TSTAT,
+    positiveFolds: MIN_POSITIVE_FOLDS,
+    blocks: BLOCKS,
+  };
+}
+
+/** The cost model the next trade would pay here, and where each number came from. */
+function currentCost(symbol) {
+  const exec = settings.getExecConfig();
+  const cfg = market.DEFAULTS[symbol] || {};
+  const spread = costsMod.spreadInfo(symbol, exec);
+  const slippage = costsMod.slippageInfo(symbol, exec);
+  const known = Number.isFinite(Number(spread.units));
+  return {
+    spread: known ? Number(spread.units) : 0,
+    slippage: Number(slippage.units) || 0,
+    commissionPerLot: costsMod.costConfig(exec).commissionPerLot,
+    valuePerUnit: Number(cfg.valuePerPointPerLot) || 0,
+    spreadKnown: known,
+    spreadSource: spread.source,
+    slippageSource: slippage.source,
+  };
+}
+
+/**
+ * One requested series as this process read it. `configured*` is what the
+ * current settings pick; `provider*` is what actually answered, including a
+ * feed fallback or the deliberate long-daily Yahoo fallback.
+ */
+function seriesIdentity(ticker, interval, range) {
+  const configured = candlesMod.sourceFor(ticker);
+  const seen = candlesMod.seriesInfo(ticker, interval, range);
+  const known = Boolean(seen && seen.actualKnown);
+  return {
+    ticker,
+    interval,
+    range,
+    configuredProvider: configured.source,
+    configuredSymbol: configured.symbol || ticker,
+    provider: known ? seen.provider : null,
+    providerSymbol: known ? seen.providerSymbol : null,
+    fallback: known ? Boolean(seen.fallback) : null,
+    depthFallback: known ? Boolean(seen.depthFallback) : null,
+    actualKnown: known,
+    bars: seen ? seen.bars : null,
+  };
+}
+
+/** The candle ticker a market's series are fetched under, not the app symbol. */
+function candleTicker(symbol) {
+  const cfg = market.DEFAULTS[symbol] || {};
+  return cfg.yahoo || symbol;
+}
+
+/** Everything a verdict for this market/timeframe must still match to be reused. */
+function evidenceFor(symbol, plan, entryRange = plan.labRange) {
+  const ticker = candleTicker(symbol);
+  return {
+    rulesVersion: LAB_RULES_VERSION,
+    timeframe: plan.timeframe,
+    rules: liveRuleState(),
+    gate: gateBar(),
+    cost: currentCost(symbol),
+    entry: seriesIdentity(ticker, plan.timeframe, entryRange),
+    daily: seriesIdentity(ticker, "1d", DAILY_RANGE),
+  };
+}
+
+/** What a research-family verdict for this range must still match. */
+function researchEvidenceFor(range) {
+  const ticker = candleTicker(ORB_SYMBOL);
+  return {
+    kind: "research",
+    family: ORB_FAMILY,
+    familyVersion: ORB_RULES_VERSION,
+    timeframe: ORB_TIMEFRAME,
+    rule: { ...ORB_RULE },
+    gate: gateBar(),
+    cost: currentCost(ORB_SYMBOL),
+    entry: seriesIdentity(ticker, ORB_TIMEFRAME, range),
+  };
+}
+
+function sameFlat(stored, expected, keys) {
+  if (!stored || !expected) return false;
+  return keys.every((key) => stored[key] === expected[key]);
+}
+
+function sameSeries(stored, expected, kind) {
+  if (!stored || !expected) return false;
+  const identity = ["ticker", "interval", "range", "configuredProvider", "configuredSymbol"];
+  if (!sameFlat(stored, expected, identity)) return false;
+  // A source that was never recorded, or that silently fell back, is not the
+  // series the settings name. Both are untested, never assumed.
+  if (stored.actualKnown !== true || stored.fallback !== false) return false;
+  if (!(Number(stored.bars) > 0)) return false;
+
+  if (kind === "entry") {
+    return stored.depthFallback !== true && Number(stored.bars) >= MIN_HISTORY;
+  }
+
+  // The daily series may use the deliberate Yahoo depth fallback, but only as
+  // that explicit record. A feed fallback was already refused above.
+  if (stored.configuredProvider !== "yahoo") {
+    if (stored.provider === "yahoo" && stored.depthFallback !== true) return false;
+    if (stored.provider !== "yahoo" && stored.depthFallback === true) return false;
+  }
+  return true;
+}
+
+/**
+ * Does a stored verdict still describe the rule, costs and series this process
+ * would use now? Missing, changed or merely assumed inputs are all untested.
+ */
+function sameEvidence(stored, expected) {
+  if (!stored || !expected) return false;
+  if (stored.rulesVersion !== LAB_RULES_VERSION) return false;
+  if (stored.timeframe !== expected.timeframe) return false;
+  if (
+    !stored.rules ||
+    stored.rules.mtfFilter !== expected.rules.mtfFilter ||
+    stored.rules.minConfluence !== expected.rules.minConfluence
+  ) {
+    return false;
+  }
+  if (!sameFlat(stored.gate, expected.gate, Object.keys(expected.gate))) return false;
+  if (!sameFlat(stored.cost, expected.cost, COST_KEYS)) return false;
+  return (
+    sameSeries(stored.entry, expected.entry, "entry") &&
+    sameSeries(stored.daily, expected.daily, "daily")
+  );
+}
+
+/** The same fail-closed test for a research family, with no daily series. */
+function sameResearchEvidence(stored, expected) {
+  if (!stored || !expected) return false;
+  if (stored.kind !== expected.kind) return false;
+  if (stored.family !== expected.family) return false;
+  if (stored.familyVersion !== expected.familyVersion) return false;
+  if (stored.timeframe !== expected.timeframe) return false;
+  if (!sameFlat(stored.rule, expected.rule, Object.keys(expected.rule))) return false;
+  if (!sameFlat(stored.gate, expected.gate, Object.keys(expected.gate))) return false;
+  if (!sameFlat(stored.cost, expected.cost, COST_KEYS)) return false;
+  return sameSeries(stored.entry, expected.entry, "entry");
+}
+
+/**
+ * Read only verdicts that this process can still stand behind: same rule
+ * version, timeframe, live filters, cost model and candle sources. Anything
+ * else is treated as untested, which is what makes the gate fail closed instead
+ * of quoting yesterday's study.
+ */
 function readLab() {
   try {
     const raw = fs.readFileSync(LAB_FILE, "utf-8").trim();
-    if (!raw) return { results: {}, updatedAt: null };
+    if (!raw) return { results: {}, research: {}, updatedAt: null };
     const parsed = JSON.parse(raw);
-    // Stored verdicts from an older rule set are not reproducible: the stops
-    // were managed differently, so the R figures cannot be compared. Drop them
-    // and re-measure rather than gating alerts on numbers nobody can repeat.
-    if (parsed.rulesVersion !== RULES_VERSION) {
+    if (parsed.rulesVersion !== LAB_RULES_VERSION) {
       state.burst = true;
-      return { results: {}, updatedAt: parsed.updatedAt || null };
+      return { results: {}, research: {}, updatedAt: parsed.updatedAt || null };
     }
-    return { results: parsed.results || {}, updatedAt: parsed.updatedAt || null };
+
+    const plan = timeframes.plan(timeframes.entry());
+    const results = {};
+    let dropped = false;
+    for (const [symbol, r] of Object.entries(parsed.results || {})) {
+      const range = r && r.evidence && r.evidence.entry ? r.evidence.entry.range : null;
+      const expected =
+        range === plan.labRange || range === plan.fallbackRange
+          ? evidenceFor(symbol, plan, range)
+          : null;
+      if (r && sameEvidence(r.evidence, expected)) {
+        results[symbol] = r;
+      } else {
+        dropped = true;
+      }
+    }
+
+    const research = {};
+    for (const [key, r] of Object.entries(parsed.research || {})) {
+      const symbol = r && r.symbol;
+      const range = r && r.evidence && r.evidence.entry ? r.evidence.entry.range : null;
+      const expected =
+        key === researchKey(ORB_SYMBOL) &&
+        symbol === ORB_SYMBOL &&
+        ORB_RANGES.includes(range)
+          ? researchEvidenceFor(range)
+          : null;
+      if (r && sameResearchEvidence(r.evidence, expected)) {
+        research[key] = r;
+      } else {
+        dropped = true;
+      }
+    }
+    if (dropped) state.burst = true;
+    return { results, research, updatedAt: parsed.updatedAt || null };
   } catch {
-    return { results: {}, updatedAt: null };
+    return { results: {}, research: {}, updatedAt: null };
   }
 }
 
 function writeLab(lab) {
   try {
-    lab.rulesVersion = RULES_VERSION;
+    lab.rulesVersion = LAB_RULES_VERSION;
+    lab.timeframe = timeframes.entry();
+    lab.rules = liveRuleState();
     writeJson(LAB_FILE, lab, 2);
   } catch (err) {
     state.error = err.message;
@@ -81,119 +332,21 @@ function writeLab(lab) {
 
 /* ---------------------------- maths ---------------------------- */
 
-function atrSeries(bars, period = 14) {
-  const out = new Array(bars.length).fill(null);
-  const trs = [];
-  for (let i = 1; i < bars.length; i++) {
-    const b = bars[i];
-    const p = bars[i - 1];
-    trs.push(Math.max(b.h - b.l, Math.abs(b.h - p.c), Math.abs(b.l - p.c)));
-  }
-  let sum = 0;
-  for (let i = 0; i < period && i < trs.length; i++) sum += trs[i];
-  let value = sum / period;
-  out[period] = value;
-  for (let i = period; i < trs.length; i++) {
-    value = (value * (period - 1) + trs[i]) / period;
-    out[i + 1] = value;
-  }
-  return out;
-}
-
-function buildZones(bars, mult) {
-  const cache = new Array(bars.length).fill(null);
-  for (let i = WINDOW; i < bars.length; i++) {
-    const win = bars.slice(i - WINDOW, i + 1);
-    const detected = autozones.detectZones(win, { displacementMult: mult, maxPerSide: 4 });
-    cache[i] = detected.map((z) => ({
-      type: z.type,
-      low: z.low,
-      high: z.high,
-      touches: z.touches,
-    }));
-  }
-  return cache;
-}
-
-function simulate(bars, zones, atr, from, to, cfg) {
-  const trades = [];
-
-  for (let i = Math.max(from, WINDOW + 2); i < to; i++) {
-    const bar = bars[i];
-    const list = zones[i];
-    if (!list || !list.length) continue;
-    const a = atr[i];
-    if (!a) continue;
-
-    for (const zone of list) {
-      if (!(bar.c >= zone.low && bar.c <= zone.high)) continue;
-
-      const side = zone.type === "demand" ? "BUY" : "SELL";
-      const width = Math.max(zone.high - zone.low, a * 0.1);
-      const entry = bar.c;
-      const stop =
-        cfg.stopMode === "zone_width"
-          ? side === "BUY"
-            ? zone.low - width * 0.5
-            : zone.high + width * 0.5
-          : side === "BUY"
-            ? entry - a
-            : entry + a;
-
-      const risk = Math.abs(entry - stop);
-      if (!(risk > 0)) continue;
-      const target = side === "BUY" ? entry + risk * cfg.rr : entry - risk * cfg.rr;
-
-      // The same stop ladder the executor runs: break-even at 1R, then 0.5R
-      // behind the best price. A zone trade that stalls short of its target
-      // keeps what it earned instead of handing it all back, and the lab scores
-      // the exit the bot would actually have taken.
-      let held = stop;
-      let peakR = 0;
-      let exit = null;
-      for (let j = i + 1; j < Math.min(i + MAX_HOLD, to); j++) {
-        const b = bars[j];
-        const hitStop = side === "BUY" ? b.l <= held : b.h >= held;
-        const hitTarget = side === "BUY" ? b.h >= target : b.l <= target;
-        if (hitStop) {
-          // The stop in force at the start of the bar decides the fill.
-          exit = (side === "BUY" ? held - entry : entry - held) / risk;
-          break;
-        }
-        if (hitTarget) {
-          exit = cfg.rr;
-          break;
-        }
-        peakR = Math.max(peakR, side === "BUY" ? (b.h - entry) / risk : (entry - b.l) / risk);
-        held = stopsMod.protect({ side, entry, stop: held, peakR, initialStop: stop });
-      }
-
-      if (exit != null) {
-        trades.push(Number(exit.toFixed(4)));
-        break;
-      }
-    }
-  }
-
-  return trades;
-}
-
-/** How many standard errors the average R sits from zero. */
-function tStat(trades) {
-  const n = trades.length;
+function tStat(values) {
+  const n = values.length;
   if (n < 2) return null;
-  const mean = trades.reduce((a, b) => a + b, 0) / n;
-  const variance = trades.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1);
+  const mean = values.reduce((a, b) => a + b, 0) / n;
+  const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1);
   const sd = Math.sqrt(variance);
   if (!sd) return null;
   return Number((mean / (sd / Math.sqrt(n))).toFixed(2));
 }
 
-function summarise(trades) {
-  const n = trades.length;
+function summarise(values) {
+  const n = values.length;
   if (!n) return { n: 0, winrate: null, totalR: 0, expectancy: null };
-  const wins = trades.filter((r) => r > 0).length;
-  const totalR = trades.reduce((a, b) => a + b, 0);
+  const wins = values.filter((r) => r > 0).length;
+  const totalR = values.reduce((a, b) => a + b, 0);
   return {
     n,
     winrate: Number(((wins / n) * 100).toFixed(1)),
@@ -202,59 +355,555 @@ function summarise(trades) {
   };
 }
 
-/* ------------------------- one market -------------------------- */
+/** The one gate. Both the live rule and research families read it. */
+function gateReasons(oos, t, positiveFolds) {
+  const reasons = [];
+  if (oos.n < MIN_TEST_TRADES) reasons.push(`${oos.n} trades (needs ${MIN_TEST_TRADES})`);
+  if (oos.expectancy == null || oos.expectancy <= MIN_EXPECTANCY) {
+    reasons.push(`${oos.expectancy}R per trade net (needs above ${MIN_EXPECTANCY}R)`);
+  }
+  if (t == null || t < MIN_TSTAT) reasons.push(`t-stat ${t ?? "n/a"} (needs ${MIN_TSTAT})`);
+  if (positiveFolds < MIN_POSITIVE_FOLDS) {
+    reasons.push(`${positiveFolds}/${BLOCKS} blocks positive (needs ${MIN_POSITIVE_FOLDS})`);
+  }
+  return reasons;
+}
 
-async function evaluateMarket(symbol, candleSymbol) {
-  const bars = await candlesMod.getCandles(candleSymbol, "1h", "1y");
-  if (!bars || bars.length < 600) throw new Error("not enough history");
+function emaSeries(values, period) {
+  const k = 2 / (period + 1);
+  let prev = values[0];
+  const out = [prev];
+  for (let i = 1; i < values.length; i++) {
+    prev = values[i] * k + prev * (1 - k);
+    out.push(prev);
+  }
+  return out;
+}
 
-  const atr = atrSeries(bars, 14);
-  const zoneCache = {};
-  for (const m of [1.2, 1.4, 1.8]) zoneCache[m] = buildZones(bars, m);
-
-  const foldSize = Math.floor(bars.length / FOLDS);
-  const bounds = [0, foldSize, foldSize * 2, bars.length];
-
-  const oosTrades = [];
-  const chosen = [];
-
-  for (let k = 0; k < FOLDS - 1; k++) {
-    const trainEnd = bounds[k + 1];
-    const testEnd = bounds[k + 2];
-
-    let best = null;
-    for (const cfg of GRID) {
-      const sum = summarise(simulate(bars, zoneCache[cfg.mult], atr, 0, trainEnd, cfg));
-      if (sum.n < MIN_TRAIN_TRADES) continue;
-      if (!best || sum.expectancy > best.sum.expectancy) best = { cfg, sum };
+/**
+ * Latest bar that had closed by `at`. The live watcher sees the forming candle;
+ * a backtest must not, so a bar counts only once its whole span has passed.
+ */
+function latestClosedIndex(bars, at, span) {
+  let lo = 0;
+  let hi = bars.length - 1;
+  let best = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (bars[mid].t + span <= at) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
     }
-    if (!best) continue;
+  }
+  return best;
+}
 
-    const test = simulate(bars, zoneCache[best.cfg.mult], atr, trainEnd, testEnd, best.cfg);
-    oosTrades.push(...test);
-    chosen.push({ fold: k + 1, cfg: best.cfg, train: best.sum, test: summarise(test) });
+function trendLookup(bars, span) {
+  if (!Array.isArray(bars) || bars.length < 55) return () => null;
+  const closes = bars.map((b) => b.c);
+  const fast = emaSeries(closes, 20);
+  const slow = emaSeries(closes, 50);
+  return (at) => {
+    const j = latestClosedIndex(bars, at, span);
+    if (j < 50) return null;
+    return fast[j] > slow[j] ? "up" : fast[j] < slow[j] ? "down" : "flat";
+  };
+}
+
+function biasLookup(bars) {
+  if (!Array.isArray(bars) || bars.length < 210) return () => null;
+  const closes = bars.map((b) => b.c);
+  const fast = emaSeries(closes, 50);
+  const slow = emaSeries(closes, 200);
+  return (at) => {
+    const j = latestClosedIndex(bars, at, 24 * 60 * 60 * 1000);
+    if (j < 200) return null;
+    return fast[j] > slow[j] ? "up" : fast[j] < slow[j] ? "down" : "flat";
+  };
+}
+
+/* ------------------------- market data ------------------------- */
+
+/** Entry bars plus the exact range and source that answered for them. */
+async function labBars(candleSymbol, plan) {
+  for (const range of [plan.labRange, plan.fallbackRange]) {
+    let bars = [];
+    try {
+      bars = await candlesMod.getCandles(candleSymbol, plan.timeframe, range);
+    } catch {}
+    if (Array.isArray(bars) && bars.length >= MIN_HISTORY) {
+      return {
+        bars,
+        range,
+        info: candlesMod.seriesInfo(candleSymbol, plan.timeframe, range),
+      };
+    }
+  }
+  return { bars: [], range: plan.labRange, info: null };
+}
+
+async function safeCandles(candleSymbol, interval, range) {
+  try {
+    const bars = await candlesMod.getCandles(candleSymbol, interval, range);
+    return Array.isArray(bars) ? bars : [];
+  } catch {
+    return [];
+  }
+}
+
+/* --------------------- research: NASDAQ ORB ---------------------- */
+
+function researchKey(symbol = ORB_SYMBOL) {
+  return `${symbol}:${ORB_FAMILY}`;
+}
+
+/** Group 5m bars by the cash session that was open when each bar started. */
+function orbSessionGroups(bars) {
+  const groups = new Map();
+  (Array.isArray(bars) ? bars : []).forEach((bar, idx) => {
+    const t = Number(bar && bar.t);
+    if (!Number.isFinite(t)) return;
+    const openedAt = sessions.sessionOpenedAt(ORB_SYMBOL, new Date(t));
+    if (!openedAt) return;
+    let group = groups.get(openedAt);
+    if (!group) {
+      group = { openedAt, bars: [] };
+      groups.set(openedAt, group);
+    }
+    group.bars.push({ bar, idx });
+  });
+  for (const group of groups.values()) {
+    group.bars.sort((a, b) => a.bar.t - b.bar.t);
+  }
+  return [...groups.values()].sort((a, b) => a.openedAt - b.openedAt);
+}
+
+/**
+ * The ORB rule, applied to bars that are already in hand.
+ *
+ * A session is skipped unless it has every opening-range bar and its true last
+ * bar, so a partial current session cannot be booked as a flat-at-close trade
+ * and a holiday or a truncated feed cannot invent one. One trade per session:
+ * the first completed 5m close outside the 15-minute range wins, the midpoint
+ * is the stop, 1R is the target, and anything still open exits at the session's
+ * last close. `strategies.resolve` supplies the same spread, slippage,
+ * commission and pessimism as the live lab.
+ */
+function orbTradesFromBars(bars, costModel = null) {
+  const groups = orbSessionGroups(bars);
+  const trades = [];
+  let incomplete = 0;
+  let noBreakout = 0;
+  let unresolved = 0;
+  const span = 5 * 60 * 1000;
+
+  for (const group of groups) {
+    const date = new Date(group.openedAt);
+    const def = sessions.sessionDefs(date).find((d) => d.name === ORB_SYMBOL);
+    if (!def) {
+      incomplete += 1;
+      continue;
+    }
+    const closeMinutes = sessions.sessionCloseMinutes(def, date);
+    if (closeMinutes == null) {
+      incomplete += 1;
+      continue;
+    }
+    const openMinutes = date.getUTCHours() * 60 + date.getUTCMinutes();
+    const expectedLastSlot = Math.round((closeMinutes - openMinutes) / 5) - 1;
+    if (!(expectedLastSlot >= 3)) {
+      incomplete += 1;
+      continue;
+    }
+
+    const slots = new Map();
+    for (const item of group.bars) {
+      const offset = Number(item.bar.t) - group.openedAt;
+      const slot = Math.round(offset / span);
+      if (slot < 0 || slot > expectedLastSlot) continue;
+      if (Math.abs(offset - slot * span) > 1000) continue;
+      if (!slots.has(slot)) slots.set(slot, item);
+    }
+
+    const lastSlot = Math.max(...slots.keys());
+    if (lastSlot !== expectedLastSlot) {
+      incomplete += 1;
+      continue;
+    }
+    const first = slots.get(0);
+    const second = slots.get(1);
+    const third = slots.get(2);
+    if (!first || !second || !third) {
+      incomplete += 1;
+      continue;
+    }
+
+    const high = Math.max(first.bar.h, second.bar.h, third.bar.h);
+    const low = Math.min(first.bar.l, second.bar.l, third.bar.l);
+    const stop = (high + low) / 2;
+
+    let entryItem = null;
+    let side = null;
+    for (let slot = 3; slot < lastSlot; slot++) {
+      const item = slots.get(slot);
+      if (!item) continue;
+      if (Number(item.bar.c) > high) {
+        entryItem = item;
+        side = "BUY";
+        break;
+      }
+      if (Number(item.bar.c) < low) {
+        entryItem = item;
+        side = "SELL";
+        break;
+      }
+    }
+    if (!entryItem) {
+      noBreakout += 1;
+      continue;
+    }
+
+    const entry = Number(entryItem.bar.c);
+    const risk = side === "BUY" ? entry - stop : stop - entry;
+    if (!(risk > 0)) {
+      noBreakout += 1;
+      continue;
+    }
+    const target =
+      side === "BUY" ? entry + risk * ORB_TARGET_R : entry - risk * ORB_TARGET_R;
+    const sessionEndIdx = slots.get(lastSlot).idx;
+    const result = strategies.resolve(
+      bars,
+      entryItem.idx,
+      { side, entry, stop, target },
+      sessionEndIdx + 1,
+      costModel,
+      {
+        maxHoldBars: sessionEndIdx - entryItem.idx + 1,
+        closeAtEnd: true,
+      }
+    );
+    if (result.outcome === "open") {
+      unresolved += 1;
+      continue;
+    }
+
+    trades.push({
+      entryIndex: entryItem.idx,
+      session: date.toISOString(),
+      at: new Date(entryItem.bar.t).toISOString(),
+      side,
+      entry: Number(entry.toFixed(8)),
+      stop: Number(stop.toFixed(8)),
+      target: Number(target.toFixed(8)),
+      risk: Number(risk.toFixed(8)),
+      outcome: result.outcome,
+      r: result.r,
+      grossR: result.grossR,
+      bars: result.bars,
+      totalCostR: Number((result.grossR - result.r).toFixed(3)),
+      spreadR: Number(((Number(result.costs && result.costs.spread) || 0) / risk).toFixed(4)),
+      commissionR: Number(result.costs && result.costs.commissionR) || 0,
+    });
   }
 
-  const oos = summarise(oosTrades);
-  const t = tStat(oosTrades);
-  const positiveFolds = chosen.filter((c) => (c.test.expectancy || 0) > 0).length;
+  return { groups, trades, incomplete, noBreakout, unresolved };
+}
 
-  const reasons = [];
-  if (oos.n < MIN_TEST_TRADES) reasons.push(`${oos.n} unseen trades (needs ${MIN_TEST_TRADES})`);
-  if (oos.expectancy == null || oos.expectancy <= MIN_EXPECTANCY)
-    reasons.push(`${oos.expectancy}R per trade (needs above ${MIN_EXPECTANCY}R)`);
-  if (t == null || t < MIN_TSTAT) reasons.push(`t-stat ${t ?? "n/a"} (needs ${MIN_TSTAT})`);
-  if (positiveFolds < MIN_POSITIVE_FOLDS) reasons.push("no profitable unseen block");
+function orbBlocks(trades) {
+  const size = Math.ceil(trades.length / BLOCKS);
+  const blocks = [];
+  for (let k = 0; k < BLOCKS; k++) {
+    const slice = size ? trades.slice(k * size, (k + 1) * size) : [];
+    const net = slice.map((t) => t.r);
+    const gross = slice.map((t) => t.grossR);
+    blocks.push({
+      fold: k + 1,
+      ...summarise(net),
+      gross: summarise(gross),
+      flat: slice.filter((t) => t.outcome === "close").length,
+    });
+  }
+  return blocks;
+}
+
+/**
+ * Walk one block with the live entry rule. One position at a time, because that
+ * is what the watcher and the executor do; overlapping trades would make the
+ * sample look bigger and the t-stat stronger than the live record can be.
+ */
+function simulateBlock({ symbol, bars, from, to, plan, decimals, trading, exec, costModel, htfTrendAt, dayBiasAt }) {
+  const trades = [];
+  let i = from;
+
+  while (i < to) {
+    const bar = bars[i];
+    if (!bar || !Number.isFinite(bar.c)) {
+      i += 1;
+      continue;
+    }
+
+    const zoneStart = Math.max(0, i - plan.zoneWindow + 1);
+    const zones = autozones.detectZones(bars.slice(zoneStart, i + 1), { maxPerSide: 3 });
+    if (!zones.length) {
+      i += 1;
+      continue;
+    }
+
+    const at = Number(bar.t) + plan.minutes * 60 * 1000;
+    const candles = bars.slice(Math.max(0, i - 119), i + 1);
+    const signal = signalsMod.evaluateSignal({
+      symbol,
+      price: bar.c,
+      zones,
+      candles,
+      decimals,
+      htfBars: null,
+      dailyBars: null,
+      htfTrend: htfTrendAt(at),
+      dayBias: dayBiasAt(at),
+      requireHtf: trading.mtfFilter,
+      minConfluence: trading.minConfluence,
+      at,
+      barMs: plan.minutes * 60 * 1000,
+    });
+
+    // The watcher holds a setup whose last closed bar finished against it; it
+    // is not sent. The lab does not enter it either.
+    if (!signal || !signal.confirmation || signal.confirmation.ok !== true) {
+      i += 1;
+      continue;
+    }
+
+    // Thin stops are refused by the watcher before an order exists.
+    const thin = costsMod.thinStop({
+      symbol,
+      entry: signal.entry,
+      stop: signal.stop,
+      config: exec,
+    });
+    if (thin.thin) {
+      i += 1;
+      continue;
+    }
+
+    const risk = Math.abs(Number(signal.entry) - Number(signal.stop));
+    if (!(risk > 0)) {
+      i += 1;
+      continue;
+    }
+
+    // The same resolver the brain uses: entry half-spread and adverse
+    // slippage, exit half-spread, round-turn commission, gap fills, and the
+    // live stop ladder.
+    const result = strategies.resolve(
+      bars,
+      i,
+      { side: signal.side, entry: signal.entry, stop: signal.stop, target: signal.target },
+      to,
+      costModel,
+      { maxHoldBars: plan.maxHoldBars }
+    );
+
+    const expired = result.outcome === "open";
+    const spreadR = Number((Number(result.costs && result.costs.spread) / risk).toFixed(4));
+    const commissionR = Number(result.costs && result.costs.commissionR) || 0;
+    trades.push({
+      entryIndex: i,
+      outcome: expired ? "expired" : result.outcome,
+      r: expired ? 0 : result.r,
+      grossR: expired ? 0 : result.grossR,
+      bars: result.bars,
+      at: new Date(bar.t).toISOString(),
+      side: signal.side,
+      risk: Number(risk.toFixed(8)),
+      spreadR,
+      commissionR,
+      totalCostR: Number((spreadR + commissionR).toFixed(4)),
+    });
+
+    const held = Math.max(1, Number(result.bars) || 1);
+    // A closed trade frees the market on the next bar. An expiry frees it at
+    // the end of the 24-hour window. The live 30-minute cooldown applies to
+    // both, so the lab cannot enter more often than the watcher could.
+    const after = expired ? i + held : i + held + 1;
+    i = Math.max(after, i + plan.cooldownBars);
+  }
+
+  return trades;
+}
+
+/* ------------------------- one market -------------------------- */
+
+async function evaluateMarket(symbol, candleSymbol, timeframe = timeframes.entry()) {
+  const plan = timeframes.plan(timeframe);
+  const entry = await labBars(candleSymbol, plan);
+  const bars = entry.bars;
+  if (bars.length < MIN_HISTORY) {
+    throw new Error(`not enough ${plan.timeframe} history (${bars.length} bars)`);
+  }
+  // A fallback feed is a different market under the same ticker. The verdict
+  // would not describe the series this app actually trades, so it is refused
+  // rather than stored with a footnote nobody re-checks.
+  if (!entry.info || entry.info.actualKnown !== true) {
+    throw new Error(`entry series source unknown for ${candleSymbol} ${plan.timeframe} ${entry.range}`);
+  }
+  if (entry.info.fallback || entry.info.depthFallback) {
+    const why = entry.info.reason ? `: ${entry.info.reason}` : "";
+    throw new Error(`entry series came from a fallback feed (${entry.info.provider})${why}`);
+  }
+
+  // The lab needs the daily series to cover the entry history plus the 200-day
+  // bias warmup, and the higher timeframe to cover the whole entry history.
+  // Fetching the live watcher's one-month HTF / one-year daily ranges would
+  // leave most of the study with no filter at all, which is not the live rule.
+  let dailyBars = await safeCandles(candleSymbol, "1d", DAILY_RANGE);
+  let dailyInfo = candlesMod.seriesInfo(candleSymbol, "1d", DAILY_RANGE);
+  if (!dailyInfo || dailyInfo.actualKnown !== true) {
+    throw new Error(`daily series source unknown for ${candleSymbol} ${DAILY_RANGE}`);
+  }
+  if (dailyInfo.fallback) {
+    throw new Error(`daily series came from a fallback feed (${dailyInfo.provider})`);
+  }
+  // Some broker daily histories are only a year deep, which leaves the 50/200
+  // daily bias with almost no warmup inside the study. Yahoo keeps the long
+  // daily series for these tickers; use it only for the bias, never for
+  // entries, and record it as the explicit depth fallback it is.
+  if (dailyBars.length < 250) {
+    const reason = `broker daily history shorter than 250 bars (${dailyBars.length})`;
+    let yahooDaily = [];
+    try {
+      yahooDaily = await candlesMod.getYahooCandles(candleSymbol, "1d", DAILY_RANGE, {
+        depthFallback: true,
+        record: false,
+        reason,
+      });
+    } catch {}
+    if (yahooDaily.length > dailyBars.length) {
+      dailyBars = yahooDaily;
+      dailyInfo = {
+        ...dailyInfo,
+        provider: "yahoo",
+        providerSymbol: candleSymbol,
+        fallback: false,
+        depthFallback: true,
+        reason,
+        actualKnown: true,
+        bars: yahooDaily.length,
+      };
+    }
+  }
+  const htfBars =
+    plan.htf === "1d"
+      ? dailyBars
+      : candlesMod.aggregateBars(bars, plan.htfMinutes * 60 * 1000);
+
+  const cfg = market.DEFAULTS[symbol] || {};
+  const decimals = Number.isFinite(Number(cfg.decimals)) ? Number(cfg.decimals) : 2;
+  const exec = settings.getExecConfig();
+  const trading = settings.getTradingConfig();
+  const rules = {
+    mtfFilter: trading.mtfFilter === true,
+    minConfluence: Number(trading.minConfluence) || 0,
+  };
+
+  // One cost model for the whole study, captured now. If a setting moves while
+  // the walk is running, the verdict must name what it actually paid.
+  const cost = currentCost(symbol);
+  const costModel = {
+    spread: cost.spread,
+    slippage: cost.slippage,
+    commissionPerLot: cost.commissionPerLot,
+    valuePerUnit: cost.valuePerUnit,
+  };
+
+  const htfTrendAt = trendLookup(htfBars, plan.htfMinutes * 60 * 1000);
+  const dayBiasAt = biasLookup(dailyBars);
+
+  // Leave enough bars for the zone window and the 120-bar volatility/confirmation
+  // slice. Every block is out of sample by construction: the live rules are fixed.
+  const warmup = Math.max(plan.zoneWindow + 1, 210);
+  if (bars.length <= warmup + BLOCKS * 20) {
+    throw new Error(`not enough ${plan.timeframe} bars after warmup (${bars.length})`);
+  }
+
+  const blockSize = Math.floor((bars.length - warmup) / BLOCKS);
+  const blocks = [];
+
+  // Walk the whole series once, one trade at a time. Splitting the walk into
+  // three separate simulations would cut positions off at a fold boundary and
+  // let the next fold enter while the truncated trade was still open. The
+  // folds below are entry cohorts: a trade belongs to the third of history in
+  // which it was entered, however long it then runs.
+  const all = simulateBlock({
+    symbol,
+    bars,
+    from: warmup,
+    to: bars.length,
+    plan,
+    decimals,
+    trading,
+    exec,
+    costModel,
+    htfTrendAt,
+    dayBiasAt,
+  });
+
+  for (let k = 0; k < BLOCKS; k++) {
+    const from = warmup + k * blockSize;
+    const to = k === BLOCKS - 1 ? bars.length : from + blockSize;
+    const trades = all.filter((t) => t.entryIndex >= from && t.entryIndex < to);
+    const net = trades.map((t) => t.r);
+    const gross = trades.map((t) => t.grossR);
+    blocks.push({
+      fold: k + 1,
+      ...summarise(net),
+      gross: summarise(gross),
+      expired: trades.filter((t) => t.outcome === "expired").length,
+    });
+  }
+
+  const net = all.map((t) => t.r);
+  const gross = all.map((t) => t.grossR);
+  const oos = summarise(net);
+  const grossStats = summarise(gross);
+  const t = tStat(net);
+  const positiveFolds = blocks.filter((b) => (b.expectancy || 0) > 0).length;
+  const avgCost = all.length
+    ? Number((all.reduce((a, t) => a + (Number(t.totalCostR) || 0), 0) / all.length).toFixed(4))
+    : null;
+
+  const reasons = gateReasons(oos, t, positiveFolds);
 
   const tradable = reasons.length === 0;
+  const verdict = tradable
+    ? `edge: ${oos.winrate}% win, ${oos.expectancy}R net over ${oos.n} ${plan.timeframe} trades (t=${t}), ${positiveFolds}/${BLOCKS} blocks positive`
+    : `no edge — ${reasons.join("; ")} (${plan.timeframe}, net of modelled costs)`;
+
+  const evidence = {
+    rulesVersion: LAB_RULES_VERSION,
+    timeframe: plan.timeframe,
+    rules,
+    gate: gateBar(),
+    cost,
+    entry: { ...entry.info, actualKnown: true },
+    daily: dailyInfo,
+  };
 
   return {
     symbol,
+    timeframe: plan.timeframe,
     at: new Date().toISOString(),
+    rules,
+    evidence,
     oos,
+    gross: grossStats,
     tStat: t,
     positiveFolds,
-    chosen,
+    blocks,
+    expired: all.filter((t) => t.outcome === "expired").length,
     tradable,
     bar: {
       trades: MIN_TEST_TRADES,
@@ -262,19 +911,137 @@ async function evaluateMarket(symbol, candleSymbol) {
       tStat: MIN_TSTAT,
       positiveFolds: MIN_POSITIVE_FOLDS,
     },
-    verdict: tradable
-      ? `edge: ${oos.winrate}% , ${oos.expectancy}R per trade over ${oos.n} unseen trades (t=${t})`
-      : `no edge — ${reasons.join("; ")}`,
+    cost: {
+      spreadUnits: costModel.spread,
+      slippageUnits: costModel.slippage,
+      commissionPerLot: costModel.commissionPerLot,
+      avgSpreadCommissionR: avgCost,
+      known: cost.spreadKnown,
+    },
+    verdict,
+  };
+}
+
+/* ------------------------ research: NASDAQ ORB ------------------------ */
+
+async function orbBars(candleSymbol) {
+  const chosen = candlesMod.sourceFor(candleSymbol);
+  const ranges = chosen.source === "yahoo" ? ORB_YAHOO_RANGES : ORB_RANGES;
+  let lastError = null;
+  for (const range of ranges) {
+    let bars = [];
+    try {
+      bars = await candlesMod.getCandles(candleSymbol, ORB_TIMEFRAME, range);
+    } catch (err) {
+      lastError = err;
+    }
+    if (Array.isArray(bars) && bars.length >= MIN_HISTORY) {
+      return {
+        bars,
+        range,
+        info: candlesMod.seriesInfo(candleSymbol, ORB_TIMEFRAME, range),
+      };
+    }
+    if (!lastError) lastError = new Error(`only ${bars.length} 5m bars for ${range}`);
+  }
+  return { bars: [], range: ranges[0], info: null, error: lastError };
+}
+
+async function evaluateOrb(symbol, candleSymbol) {
+  if (symbol !== ORB_SYMBOL) throw new Error(`ORB is NASDAQ-only, not ${symbol}`);
+  const series = await orbBars(candleSymbol);
+  const bars = series.bars;
+  if (bars.length < MIN_HISTORY) {
+    const why = series.error ? `: ${series.error.message}` : "";
+    throw new Error(`not enough 5m history (${bars.length} bars)${why}`);
+  }
+  if (!series.info || series.info.actualKnown !== true) {
+    throw new Error(`entry series source unknown for ${candleSymbol} 5m ${series.range}`);
+  }
+  if (series.info.fallback || series.info.depthFallback) {
+    const why = series.info.reason ? `: ${series.info.reason}` : "";
+    throw new Error(`5m series came from a fallback feed (${series.info.provider})${why}`);
+  }
+
+  const cost = currentCost(symbol);
+  const costModel = {
+    spread: cost.spread,
+    slippage: cost.slippage,
+    commissionPerLot: cost.commissionPerLot,
+    valuePerUnit: cost.valuePerUnit,
+  };
+  const sim = orbTradesFromBars(bars, costModel);
+  const all = sim.trades;
+  const blocks = orbBlocks(all);
+  const net = all.map((t) => t.r);
+  const gross = all.map((t) => t.grossR);
+  const oos = summarise(net);
+  const grossStats = summarise(gross);
+  const t = tStat(net);
+  const positiveFolds = blocks.filter((b) => (b.expectancy || 0) > 0).length;
+  const avgCost = all.length
+    ? Number(
+        (all.reduce((a, tr) => a + (Number(tr.totalCostR) || 0), 0) / all.length).toFixed(4)
+      )
+    : null;
+  const reasons = gateReasons(oos, t, positiveFolds);
+  const tradable = reasons.length === 0;
+  const ruleLabel = "5m ORB, 15m range, 1R, flat by close";
+  const verdict = tradable
+    ? `gate passed: ${oos.winrate}% win, ${oos.expectancy}R net over ${oos.n} trades (t=${t}), ${positiveFolds}/${BLOCKS} blocks positive — research only, not live`
+    : `no edge — ${reasons.join("; ")} (${ruleLabel}, net of modelled costs)`;
+
+  return {
+    symbol,
+    family: ORB_FAMILY,
+    label: "NASDAQ opening-range breakout",
+    timeframe: ORB_TIMEFRAME,
+    researchOnly: true,
+    live: false,
+    at: new Date().toISOString(),
+    range: series.range,
+    rule: { ...ORB_RULE },
+    evidence: {
+      kind: "research",
+      family: ORB_FAMILY,
+      familyVersion: ORB_RULES_VERSION,
+      timeframe: ORB_TIMEFRAME,
+      rule: { ...ORB_RULE },
+      gate: gateBar(),
+      cost,
+      entry: { ...series.info, actualKnown: true },
+    },
+    oos,
+    gross: grossStats,
+    tStat: t,
+    positiveFolds,
+    blocks,
+    sessions: sim.groups.length,
+    tradedSessions: all.length,
+    incompleteSessions: sim.incomplete,
+    noBreakoutSessions: sim.noBreakout,
+    unresolvedTrades: sim.unresolved,
+    flat: all.filter((tr) => tr.outcome === "close").length,
+    tradable,
+    bar: gateBar(),
+    cost: {
+      spreadUnits: costModel.spread,
+      slippageUnits: costModel.slippage,
+      commissionPerLot: costModel.commissionPerLot,
+      avgCostR: avgCost,
+      known: cost.spreadKnown,
+    },
+    verdict,
   };
 }
 
 /* --------------------------- scheduling ------------------------- */
 
-async function runFor(symbol, candleSymbol) {
+async function runFor(symbol, candleSymbol, timeframe = timeframes.entry()) {
   state.running = true;
   state.lastSymbol = symbol;
   try {
-    const result = await evaluateMarket(symbol, candleSymbol);
+    const result = await evaluateMarket(symbol, candleSymbol, timeframe);
     const lab = readLab();
     lab.results[symbol] = result;
     lab.updatedAt = new Date().toISOString();
@@ -290,90 +1057,106 @@ async function runFor(symbol, candleSymbol) {
   }
 }
 
-/**
- * Called every watch cycle. Runs one stale market per RUN_GAP_MS so the app
- * keeps re-testing itself without hammering Yahoo or blocking the watcher.
- */
+async function runOrbFor(candleSymbol) {
+  state.running = true;
+  state.lastSymbol = ORB_SYMBOL;
+  try {
+    const result = await evaluateOrb(
+      ORB_SYMBOL,
+      candleSymbol || candleTicker(ORB_SYMBOL)
+    );
+    // A research run must not delete live verdicts just because this process
+    // has not fetched their series yet. Preserve the raw live bucket and let
+    // readLab() decide what is usable at read time. An older rules version is
+    // different: those verdicts belong to a rule this build no longer runs.
+    let lab = null;
+    try {
+      const raw = fs.readFileSync(LAB_FILE, "utf-8").trim();
+      if (raw) lab = JSON.parse(raw);
+    } catch {}
+    if (!lab || lab.rulesVersion !== LAB_RULES_VERSION) {
+      lab = { results: {}, updatedAt: null };
+    }
+    if (!lab.results || typeof lab.results !== "object") lab.results = {};
+    if (!lab.research || typeof lab.research !== "object") lab.research = {};
+    lab.research[researchKey(ORB_SYMBOL)] = result;
+    lab.updatedAt = new Date().toISOString();
+    writeLab(lab);
+    state.researchError = null;
+    return result;
+  } catch (err) {
+    state.researchError = `${ORB_FAMILY}: ${err.message}`;
+    return null;
+  } finally {
+    state.running = false;
+    state.lastRunAt = Date.now();
+  }
+}
+
+/** Called every watch cycle. One stale market per 45 minutes, or a burst after a rule change. */
 async function maybeRun(instruments) {
   if (state.running) return;
-  // After a rule change every market is stale at once; one per watch cycle
-  // until the backlog clears, then back to the ordinary pace.
   const gap = state.burst ? 0 : RUN_GAP_MS;
   if (Date.now() - state.lastRunAt < gap) return;
 
+  const tf = timeframes.entry();
   const lab = readLab();
   const now = Date.now();
 
   const stale = instruments.find((inst) => {
     const r = lab.results[inst.symbol];
-    if (!r) return true;
+    if (!r || r.timeframe !== tf) return true;
     return now - new Date(r.at).getTime() > RESULT_TTL_MS;
   });
+  if (stale) await runFor(stale.symbol, stale.candleSymbol, tf);
 
-  if (!stale) {
-    state.burst = false;
-    return;
+  const after = Date.now();
+  const orb = readLab().research[researchKey(ORB_SYMBOL)];
+  const orbAge = orb ? after - new Date(orb.at).getTime() : Infinity;
+  const orbStale = !orb || !Number.isFinite(orbAge) || orbAge > ORB_TTL_MS;
+  if (orbStale) {
+    const nasdaq = instruments.find((inst) => inst.symbol === ORB_SYMBOL);
+    if (nasdaq) await runOrbFor(nasdaq.candleSymbol);
   }
-  await runFor(stale.symbol, stale.candleSymbol);
+  if (!stale) state.burst = false;
 }
 
 /**
- * The configs this lab has put ahead on unseen bars, handed to the brain as
- * families it can measure everywhere. Memoised for a minute: readBrain asks
- * often, and lab.json only changes when a market finishes its test.
- *
- * Today's nominations are folded into the standing list on disk, never
- * substituted for it. A config that was promoted stays in front of the brain
- * after a later lab run stops nominating it, so the cells already measured for
- * it — and any champion it earned — are not deleted by a routine update. It
- * still has to clear the same proof bar on every measurement; stickiness keeps
- * the rule under test, it proves nothing.
+ * Existing promotions are kept as brain families. The lab itself no longer
+ * nominates grid configs: it measures one fixed rule now, so there is nothing
+ * to promote from it. Standing promotions still have to clear the brain's own
+ * proof bar.
  */
-let familyMemo = { at: 0, list: [] };
-
 function families() {
-  if (Date.now() - familyMemo.at < 60 * 1000) return familyMemo.list;
-  const nominated = promoteLabConfigs(readLab().results);
-  // promotedAt travels with the family so a coverage report can tell a market
-  // measured while the rule was under test (a missing cell there means the rule
-  // took no trades) from one measured before it was promoted (never measured).
-  const list = promotions.standings(nominated).map((entry) => ({
-    ...labFamily(entry.cfg),
+  return promotions.standings([]).map((entry) => ({
+    ...strategies.labFamily(entry.cfg),
     promotedAt: entry.firstPromotedAt || null,
   }));
-  familyMemo = { at: Date.now(), list };
-  return list;
 }
 
-/**
- * The standing promotions, read-only, for the public audit report: what each
- * promoted rule is, when it first earned its place, and the unseen record that
- * did it. `currentlyNominated` says whether today's lab run still picks it — a
- * false there is a rule kept by the list rather than by a current result, which
- * is exactly what "sticky" looks like from outside.
- */
 function standingPromotions() {
-  const nominatedIds = new Set(promoteLabConfigs(readLab().results).map((row) => row.id));
-  return promotions.standingSummary(nominatedIds);
+  return promotions.standingSummary(new Set());
 }
 
-/** Is this market allowed to send signal alerts? Unknown markets are allowed. */
+/** No verdict means no signals. Fail closed. */
 function tradable(symbol) {
-  const lab = readLab();
-  const r = lab.results[symbol];
-  if (!r) return true; // never tested yet
-  return r.tradable === true;
+  const r = readLab().results[symbol];
+  return Boolean(r && r.tradable === true);
 }
 
 function summary() {
   const lab = readLab();
   return {
     updatedAt: lab.updatedAt,
+    timeframe: timeframes.entry(),
+    rules: liveRuleState(),
     running: state.running,
     lastRunAt: state.lastRunAt ? new Date(state.lastRunAt).toISOString() : null,
     lastSymbol: state.lastSymbol,
     error: state.error,
+    researchError: state.researchError,
     results: lab.results,
+    research: lab.research,
     gate: Object.fromEntries(
       Object.entries(lab.results).map(([symbol, r]) => [symbol, r.tradable === true])
     ),
@@ -388,7 +1171,23 @@ module.exports = {
   tradable,
   summary,
   evaluateMarket,
+  runOrbFor,
+  sameEvidence,
+  sameResearchEvidence,
+  gateReasons,
+  orbSessionGroups,
+  orbTradesFromBars,
+  researchKey,
+  gateBar,
+  LAB_RULES_VERSION,
+  ORB_SYMBOL,
+  ORB_FAMILY,
+  ORB_TIMEFRAME,
+  ORB_RULES_VERSION,
+  ORB_RULE,
+  ORB_RANGES,
   MIN_EXPECTANCY,
   MIN_TEST_TRADES,
   MIN_TSTAT,
+  MIN_POSITIVE_FOLDS,
 };

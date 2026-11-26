@@ -19,6 +19,7 @@ const discordCommandMod = require("./discordcommand");
 const candlesMod = require("./candles");
 const autozones = require("./autozones");
 const signalsMod = require("./signals");
+const timeframes = require("./timeframes");
 const sessionsMod = require("./sessions");
 const tracker = require("./signaltracker");
 const recapMod = require("./recap");
@@ -308,6 +309,7 @@ function recordDecision(signal, extras = {}) {
 function fullInfo() {
   return {
     ...market.providerInfo(),
+    candleFeed: candlesMod.candleProviderInfo(),
     discord: discord.status(),
     autoZones: settings.getAutoZones(),
     signalAlerts: settings.getSignalAlerts(),
@@ -328,6 +330,7 @@ function fullInfo() {
     statusPing: statusPingInfo(),
     externalChecks: externalCheckInfo(),
     quietHours: settings.getQuietHours(),
+    entryTimeframe: timeframes.entry(),
     lab: { ...labMod.summary(), results: undefined },
     ai: { ...aiMod.status() },
     sessionAlerts: settings.getSessionAlerts(),
@@ -531,8 +534,13 @@ async function autoZonesFor(inst, price) {
     return cached;
   }
 
-  const bars = await candlesMod.getCandles(inst.candleSymbol, "15m", "5d");
-  const detected = autozones.detectZones(bars, { maxPerSide: 3 });
+  // The watcher and the lab both read the same entry timeframe and the same
+  // lookback. The full series is kept for confirmation/ATR; zones are detected
+  // on the last zoneWindow bars, exactly as the lab does at every bar.
+  const plan = timeframes.plan();
+  const bars = await candlesMod.getCandles(inst.candleSymbol, plan.timeframe, plan.entryRange);
+  const zoneBars = bars.slice(-plan.zoneWindow);
+  const detected = autozones.detectZones(zoneBars, { maxPerSide: 3 });
 
   // Candles may come from a different instrument than the quote (gold futures
   // vs spot), so shift levels onto the quoted scale.
@@ -576,6 +584,9 @@ async function buildSnapshot() {
   const instruments = market.instrumentList().filter(
     (i) => !enabledMarkets || enabledMarkets[i.symbol] !== false
   );
+  // One plan for the whole cycle: the entry timeframe, its higher-timeframe
+  // filter and the lab's timeframe can never disagree within a snapshot.
+  const entryPlan = timeframes.plan();
 
   const symbols = [...new Set(manualZones.map((z) => z.symbol))];
   for (const inst of instruments) {
@@ -708,13 +719,18 @@ async function buildSnapshot() {
       ? "daily loss limit"
       : null;
 
-  // Higher-timeframe candles: hourly for the trend filter, daily for the bias
+  // Higher-timeframe candles: one step above the entry for the trend filter,
+  // daily for the bias. For a 4h entry the step is the daily bar itself.
   const htfBySymbol = {};
   const dailyBySymbol = {};
   for (const inst of instruments) {
     if (trading.mtfFilter) {
       try {
-        htfBySymbol[inst.symbol] = await candlesMod.getCandles(inst.candleSymbol, "1h", "1mo");
+        htfBySymbol[inst.symbol] = await candlesMod.getCandles(
+          inst.candleSymbol,
+          entryPlan.htf,
+          entryPlan.htfRange
+        );
       } catch {}
     }
     try {
@@ -806,8 +822,17 @@ async function buildSnapshot() {
       dailyBars: dailyBySymbol[inst.symbol],
       requireHtf: trading.mtfFilter,
       minConfluence: trading.minConfluence,
+      barMs: entryPlan.minutes * 60 * 1000,
     });
     if (!signal) continue;
+
+    // The entry timeframe and the evidence behind it travel with the signal,
+    // so the card cannot show a 1h setup under a 15m study's verdict.
+    const labRow = labSummary.results[signal.symbol];
+    signal.timeframe = entryPlan.timeframe;
+    signal.disclaimer = labRow
+      ? labRow.verdict
+      : "not tested yet — the lab gate is holding this market";
 
     if (trading.accountSize > 0 && trading.riskPercent > 0) {
       signal.sizing = riskMod.sizePosition({
@@ -1770,16 +1795,18 @@ app.get("/api/health", (_req, res) =>
 );
 app.get("/api/instruments", (_req, res) => res.json({ ok: true, ...fullInfo() }));
 
-// Which candle feed each market actually read last. Public and secret-free,
-// because the readout is only useful if it can be seen without a password.
+// Which candle feed each market actually read last, and which feed served its
+// live price. Public and secret-free, because the readout is only useful if it
+// can be seen without a password.
 app.get("/api/candle-feeds", (_req, res) => {
   const feeds = market.instrumentList().map((inst) => ({
     symbol: inst.symbol,
     label: inst.label,
     candleSymbol: inst.candleSymbol,
     ...candlesMod.feedInfo(inst.candleSymbol),
+    quote: market.quoteInfo(inst.symbol),
   }));
-  res.json({ ok: true, feeds });
+  res.json({ ok: true, entryTimeframe: timeframes.entry(), feeds });
 });
 
 app.get("/api/watch", async (_req, res) => {
@@ -2646,8 +2673,32 @@ app.get("/api/learning", (_req, res) => {
 
 app.post("/api/lab/run", async (req, res) => {
   try {
-    const symbol = String((req.body && req.body.symbol) || "").toUpperCase();
+    if (labMod.summary().running) {
+      return res.status(409).json({
+        ok: false,
+        error: "The lab is already running — try again in a moment.",
+      });
+    }
+    const body = req.body || {};
+    const family = String(body.family || "").toLowerCase();
     const instruments = market.instrumentList();
+    if (family) {
+      if (family !== "orb") {
+        return res.status(400).json({ ok: false, error: "Unknown research family" });
+      }
+      const target = instruments.find((i) => i.symbol === labMod.ORB_SYMBOL);
+      if (!target) return res.status(400).json({ ok: false, error: "NASDAQ is not configured" });
+      const result = await labMod.runOrbFor(target.candleSymbol);
+      if (!result) {
+        return res.status(500).json({
+          ok: false,
+          error: labMod.summary().researchError || "ORB test failed",
+        });
+      }
+      return res.json({ ok: true, result });
+    }
+
+    const symbol = String(body.symbol || "").toUpperCase();
     const target = symbol
       ? instruments.find((i) => i.symbol === symbol)
       : instruments[0];
@@ -2933,6 +2984,20 @@ app.post("/api/settings", (req, res) => {
     }
     if (body.symbols && typeof body.symbols === "object") settings.setSymbols(body.symbols);
     if (body.providers && typeof body.providers === "object") settings.setProviders(body.providers);
+    if (Object.prototype.hasOwnProperty.call(body, "candleProvider")) {
+      const choice = String(body.candleProvider || "").toLowerCase();
+      if (!["auto", "deriv", "yahoo", "oanda"].includes(choice)) {
+        return res.status(400).json({
+          ok: false,
+          error: "candleProvider must be auto, deriv, yahoo or oanda",
+        });
+      }
+      settings.setCandleProvider(choice);
+      // Cached bars belong to the previous feed. A saved change must be the
+      // next thing the app reads, not something that waits for a cache expiry.
+      candlesMod.clearCache();
+      snapshotAt = 0;
+    }
 
     if (Object.prototype.hasOwnProperty.call(body, "discordWebhook")) {
       const url = String(body.discordWebhook || "").trim();

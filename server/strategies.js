@@ -524,10 +524,8 @@ const FAMILIES = [
  *    that is genuinely gone, but a lab update is not such a case.
  */
 
-const LAB_WINDOW = 200; // the same slice of history the lab walks
-const LAB_MAX_PER_SIDE = 4; // the same zone budget the lab uses
-const MIN_BLOCK_TRADES = 30; // a block smaller than this is not evidence
-const MAX_PROMOTED = 3;
+const LAB_WINDOW = 200; // the slice of history the old zone grid was tuned on
+const LAB_MAX_PER_SIDE = 4; // the zone budget those configs used
 
 /**
  * Zones as the lab sees them, at every bar, computed once per market run.
@@ -620,62 +618,6 @@ function labFamily(cfg) {
 }
 
 /**
- * Which lab configs earned a place in the brain, from the lab's own results.
- *
- * A config qualifies by winning at least one unseen block of 30+ trades, and it
- * is ranked on its *whole* unseen record — the blocks it lost count against it,
- * so a config cannot be promoted on one lucky block while losing the next.
- * Only the top few are promoted: every extra family multiplies the tests the
- * brain runs, and a long list of near-winners is how a search starts finding
- * edges that are not there.
- */
-function promoteLabConfigs(labResults) {
-  const nominated = new Set();
-  const all = new Map();
-
-  for (const [symbol, result] of Object.entries(labResults || {})) {
-    for (const fold of (result && result.chosen) || []) {
-      const cfg = fold && fold.cfg;
-      const test = fold && fold.test;
-      if (!cfg || !test) continue;
-      const n = Number(test.n) || 0;
-      const expectancy = Number(test.expectancy);
-      if (!Number.isFinite(expectancy) || n <= 0) continue;
-
-      const id = labFamilyId(cfg);
-      if (!all.has(id)) {
-        all.set(id, {
-          id,
-          cfg: { mult: cfg.mult, stopMode: cfg.stopMode, rr: cfg.rr },
-          n: 0,
-          totalR: 0,
-          markets: new Set(),
-        });
-      }
-      const row = all.get(id);
-      row.n += n;
-      row.totalR += expectancy * n;
-      row.markets.add(symbol);
-
-      if (n >= MIN_BLOCK_TRADES && expectancy > 0) nominated.add(id);
-    }
-  }
-
-  return [...nominated]
-    .map((id) => {
-      const row = all.get(id);
-      return {
-        ...row,
-        markets: [...row.markets],
-        expectancy: row.n ? Number((row.totalR / row.n).toFixed(3)) : null,
-      };
-    })
-    .filter((row) => row.expectancy != null && row.expectancy > 0)
-    .sort((a, b) => (b.expectancy - a.expectancy) || (b.n - a.n) || a.id.localeCompare(b.id))
-    .slice(0, MAX_PROMOTED);
-}
-
-/**
  * Resolve one entry forward, bar by bar, with the live stop ladder applied.
  *
  * If a single bar touches both stop and target, the stop is assumed to hit
@@ -691,9 +633,16 @@ function promoteLabConfigs(labResults) {
  *
  * `grossR` is the same walk before those charges, so a caller can report both
  * what the market gave and what the broker took.
+ *
+ * With `opts.closeAtEnd`, a trade still open when the walk reaches its last
+ * bar is closed at that bar's close (half-spread, no stop slippage) instead of
+ * being reported as an unresolved zero. The caller must set `to` and
+ * `maxHoldBars` so that the last bar is the session close it means to use.
  */
-function resolve(bars, i, trade, to, costs = null) {
-  const limit = Math.min(i + MAX_HOLD_BARS, to);
+function resolve(bars, i, trade, to, costs = null, opts = {}) {
+  const maxHold = Math.max(1, Number(opts.maxHoldBars) || MAX_HOLD_BARS);
+  const limit = Math.min(i + maxHold, to);
+  const closeAtEnd = opts.closeAtEnd === true;
   const entry = Number(trade.entry);
   const risk = Math.abs(entry - Number(trade.stop));
   if (!(risk > 0)) return { outcome: "open", r: 0, grossR: 0, bars: limit - i };
@@ -769,6 +718,19 @@ function resolve(bars, i, trade, to, costs = null) {
       initialStop: Number(trade.stop),
     });
   }
+  if (closeAtEnd && limit > i + 1) {
+    const last = bars[limit - 1];
+    const close = Number(last && last.c);
+    if (Number.isFinite(close)) {
+      const exit = buy ? close - half : close + half;
+      return settled(
+        "close",
+        exit,
+        (buy ? close - entry : entry - close) / risk,
+        limit - 1
+      );
+    }
+  }
   return { outcome: "open", r: 0, grossR: 0, bars: limit - i };
 }
 
@@ -827,9 +789,6 @@ module.exports = {
   series,
   labFamily,
   labFamilyId,
-  promoteLabConfigs,
   MAX_HOLD_BARS,
-  MAX_PROMOTED,
-  MIN_BLOCK_TRADES,
   RULES_VERSION,
 };

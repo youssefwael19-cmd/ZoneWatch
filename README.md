@@ -155,7 +155,7 @@ OANDA does not recognise also stays on Yahoo — a mapping is never guessed.
 | --- | --- |
 | `OANDA_API_TOKEN` | The only switch. With no token, every instrument reads Yahoo. |
 | `OANDA_ENVIRONMENT` | `practice` (default) or `live`. The practice host is used unless you ask for live. |
-| `CANDLE_PROVIDER=yahoo` | Force Yahoo even though a token is saved, e.g. to compare feeds for a day without deleting the token. |
+| `CANDLE_PROVIDER=yahoo` | Start on Yahoo even though a token is saved, e.g. to compare feeds for a day without deleting the token. A feed saved in Settings wins; the variable is only the default before a choice is saved. |
 
 Bars are cached for three minutes, and long ranges are paged from OANDA in
 5,000-bar requests, so a year of hourly history is complete rather than
@@ -185,9 +185,9 @@ OANDA needs an account. Deriv's market-data API does not: `ticks_history` is
 unauthenticated, so candle history can come from Deriv with no login, key or
 account of any kind.
 
-```bash
-CANDLE_PROVIDER=deriv npm start
-```
+Choose **Settings → Candle feed → Deriv**, or start once with
+`CANDLE_PROVIDER=deriv npm start`. The saved choice is what the server uses;
+the variable is only the default before a choice is saved.
 
 It speaks Deriv's public WebSocket API
 (`wss://api.derivws.com/trading/v1/options/ws/public`) and asks for
@@ -204,7 +204,19 @@ of hourly bars is about two pages.
 
 | Variable | What it does |
 | --- | --- |
-| `CANDLE_PROVIDER=deriv` | Read candles from Deriv instead of Yahoo/OANDA. |
+| `CANDLE_PROVIDER=deriv` | Default a fresh install to Deriv. The choice saved in Settings → Candle feed wins, and Deriv also quotes live prices from the same Deriv instruments. |
+
+Live quotes follow the candles. One Deriv socket stays open and subscribes to
+the same instrument the candles use (`frxXAUUSD` for gold, `OTC_NDX` for the
+Nasdaq and so on), so a market's bars and its live price are one series rather
+than two feeds joined by a basis offset. The Watch tab's feed table marks those
+markets `matched`; a market that keeps a Yahoo or Twelve Data quote is marked
+`split feeds`. The tick subscription reads a quote, bid, ask and timestamp
+only — still no account, order or proposal call.
+
+Markets that are not configured for Deriv candles keep their normal quote
+source, and a Deriv candle fetch that falls back to Yahoo is shown as a split
+rather than hidden.
 
 Deriv's socket needs a WebSocket client, which Node 22 and newer ship. On Node
 20 the provider logs one warning and falls back to Yahoo rather than failing
@@ -399,10 +411,40 @@ is not silent — it is reduced to one small evidence trade. Long days are split
 across messages rather than trimmed, and the day it last sent lives in
 `gatedigest.json` so a restart cannot double-send.
 
+## Entry timeframe
+
+`ENTRY_TIMEFRAME=5m|15m|30m|1h|4h` selects the candle interval used for entries
+and for the lab. It defaults to `15m`, and the live watcher and the lab read the
+same setting so a verdict can never describe a different rule from the one that
+sends alerts. The higher-timeframe filter is one step above the entry (5m →
+30m, 15m → 1h, 30m → 1h, 1h → 4h, 4h → 1d). Yahoo has no native 4h interval, so
+Yahoo 4h bars are aggregated from its 1h bars; Deriv and OANDA serve 4h directly.
+
+Changing the timeframe requires a restart and a fresh lab run. Stored verdicts
+carry their timeframe and rule set, and a verdict from another timeframe is
+treated as untested — which means held, not allowed.
+
+### Research families
+
+The lab can also measure a rule that is not live. The first is the NASDAQ
+opening-range breakout: three 5-minute bars make a 15-minute range, the first
+completed 5m close outside it is the entry, the range midpoint is the stop, the
+target is 1R, and anything still open exits at that session's last 5m bar. It
+pays the same modelled spread, slippage and commission and must clear the same
+100-trade, expectancy, t-stat and fold gate.
+
+Its verdict lives under `research`, not `results`, and is never read by
+`tradable()`, the brain's family list or the live watcher. A passing test is
+evidence, not permission. It records its own 5m series identity and the range it
+was actually served (2y requested; Yahoo can only serve 60d of 5m). The
+scheduler refreshes it every 12 hours, and **Test NASDAQ ORB** in the dashboard
+runs it on demand.
+
 ## Automatic zones
 
-The bot can draw its own supply and demand zones from 15-minute candles, so
-you are not starting from a blank chart.
+The bot can draw its own supply and demand zones from the configured entry
+timeframe — 15-minute candles by default — so you are not starting from a blank
+chart.
 
 How it works, in plain terms:
 
@@ -470,9 +512,10 @@ have no path and are reported as excluded, never as zeroes. This is measurement
 only; it changes no signal, stop or order.
 
 **Read this before using them.** These are mechanical confluence checks, not
-predictions. Nothing here accounts for the news, the session or what the higher
-timeframe is doing. Treat them as a prompt to look at the chart, never as a
-reason to place a trade on their own.
+predictions. The higher-timeframe filter only refuses a setup that is fighting
+the trend; it is not a forecast, and the checks do not know the news. Treat them
+as a prompt to look at the chart, never as a reason to place a trade on their
+own.
 
 ### How it decides to trade at all
 
@@ -526,37 +569,39 @@ next start), or a journal entry closed with no tracked signal behind it. Before
 this, the panels answered "how many trades" with three different numbers and
 nothing on the screen said why.
 
-### What the walk-forward testing actually found
+### What the live-rule lab actually found
 
-An early version of this scoring reported a ~63% win rate. That number came
-from one month of data the parameters had been tuned on, so it was in-sample
-and meaningless as evidence.
+The old walk-forward numbers came from a different strategy: hourly bars, a
+close inside a zone, and a grid of 180 or 1,440 configurations. They were not
+evidence for the 15-minute rule the watcher sends. The lab now calls the same
+`signals.evaluateSignal` and `strategies.resolve` as the live path: the
+configured entry timeframe, the higher-timeframe EMA20/50 filter, last-closed-bar
+confirmation, the 20-bar sweep stop, one position at a time, the 30-minute
+cooldown, 24-hour expiry, and modelled spread, slippage and commission. It walks
+three entry cohorts over the deepest history each feed provides and applies one
+fixed gate: 100+ trades, above 0.08R net per trade, t ≥ 2, and 2 of 3 blocks
+positive. There is no parameter grid and no tuning.
 
-Proper tests live in `research/`:
+As of 25 November 2026, 15m entries, Deriv candles, modelled costs:
 
-- `backtest_walkforward.js` — 6 months of 1h candles, three blocks, tune on the
-  early blocks and measure on the unseen one. The old 0.6R version scored
-  **44.6% win / -0.108R per trade** out of sample: no edge.
-- `research/edge_search.js` — 180 configurations, fixed 1:2 target, stop half a
-  zone-width beyond the far edge. Best honest result: **41.1% win rate,
-  +0.234R per trade over 158 unseen trades**.
-- `research/edge_search2.js` — 1,440 configurations with zone-quality filters.
-  Out of sample it got **worse**: 36.5% and +0.094R. More filters, less edge —
-  the signature of overfitting.
+| Market | Trades | Net R/trade | t | Positive blocks | Gate |
+| --- | ---: | ---: | ---: | ---: | --- |
+| XAUUSD | 103 | +0.089 | 0.74 | 2/3 | no edge |
+| NASDAQ | 59 | +0.063 | 0.43 | 2/3 | no edge |
+| BTCUSD | 160 | -0.097 | -1.09 | 1/3 | no edge |
+| EURUSD | 100 | -0.098 | -0.84 | 1/3 | no edge |
+| GBPUSD | 106 | -0.224 | -2.11 | 0/3 | no edge |
+| USDJPY | 105 | -0.092 | -0.81 | 1/3 | no edge |
+| AUDUSD | 107 | -0.296 | -2.85 | 1/3 | no edge |
+| USDCAD | 90 | -0.218 | -1.93 | 1/3 | no edge |
+| USDCHF | 95 | -0.258 | -2.58 | 0/3 | no edge |
+| AUDJPY | 89 | -0.157 | -1.26 | 0/3 | no edge |
+| NZDJPY | 130 | -0.195 | -2.03 | 0/3 | no edge |
 
-The live signal now uses the structure that survived: enter when price is
-inside a zone, stop half a zone width beyond the far edge, target at 2R.
-
-| Metric | Value |
-| --- | --- |
-| Trades (out of sample) | 158 |
-| Win rate | 41.1% |
-| Expectancy | **+0.234R per trade** |
-| Target | 45% at 1:2 — **not reached** |
-
-At 1:2 you need 33.4% just to break even, so 41% is positive on paper — but the
-sample is small enough that the true figure could plausibly sit anywhere from
-roughly 33% to 49%. Treat it as promising, not proven, and do not size up on it.
+None passed. XAUUSD and NASDAQ are the only positive net results; XAUUSD's
+t-statistic is far below 2, and NASDAQ has only 59 trades. The gate was not
+lowered to make either pass. A market with no current verdict — or a verdict
+from another timeframe or rule set — is **held**, not allowed.
 
 ## The assistant
 
@@ -659,8 +704,9 @@ The break-even panel turns that into a decision per market. Because spread and
 risk both scale with lot size, the two cancel: cost in R is just the spread over
 the stop distance. So the table shows what share of your risk the spread eats,
 the win rate needed to finish ahead at the app's 1:2 target, and the expectancy
-at a 41.1% win rate — measured stops come from your own closed signals, then the
-signals on the board, and an assumed stop is labelled as one.
+at the reference win rate shown in the table — measured stops come from your own
+closed signals, then the signals on the board, and an assumed stop is labelled
+as one.
 
 ### Exness, through the MT5 bridge
 

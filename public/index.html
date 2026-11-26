@@ -50,6 +50,7 @@
   .b-inside{background:rgba(255,95,95,.18);color:#ff9b9b;border:1px solid rgba(255,95,95,.45)}
   .b-approaching{background:rgba(255,200,87,.16);color:var(--warn);border:1px solid rgba(255,200,87,.45)}
   .b-near{background:rgba(34,211,238,.12);color:var(--accent);border:1px solid rgba(34,211,238,.35)}
+  .b-matched{background:rgba(95,211,163,.14);color:#7fe3b8;border:1px solid rgba(95,211,163,.42)}
   .b-far{background:rgba(139,152,166,.1);color:var(--muted);border:1px solid var(--border)}
   .b-inactive{background:transparent;color:#5c6875;border:1px dashed var(--border)}
   .t-supply{color:var(--supply);font-weight:700}
@@ -350,7 +351,7 @@
 
         <div class="panel">
           <h2>Candle feeds <span class="hint" id="candleFeedMeta" style="letter-spacing:0;text-transform:none"></span></h2>
-          <p class="hint" style="margin:-6px 0 10px">Where each market's history actually comes from, after any fallback. Zones, signals and the lab all read these bars.</p>
+          <p class="hint" style="margin:-6px 0 10px">Where each market's history actually comes from, after any fallback, next to the feed serving its live quotes. <span class="badge b-matched">matched</span> means one feed and one symbol for both; <span class="badge b-approaching">split feeds</span> means two series. Zones, signals and the lab all read the candle bars.</p>
           <div id="candleFeeds" class="empty">Checking…</div>
         </div>
 
@@ -380,12 +381,15 @@
         </div>
 
         <div class="panel">
-          <h2>Charts</h2>
+          <h2>Charts <span class="hint" id="chartMeta" style="letter-spacing:0;text-transform:none"></span></h2>
           <div class="row" style="margin-bottom:10px">
+            <button class="ghost tiny" data-chart-tf="1m">1m</button>
+            <button class="ghost tiny" data-chart-tf="5m">5m</button>
+            <button class="ghost tiny act" data-chart-tf="15m">15m</button>
             <button class="ghost" id="chartsBtn">Show charts</button>
           </div>
           <div class="charts" id="charts" style="display:none"></div>
-          <div class="hint">TradingView embeds for viewing only. Alerts come from the configured data provider.</div>
+          <div class="hint">TradingView embeds for viewing only. Alerts come from the configured data provider, on the bot's entry timeframe.</div>
         </div>
 
         <div class="panel">
@@ -885,13 +889,34 @@
     </div>
 
     <div class="panel">
+      <h2>Candle feed</h2>
+      <div class="fields">
+        <div style="grid-column:span 2">
+          <label>Feed for every market's candle history</label>
+          <select id="candleProviderSel">
+            <option value="auto">Auto — OANDA if a token is saved, else Yahoo</option>
+            <option value="deriv">Deriv — key-free, no account</option>
+            <option value="yahoo">Yahoo — key-free</option>
+            <option value="oanda">OANDA — needs OANDA_API_TOKEN</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px">
+        <button class="act" id="saveCandleProvider">Save candle feed</button>
+        <span class="pill" id="candleProviderState">…</span>
+        <span class="hint" id="candleProviderMsg"></span>
+      </div>
+      <div class="hint" id="candleProviderHint">The saved choice is what the server uses. When it is Deriv, every market's live price is forced onto the same Deriv instrument as its candles, so the per-market Source choices below are ignored while it is active.</div>
+    </div>
+
+    <div class="panel">
       <h2>Instruments &amp; sources</h2>
       <div id="instRows" class="empty">Loading…</div>
       <div class="row" style="margin-top:10px">
         <button class="ghost" id="saveInstruments">Save instruments</button>
         <span class="hint" id="instMsg"></span>
       </div>
-      <div class="hint">Gold uses Twelve Data (needs the key, spot XAU/USD). Nasdaq uses Yahoo, which gives the real index level without a key. Switch either to <span class="mono">demo</span> to test without a connection.</div>
+      <div class="hint">Gold defaults to Twelve Data (needs the key, spot XAU/USD) and Nasdaq to Yahoo, which gives the real index level without a key. Switch either to <span class="mono">demo</span> to test without a connection. These are the per-market quote sources; when the candle feed above is Deriv, every live quote is instead forced onto the same Deriv instrument as its candles, so an explicit choice here is overridden and marked as such.</div>
     </div>
 
     <div class="panel">
@@ -1065,7 +1090,7 @@
         A market with 20+ closed trades at a positive expectancy (t ≥ 1.5) may trade at half risk when no backtest rule is proven
         for it. This is the app learning from its own results, so keep it on if you want it to adapt.
       </div>
-      <div class="hint">Signals are rule-based confluence, not backtested, and not financial advice.</div>
+      <div class="hint">Signals are rule-based, measured against history by the lab, and not financial advice.</div>
       <button class="btn ghost" id="sendRecap" style="margin-top:12px">Send weekly recap now</button>
       <button class="btn ghost" id="sendDailyRecap" style="margin-top:12px">Send daily recap now</button>
       <div class="hint" id="dailyRecapMsg" style="margin-top:8px"></div>
@@ -1184,8 +1209,15 @@
 
       <h2>Strategy lab</h2>
       <div class="hint">
-        The app tests its own signals against a year of history every day — tuning on older data, scoring only on data it has
-        never seen. Signal alerts are only sent for markets where that test finds an edge. It is allowed to conclude “no edge”.
+        The lab runs the live rule — the entry timeframe, higher-timeframe filter, last-bar confirmation, sweep stop and modelled
+        spread, slippage and commission — over the deepest history the feed allows, split into three unseen blocks. There is no
+        tuning. It is allowed to conclude “no edge”, and a market with no verdict is held rather than allowed.
+      </div>
+      <div class="hint" style="margin-top:8px">
+        Research families are separate from the live rule and are never read by live signals. The NASDAQ opening-range
+        breakout uses 5-minute bars: a 15-minute range, the first completed 5m close outside it, the range midpoint as the
+        stop, a 1R target, and a flat exit at the session close. The same evidence gate decides whether it is real; even a
+        pass stays research-only here.
       </div>
       <div id="labList" style="margin-top:12px"></div>
       <div style="margin-top:14px">
@@ -1195,6 +1227,7 @@
       <div class="hint">These alerts go out even when the lab or the brain gate would block them, labelled with the reason (⚠️ UNPROVEN when the lab found no edge), so they can never be mistaken for a validated edge. Auto-trading still refuses them.</div>
       <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px">
         <button class="act" id="runLab">Test a market now</button>
+        <button class="ghost" id="runOrb">Test NASDAQ ORB</button>
         <button class="btn ghost" id="saveUnproven">Save override</button>
         <span class="hint" id="labMsg"></span>
       </div>
@@ -1249,6 +1282,7 @@ let authEnvOverrides = false;
 let gateConfigured = false;
 let soundOn = true;
 let instruments = [];
+let candleFeedInfo = null;
 let lastPrices = {};
 
 /**
@@ -2051,6 +2085,7 @@ function renderSignals(signals, stats) {
       <div class="row">
         <strong style="font-size:16px;color:${colour}">${s.side} ${s.symbol}</strong>
         <span class="badge ${badge}">${s.confidence} confidence</span>
+        ${s.timeframe ? `<span class="sub">${s.timeframe} entries</span>` : ""}
         <span class="sub">${s.score}/${s.maxScore} conditions</span>
         ${s.riskMultiplier && s.riskMultiplier < 1 ? `<span class="badge b-approaching" title="Nothing is proven for this market's current condition; the proof comes from the next-door condition, so the risk is cut to ${Math.round(s.riskMultiplier * 100)}%.">half size</span>` : ""}
       </div>
@@ -2752,34 +2787,78 @@ async function loadCandleFeeds() {
     const feeds = d.feeds || [];
     if (!feeds.length) { el.className = "empty"; el.textContent = "No markets."; return; }
 
-    const name = (p) => ({ oanda: "OANDA", deriv: "Deriv", yahoo: "Yahoo" }[p] || p);
+    const name = (p) => ({
+      oanda: "OANDA", deriv: "Deriv", yahoo: "Yahoo", twelvedata: "Twelve Data", demo: "Demo",
+    }[p] || p);
     const counts = {};
+    const priceCounts = {};
     let fallbacks = 0;
+    let matchedFeeds = 0;
+    let splitFeeds = 0;
     feeds.forEach((f) => {
       const label = name(f.provider);
       counts[label] = (counts[label] || 0) + 1;
       if (f.fallback) fallbacks++;
+      const q = f.quote || {};
+      const priceLabel = name(q.source);
+      priceCounts[priceLabel] = (priceCounts[priceLabel] || 0) + 1;
+      // A closed market has no tick, but both sides still read the same
+      // instrument; the Live price cell says "no price" separately.
+      if (q.source === f.provider && q.providerSymbol === f.providerSymbol) matchedFeeds++;
+      else splitFeeds++;
     });
+    if (d.entryTimeframe) {
+      botEntryTimeframe = d.entryTimeframe;
+      selectChartTf(botEntryTimeframe, false);
+    }
     const meta = document.getElementById("candleFeedMeta");
     if (meta) {
-      meta.textContent = Object.entries(counts).map(([p, n]) => `${p} × ${n}`).join(" · ")
-        + (fallbacks ? ` · ${fallbacks} fallback` : "");
+      meta.textContent = (d.entryTimeframe ? `entry ${d.entryTimeframe} · ` : "") + "candles: "
+        + Object.entries(counts).map(([p, n]) => `${p} × ${n}`).join(" · ")
+        + (fallbacks ? ` · ${fallbacks} fallback` : "")
+        + " — prices: "
+        + Object.entries(priceCounts).map(([p, n]) => `${p} × ${n}`).join(" · ")
+        + (matchedFeeds ? ` · ${matchedFeeds} matched` : "")
+        + (splitFeeds ? ` · ${splitFeeds} split` : "");
     }
 
     const when = (iso) => iso
       ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
       : "not read yet";
+    const age = (ms) => {
+      const minutes = Math.round(Number(ms) / 60000);
+      if (!Number.isFinite(minutes) || minutes < 1) return "just now";
+      return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;
+    };
 
     el.className = "";
-    el.innerHTML = `<table><thead><tr><th>Market</th><th>Feed</th><th>Candle symbol</th><th>Last bar</th></tr></thead><tbody>` +
+    el.innerHTML = `<table><thead><tr><th>Market</th><th>Candles</th><th>Candle symbol</th><th>Live price</th><th>Price symbol</th><th>Last bar</th></tr></thead><tbody>` +
       feeds.map((f) => {
         const badge = f.fallback
           ? `<span class="badge b-approaching" title="${botEsc(f.reason || "")}">Yahoo · fallback</span>`
           : `<span class="badge b-far" title="configured: ${botEsc(f.configured)}">${botEsc(name(f.provider))}</span>`;
+
+        const q = f.quote || {};
+        const sameFeed = Boolean(q.source) && q.source === f.provider
+          && q.providerSymbol === f.providerSymbol;
+        const served = [
+          q.at ? `served ${when(new Date(q.at).toISOString())}` : "no quote served yet",
+          q.fromCache ? `cached ${age(q.cacheAgeMs)}` : null,
+          q.warning || null,
+        ].filter(Boolean).join(" · ");
+        const priceBadge = q.stale
+          ? `<span class="badge b-inside" title="${botEsc(served)}">${botEsc(name(q.source))} · no price</span>`
+          : `<span class="badge b-far" title="${botEsc(served)}">${botEsc(name(q.source))}${q.fromCache ? " · cached" : ""}</span>`;
+        const feedBadge = sameFeed
+          ? `<span class="badge b-matched" title="Candles and live prices both read ${botEsc(name(f.provider))} ${botEsc(f.providerSymbol)} — one series.">matched</span>`
+          : `<span class="badge b-approaching" title="Candles come from ${botEsc(name(f.provider))} (${botEsc(f.providerSymbol)}), live prices from ${botEsc(name(q.source))} (${botEsc(q.providerSymbol || "—")}). Levels are shifted onto the price scale, but a different feed can still move the numbers a little.">split feeds</span>`;
+
         return `<tr>
-          <td>${botEsc(f.symbol)}</td>
+          <td>${botEsc(f.symbol)} ${feedBadge}</td>
           <td>${badge}</td>
           <td class="mono">${botEsc(f.providerSymbol)}</td>
+          <td>${priceBadge}</td>
+          <td class="mono">${botEsc(q.providerSymbol || "—")}</td>
           <td class="mono">${botEsc(when(f.lastBar))}</td>
         </tr>`;
       }).join("") + `</tbody></table>`;
@@ -2976,18 +3055,49 @@ document.getElementById("refreshNews").addEventListener("click", loadNews);
 document.getElementById("onlyHigh").addEventListener("change", loadNews);
 
 /* ---------- charts ---------- */
+// TradingView takes its interval in minutes; the bot's entry timeframes map
+// straight onto it, so the same chart can show 1m or 5m entries.
+const TV_INTERVAL = { "1m": "1", "5m": "5", "15m": "15", "30m": "30", "1h": "60", "4h": "240" };
+let chartTimeframe = "15m";
+let botEntryTimeframe = null;
+
+function chartMetaText() {
+  const meta = document.getElementById("chartMeta");
+  if (!meta) return;
+  meta.textContent = "TradingView · " + chartTimeframe +
+    (botEntryTimeframe ? " · bot entries " + botEntryTimeframe : "");
+}
+
 function tvUrl(symbol) {
   return "https://s.tradingview.com/widgetembed/?symbol=" + encodeURIComponent(symbol) +
-    "&interval=15&hidesidetoolbar=1&symboledit=1&saveimage=0&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&hideideas=1";
+    "&interval=" + encodeURIComponent(TV_INTERVAL[chartTimeframe] || "15") +
+    "&hidesidetoolbar=1&symboledit=1&saveimage=0&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&hideideas=1";
 }
+
+function renderCharts() {
+  const box = document.getElementById("charts");
+  box.innerHTML = instruments.map(i => `<iframe src="${tvUrl(i.tradingView)}" loading="lazy" title="${i.label} ${chartTimeframe} chart"></iframe>`).join("");
+  box.dataset.loaded = "1";
+  chartMetaText();
+}
+
+function selectChartTf(tf, reload) {
+  chartTimeframe = TV_INTERVAL[tf] ? tf : "15m";
+  document.querySelectorAll("[data-chart-tf]").forEach((btn) => {
+    btn.classList.toggle("act", btn.dataset.chartTf === chartTimeframe);
+  });
+  chartMetaText();
+  if (reload) renderCharts();
+}
+
+document.querySelectorAll("[data-chart-tf]").forEach((btn) =>
+  btn.addEventListener("click", () => selectChartTf(btn.dataset.chartTf, true)));
+
 document.getElementById("chartsBtn").addEventListener("click", (e) => {
   const box = document.getElementById("charts");
   if (box.style.display === "none") {
     box.style.display = "";
-    if (!box.dataset.loaded) {
-      box.innerHTML = instruments.map(i => `<iframe src="${tvUrl(i.tradingView)}" loading="lazy" title="${i.label}"></iframe>`).join("");
-      box.dataset.loaded = "1";
-    }
+    if (!box.dataset.loaded) renderCharts();
     e.target.textContent = "Hide charts";
   } else {
     box.style.display = "none";
@@ -3052,8 +3162,32 @@ document.getElementById("saveLogBtn").addEventListener("click", async () => {
 });
 
 /* ---------- settings ---------- */
+function paintCandleFeed(info) {
+  candleFeedInfo = info || null;
+  const sel = document.getElementById("candleProviderSel");
+  const state = document.getElementById("candleProviderState");
+  const hint = document.getElementById("candleProviderHint");
+  if (!sel) return;
+  const choice = (info && info.choice) || "auto";
+  sel.value = (info && info.saved) || choice;
+  const label = { auto: "auto", deriv: "Deriv", yahoo: "Yahoo", oanda: "OANDA" }[choice] || choice;
+  if (state) {
+    state.textContent = `effective: ${label}` + (
+      info && info.source === "settings" ? " · saved"
+        : info && info.source === "env" ? " · server default"
+          : ""
+    );
+  }
+  if (hint) {
+    hint.textContent = info && info.env && !info.saved
+      ? `This server starts on ${info.env} because CANDLE_PROVIDER=${info.env} is set. Saving a choice here overrides it from then on.`
+      : "The saved choice is what the server uses. When it is Deriv, every market's live price is forced onto the same Deriv instrument as its candles, so the per-market Source choices below are ignored while it is active.";
+  }
+}
+
 function paintProvider(p) {
   if (!p) return;
+  paintCandleFeed(p.candleFeed);
   const srcs = (p.instruments || []).map(i => `${i.symbol}:${i.provider}`).join(" · ");
   document.getElementById("setProvider").textContent = srcs || p.provider;
   document.getElementById("setKeyState").textContent = p.hasKey ? "key saved " + (p.keyHint || "") : "no key saved";
@@ -3105,22 +3239,75 @@ async function loadLab() {
     const box = document.getElementById("unprovenMarkets");
     if (box && document.activeElement !== box) box.value = override;
     const entries = Object.values(data.results || {});
-    if (!entries.length) {
+    const research = Object.values(data.research || {});
+    if (!entries.length && !research.length) {
       host.innerHTML = '<div class="hint">No tests yet — the first runs within the hour, or press the button below.</div>';
       return;
     }
-    host.innerHTML = entries
+    const liveHtml = entries
       .sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)))
       .map((x) => {
         const colour = x.tradable ? "#3ba55d" : "#d83c3e";
         const label = x.tradable ? "EDGE" : "NO EDGE";
+        const oos = x.oos || {};
+        const gross = x.gross || {};
+        const meta = [
+          x.timeframe || data.timeframe,
+          oos.n != null ? `${oos.n} trades` : "",
+          oos.expectancy != null ? `${oos.expectancy}R net` : "",
+          gross.expectancy != null ? `${gross.expectancy}R gross` : "",
+          x.tStat != null ? `t=${x.tStat}` : "",
+          x.positiveFolds != null ? `${x.positiveFolds}/3 blocks positive` : "",
+        ].filter(Boolean).join(" · ");
         return (
           `<div style="margin-top:10px;font-size:13px">` +
           `<strong>${x.symbol}</strong> — <span style="color:${colour};font-weight:600">${label}</span>` +
+          `<div class="hint">${meta}</div>` +
           `<div class="hint">${x.verdict}</div></div>`
         );
       })
       .join("");
+    const researchHtml = research.length
+      ? '<div style="margin-top:18px"><strong style="font-size:13px">Research families</strong>' +
+        '<div class="hint">Lab-only. These results are never read by live signals.</div>' +
+        research
+          .sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)))
+          .map((x) => {
+            const colour = x.tradable ? "#3ba55d" : "#d83c3e";
+            const label = x.tradable ? "PASSES GATE — NOT LIVE" : "NO EDGE";
+            const oos = x.oos || {};
+            const meta = [
+              x.timeframe || "5m",
+              x.range ? `${x.range} requested` : "",
+              x.evidence && x.evidence.entry && x.evidence.entry.bars
+                ? `${x.evidence.entry.bars} 5m bars`
+                : "",
+              x.sessions != null ? `${x.sessions} sessions` : "",
+              oos.n != null ? `${oos.n} trades` : "",
+              oos.expectancy != null ? `${oos.expectancy}R net` : "",
+              x.tStat != null ? `t=${x.tStat}` : "",
+              x.positiveFolds != null ? `${x.positiveFolds}/3 blocks positive` : "",
+              x.flat != null ? `${x.flat} flat at close` : "",
+            ].filter(Boolean).join(" · ");
+            return (
+              `<div style="margin-top:10px;font-size:13px">` +
+              `<strong>${x.symbol} · ${String(x.family || "research").toUpperCase()}</strong> — ` +
+              `<span style="color:${colour};font-weight:600">${label}</span>` +
+              `<div class="hint">${meta}</div>` +
+              `<div class="hint">${x.verdict}</div>` +
+              `<div class="hint">Research only — this result is not wired to live signals.</div></div>`
+            );
+          })
+          .join("") +
+        "</div>"
+      : "";
+    const researchError = data.researchError
+      ? `<div class="hint" style="color:#d83c3e;margin-top:10px">ORB: ${data.researchError}</div>`
+      : "";
+    const emptyResearch = entries.length && !research.length
+      ? '<div class="hint" style="margin-top:14px">No research family tested yet — use Test NASDAQ ORB.</div>'
+      : "";
+    host.innerHTML = liveHtml + researchHtml + researchError + emptyResearch;
   } catch {
     /* leave whatever is on screen */
   }
@@ -3553,6 +3740,26 @@ document.getElementById("runLab").addEventListener("click", async () => {
   }
 });
 
+const runOrbButton = document.getElementById("runOrb");
+if (runOrbButton) {
+  runOrbButton.addEventListener("click", async () => {
+    const msg = document.getElementById("labMsg");
+    msg.textContent = "Testing NASDAQ ORB — fetching 5m history…";
+    try {
+      const res = await fetch("/api/lab/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ family: "orb", symbol: "NASDAQ" }),
+      });
+      const data = await res.json();
+      msg.textContent = data.ok ? `NASDAQ ORB: ${data.result.verdict}` : data.error || "Failed";
+      loadLab();
+    } catch (err) {
+      msg.textContent = "Failed: " + err.message;
+    }
+  });
+}
+
 document.getElementById("saveMarkets").addEventListener("click", async () => {
   const msg = document.getElementById("marketsMsg");
   const markets = {};
@@ -3652,13 +3859,22 @@ function renderInstruments() {
   el.className = "";
   const opts = (sel) => ["auto", "yahoo", "twelvedata", "demo"]
     .map(p => `<option value="${p}"${sel === p ? " selected" : ""}>${p}</option>`).join("");
-  el.innerHTML = `<table><thead><tr><th>Instrument</th><th>Source</th><th>Symbol</th><th>Live</th></tr></thead><tbody>` +
-    instruments.map(i => `<tr>
+  const derivFeed = candleFeedInfo && candleFeedInfo.choice === "deriv";
+  const banner = derivFeed
+    ? `<div class="hint" style="margin:0 0 10px;color:#ffcf8a">Deriv is the candle feed: every market's live price is forced onto the same Deriv instrument as its candles. An explicit Source choice below is ignored while this is active.</div>`
+    : "";
+  el.innerHTML = banner + `<table><thead><tr><th>Instrument</th><th>Source</th><th>Symbol</th><th>Live</th></tr></thead><tbody>` +
+    instruments.map(i => {
+      const overridden = derivFeed && i.providerSetting && !["auto", "deriv"].includes(i.providerSetting);
+      return `<tr>
       <td>${i.label}</td>
-      <td><select data-prov="${i.symbol}">${opts(i.providerSetting || "auto")}</select></td>
+      <td><select data-prov="${i.symbol}">${opts(i.providerSetting || "auto")}</select>
+        ${overridden ? `<div class="hint" style="margin-top:4px;color:#ffcf8a">overridden → ${i.provider} ${i.providerSymbol || ""}</div>` : ""}
+      </td>
       <td><input data-sym="${i.symbol}" value="${i.providerSymbol || ""}" spellcheck="false" /></td>
       <td class="mono">${i.provider === "demo" ? "demo" : (lastPrices[i.symbol] ?? "—")}</td>
-    </tr>`).join("") + `</tbody></table>`;
+    </tr>`;
+    }).join("") + `</tbody></table>`;
 }
 
 document.getElementById("saveInstruments").addEventListener("click", async () => {
@@ -3679,6 +3895,25 @@ document.getElementById("saveInstruments").addEventListener("click", async () =>
     msg.textContent = "Saved. Press Test connection.";
     refreshWatch();
   } catch (err) { msg.textContent = err.message; }
+});
+
+document.getElementById("saveCandleProvider").addEventListener("click", async () => {
+  const msg = document.getElementById("candleProviderMsg");
+  const choice = document.getElementById("candleProviderSel").value;
+  msg.textContent = "Saving…";
+  try {
+    const d = await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candleProvider: choice })
+    });
+    paintProvider(d.provider);
+    msg.textContent = "Saved. The next candle fetch uses this feed.";
+    // Read a fresh quote with the new provider before drawing the feed table,
+    // so its Live price column does not keep showing the previous source.
+    await refreshWatch();
+    loadCandleFeeds();
+  } catch (err) { msg.textContent = "Failed: " + err.message; }
 });
 
 async function loadSettings() {
@@ -4287,6 +4522,7 @@ function paintRecoveryHint() {
 /** Everything behind the password: settings, keys, execution, deliveries. */
 function loadLockedPanels() {
   loadSettings();
+  loadLab();
   loadAiStatus();
   loadDeliveries();
   loadWebSearchStatus();

@@ -137,6 +137,24 @@ function setProviders(providers) {
   write(stored);
 }
 
+/**
+ * The candle feed chosen in Settings. "" means no choice has been saved yet,
+ * which lets CANDLE_PROVIDER act as the default for a fresh install.
+ */
+function getCandleProvider() {
+  const stored = read();
+  const value = String(stored.candleProvider || "").toLowerCase();
+  return ["auto", "deriv", "yahoo", "oanda"].includes(value) ? value : "";
+}
+
+function setCandleProvider(provider) {
+  const stored = read();
+  const value = String(provider || "").toLowerCase();
+  if (["auto", "deriv", "yahoo", "oanda"].includes(value)) stored.candleProvider = value;
+  else delete stored.candleProvider;
+  write(stored);
+}
+
 /** Discord webhook URL for alert delivery. */
 function getDiscord() {
   const stored = read();
@@ -859,6 +877,8 @@ module.exports = {
   setSymbols,
   getProviders,
   setProviders,
+  getCandleProvider,
+  setCandleProvider,
   getDiscord,
   setDiscord,
   getDiscordChannels,
