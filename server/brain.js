@@ -29,6 +29,7 @@ const regime = require("./regime");
 const settings = require("./settings");
 const costsMod = require("./costs");
 const market = require("./market");
+const sessions = require("./sessions");
 const { FAMILIES, runFamily, RULES_VERSION } = require("./strategies");
 const labMod = require("./lab");
 
@@ -79,7 +80,19 @@ const RUN_GAP_MS = 30 * 60 * 1000;
 const ADJACENT_MULTIPLE = 0.5;
 const TTL_MS = 24 * 60 * 60 * 1000;
 
-const state = { running: false, lastRunAt: 0, lastSymbol: null, error: null, burst: false };
+const state = {
+  running: false,
+  lastRunAt: 0,
+  lastSymbol: null,
+  error: null,
+  burst: false,
+  // Which inputs this process has already re-measured against, so a rule or
+  // feed change can queue those markets again instead of trusting numbers
+  // produced by the old ones.
+  signature: null,
+  tried: new Set(),
+  errors: {},
+};
 
 /**
  * Every rule the brain tests: the hand-written library plus whatever the lab has
@@ -105,18 +118,26 @@ function familiesNow() {
   }
 }
 
-function readBrain() {
+/** The file as written, including verdicts this build no longer trusts. */
+function readBrainRaw() {
   try {
     const raw = fs.readFileSync(FILE, "utf-8").trim();
-    if (!raw) return { results: {}, updatedAt: null, invalidatedAt: null, measuredFor: null };
-    const parsed = JSON.parse(raw);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readBrain() {
+  try {
+    const parsed = readBrainRaw();
+    if (!parsed) return { results: {}, updatedAt: null, invalidatedAt: null, measuredFor: null };
 
     // A stored verdict from an older rule set is not reproducible, so it is
     // dropped rather than left to gate a live alert on a number nobody can
     // measure again. The markets are then re-tested back to back instead of
     // waiting a day for the ordinary schedule to reach them.
     if (parsed.rulesVersion !== RULES_VERSION || parsed.barVersion !== BAR_VERSION) {
-      state.burst = true;
       // The numbers are gone, so the build that produced them is not "already
       // measured" either: the next start marks this build stale.
       return {
@@ -353,6 +374,11 @@ async function evaluateMarket(symbol, candleSymbol, opts = {}) {
     symbol,
     at: new Date().toISOString(),
     bars: bars.length,
+    // The inputs this measurement was taken on. Recorded so a later provider
+    // switch or rule-list change can be detected from the file instead of
+    // leaving a verdict that describes a feed no longer being used.
+    series: entrySeries(candleSymbol),
+    families: families.map((f) => f.id),
     costs,
     current: ctx.current,
     champions,
@@ -387,9 +413,11 @@ async function runFor(symbol, candleSymbol) {
     brain.updatedAt = new Date().toISOString();
     writeBrain(brain);
     state.error = null;
+    delete state.errors[symbol];
     return result;
   } catch (err) {
     state.error = `${symbol}: ${err.message}`;
+    state.errors[symbol] = err.message;
     return null;
   } finally {
     state.running = false;
@@ -414,6 +442,215 @@ function isStale(result, brain, now = Date.now()) {
   return Number.isFinite(invalidated) ? at < invalidated : false;
 }
 
+/* ------------------- what a verdict was measured on ------------------- */
+
+/**
+ * The hourly series a market's verdict was measured on, recorded with the
+ * result. Same shape the lab records, so both readouts name a feed the same
+ * way.
+ */
+function entrySeries(candleSymbol) {
+  const configured = candlesMod.sourceFor(candleSymbol);
+  const seen = candlesMod.seriesInfo(candleSymbol, "1h", "1y");
+  const known = Boolean(seen && seen.actualKnown);
+  return {
+    ticker: candleSymbol,
+    interval: "1h",
+    range: "1y",
+    configuredProvider: configured.source,
+    configuredSymbol: configured.symbol || candleSymbol,
+    provider: known ? seen.provider : null,
+    providerSymbol: known ? seen.providerSymbol : null,
+    fallback: known ? Boolean(seen.fallback) : null,
+    actualKnown: known,
+    bars: seen ? seen.bars : null,
+  };
+}
+
+const SERIES_KEYS = [
+  "ticker",
+  "interval",
+  "range",
+  "configuredProvider",
+  "configuredSymbol",
+  "provider",
+  "providerSymbol",
+  "fallback",
+];
+
+function sameSeries(a, b) {
+  if (!a || !b) return false;
+  return SERIES_KEYS.every((key) => a[key] === b[key]);
+}
+
+// Only the inputs that change the numbers: the spread came from the configured
+// table, not a live snapshot, so an equal model is an equal cost.
+const COST_KEYS = ["spread", "slippage", "commissionPerLot", "valuePerUnit"];
+
+function sameCosts(a, b) {
+  if (!a || !b) return false;
+  return COST_KEYS.every((key) => Number(a[key] || 0) === Number(b[key] || 0));
+}
+
+/** The rule ids this build tests, in order — a promotion changes this list. */
+function familyIds(families = familiesNow()) {
+  return families.map((f) => f.id);
+}
+
+/** Which rules appeared or disappeared since a verdict was measured. */
+function familyDifference(was, want) {
+  if (!Array.isArray(was)) return "rule list changed";
+  const had = new Set(was);
+  const has = new Set(want || []);
+  const added = (want || []).filter((id) => !had.has(id));
+  const removed = was.filter((id) => !has.has(id));
+  if (!added.length && !removed.length) return null;
+  const bits = [];
+  if (added.length) bits.push(`added ${added.join(", ")}`);
+  if (removed.length) bits.push(`removed ${removed.join(", ")}`);
+  return `rule list changed (${bits.join("; ")})`;
+}
+
+/** The inputs the next run for this market would record. */
+function expectedFor(inst, families = familiesNow()) {
+  return {
+    series: entrySeries(inst.candleSymbol),
+    families: familyIds(families),
+    costs: costModelFor(inst.symbol),
+  };
+}
+
+/** Does a stored verdict describe the inputs this build is using now? */
+function meetsCurrent(stored, expected) {
+  if (!stored || !expected) return false;
+  if (!stored.series || !sameSeries(stored.series, expected.series)) return false;
+  if (familyDifference(stored.families, expected.families)) return false;
+  return sameCosts(stored.costs, expected.costs);
+}
+
+/**
+ * Does this market need measuring? Either the clock or the build retired its
+ * verdict (isStale), or the verdict describes a feed, rule list or cost model
+ * that is no longer the one in force.
+ */
+function needsMeasure(inst, brain, families, now = Date.now()) {
+  const stored = brain.results[inst.symbol];
+  if (isStale(stored, brain, now)) return true;
+  return !meetsCurrent(stored, expectedFor(inst, families));
+}
+
+/**
+ * Every input that changes a verdict, as one string. When it changes — a rules
+ * bump, a promotion, a provider switch — markets this process already
+ * re-measured did so under the old inputs, so they queue again.
+ */
+function signatureFor(instruments) {
+  const families = familiesNow()
+    .map((f) => `${f.id}${f.promoted ? "+" : ""}`)
+    .join(",");
+  const feeds = instruments.map(
+    (inst) => `${inst.symbol}:${inst.candleSymbol}:${candlesMod.sourceFor(inst.candleSymbol).source}`
+  );
+  return [RULES_VERSION, BAR_VERSION, "1h", "1y", families, ...feeds].join("|");
+}
+
+/**
+ * Why a market has no verdict this build will use, naming the input that moved
+ * rather than saying "not measured". `kept` is the verdict readBrain() accepted,
+ * `stored` is whatever the file holds, and `expected` is what the next run would
+ * record now.
+ */
+function whyUnmeasured({
+  stored,
+  kept,
+  expected,
+  rulesVersion,
+  barVersion,
+  invalidatedAt,
+  now = Date.now(),
+}) {
+  if (rulesVersion && rulesVersion !== RULES_VERSION) {
+    return `rules changed (${rulesVersion} → ${RULES_VERSION})`;
+  }
+  if (barVersion && barVersion !== BAR_VERSION) {
+    return `bar rules changed (v${barVersion} → v${BAR_VERSION})`;
+  }
+
+  const rec = kept || stored;
+  if (!rec) return "never measured";
+
+  if (kept) {
+    const age = now - new Date(kept.at).getTime();
+    if (Number.isFinite(age) && age > TTL_MS) {
+      return `verdict is ${Math.round(age / 3600000)}h old`;
+    }
+  }
+
+  const marked = invalidatedAt ? new Date(invalidatedAt).getTime() : NaN;
+  const at = new Date(rec.at).getTime();
+  if (Number.isFinite(marked) && Number.isFinite(at) && at < marked) {
+    return "measured before the last build change";
+  }
+
+  const want = expected || {};
+  if (!rec.series) return "measured before the feed was recorded";
+  if (!sameSeries(rec.series, want.series)) {
+    const was = rec.series;
+    const now2 = want.series || {};
+    if (was.range !== now2.range || was.configuredProvider !== now2.configuredProvider) {
+      return `entry series changed (${was.range}/${was.configuredProvider} → ${now2.range}/${now2.configuredProvider})`;
+    }
+    if (was.provider !== now2.provider || was.fallback !== now2.fallback) {
+      return `entry feed changed (${was.provider} → ${now2.provider})`;
+    }
+    return "entry series changed";
+  }
+
+  const families = familyDifference(rec.families, want.families);
+  if (families) return families;
+  if (!sameCosts(rec.costs, want.costs)) return "cost model changed";
+  return null;
+}
+
+/**
+ * Every market with nothing usable behind it, and why. The brain fails closed,
+ * so an unmeasured market has no champion and no gate; this answers "is that a
+ * closed market, a feed change, or just the queue?" — `reason` names the input
+ * that retired the last verdict, `open` says whether the market is trading now,
+ * and `error` is the last failure this process hit while measuring it.
+ */
+function pendingReport(instruments = market.instrumentList()) {
+  const raw = readBrainRaw();
+  const brain = readBrain();
+  const families = familiesNow();
+  const now = Date.now();
+  const rows = [];
+
+  for (const inst of instruments) {
+    const kept = brain.results[inst.symbol] || null;
+    const stored = raw && raw.results ? raw.results[inst.symbol] || null : null;
+    const reason = whyUnmeasured({
+      stored,
+      kept,
+      expected: expectedFor(inst, families),
+      rulesVersion: raw ? raw.rulesVersion : null,
+      barVersion: raw ? raw.barVersion : null,
+      invalidatedAt: brain.invalidatedAt || null,
+      now,
+    });
+    if (!reason) continue;
+    rows.push({
+      symbol: inst.symbol,
+      reason,
+      open: sessions.instrumentMarketOpen(inst.symbol),
+      storedAt: stored ? stored.at || null : null,
+      error: state.errors[inst.symbol] || null,
+    });
+  }
+
+  return rows;
+}
+
 /**
  * A new build is a reason to doubt every measurement, so mark them all stale.
  *
@@ -431,7 +668,6 @@ function markStale(markerValue) {
   brain.invalidatedAt = at;
   brain.measuredFor = markerValue || null;
   writeBrain(brain);
-  state.burst = true;
   return { changed: true, invalidatedAt: at, measuredFor: brain.measuredFor };
 }
 
@@ -599,23 +835,38 @@ function status(symbols) {
   };
 }
 
-/** One stale market per RUN_GAP_MS, like the lab. */
+/**
+ * Called every watch cycle. Every market with nothing usable behind it is
+ * measured back to back, once each, instead of one per half hour; the ordinary
+ * gap only applies when nothing is actually stale.
+ */
 async function maybeRun(instruments = []) {
   if (state.running) return;
-  // After a rule change every market is stale at once, so the usual one-market-
-  // per-half-hour pace would leave the gate silent for most of a day. One per
-  // watch cycle until the backlog is gone, then back to the normal gap.
-  const gap = state.burst ? 0 : RUN_GAP_MS;
-  if (Date.now() - state.lastRunAt < gap) return;
 
-  const brain = readBrain();
-  const stale = instruments.find((inst) => isStale(brain.results[inst.symbol], brain));
-  if (!stale) {
-    state.burst = false;
-    return;
+  const signature = signatureFor(instruments);
+  if (signature !== state.signature) {
+    // A fresh process, a rule change, a promotion or a provider switch: markets
+    // this process already re-measured did so on different inputs, so they
+    // queue again.
+    state.signature = signature;
+    state.tried.clear();
   }
 
-  await runFor(stale.symbol, stale.candleSymbol);
+  const brain = readBrain();
+  const families = familiesNow();
+  const stale = instruments.filter((inst) => needsMeasure(inst, brain, families));
+
+  // A market that fails is recorded in state.errors and not retried until the
+  // inputs change again, so a broken feed cannot spin the brain.
+  const fresh = stale.filter((inst) => !state.tried.has(inst.symbol));
+  state.burst = fresh.length > 0;
+  if (fresh.length) {
+    const target = fresh[0];
+    state.tried.add(target.symbol);
+    await runFor(target.symbol, target.candleSymbol);
+  } else if (stale.length && Date.now() - state.lastRunAt >= RUN_GAP_MS) {
+    await runFor(stale[0].symbol, stale[0].candleSymbol);
+  }
 }
 
 /**
@@ -800,6 +1051,11 @@ function summary() {
     lastRunAt: state.lastRunAt ? new Date(state.lastRunAt).toISOString() : null,
     lastSymbol: state.lastSymbol,
     error: state.error,
+    bursting: state.burst,
+    // Markets with no verdict this build will use, each with the reason. An
+    // empty list means every market is measured; `open:false` says a closure,
+    // not a broken feed, is in play.
+    pending: pendingReport(),
     // Every rule currently being tested, so a lab candidate is never invisible.
     families: familiesNow().map((f) => ({ id: f.id, name: f.name, promoted: Boolean(f.promoted) })),
     conditions: rows,
@@ -875,6 +1131,12 @@ module.exports = {
   costModelFor,
   cellReport,
   isStale,
+  needsMeasure,
+  whyUnmeasured,
+  pendingReport,
+  entrySeries,
+  signatureFor,
+  TTL_MS,
   status,
   gate,
   proofFor,

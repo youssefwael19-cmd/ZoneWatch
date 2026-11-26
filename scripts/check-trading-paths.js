@@ -584,6 +584,152 @@ check("a new build marks every measurement stale, the same build does not", () =
   assert.strictEqual(brain.isStale(null, {}), true, "nothing measured is stale");
 });
 
+check("a verdict from another feed, rule list or cost model needs re-measuring", () => {
+  const inst = { symbol: "EURUSD", candleSymbol: "EURUSD=X" };
+  const families = [{ id: "trend", name: "Trend" }];
+  const costs = brain.costModelFor(inst.symbol);
+  const good = {
+    at: new Date().toISOString(),
+    series: brain.entrySeries(inst.candleSymbol),
+    families: ["trend"],
+    costs,
+  };
+  // Whatever this machine is configured for, a *different* feed is the point.
+  const otherFeed = good.series.configuredProvider === "deriv" ? "yahoo" : "deriv";
+  const file = (result) => ({ results: result ? { EURUSD: result } : {}, invalidatedAt: null });
+
+  assert.strictEqual(brain.needsMeasure(inst, file(good), families), false, "a current verdict was called stale");
+  assert.strictEqual(brain.needsMeasure(inst, file(null), families), true, "a missing verdict was called current");
+  assert.strictEqual(
+    brain.needsMeasure(inst, file({ ...good, series: { ...good.series, configuredProvider: otherFeed } }), families),
+    true,
+    "a verdict from another feed was trusted"
+  );
+  assert.strictEqual(
+    brain.needsMeasure(inst, file({ ...good, families: ["trend", "breakout"] }), families),
+    true,
+    "a verdict from another rule list was trusted"
+  );
+  assert.strictEqual(
+    brain.needsMeasure(inst, file({ ...good, costs: { ...costs, spread: Number(costs.spread || 0) + 1 } }), families),
+    true,
+    "a verdict from another cost model was trusted"
+  );
+  assert.strictEqual(
+    brain.needsMeasure(
+      inst,
+      file({ ...good, at: new Date(Date.now() - brain.TTL_MS - 1000).toISOString() }),
+      families
+    ),
+    true,
+    "an expired verdict was trusted"
+  );
+});
+
+check("a provider or market switch changes the brain signature", () => {
+  const candles = require("../server/candles");
+  const a = [{ symbol: "EURUSD", candleSymbol: "EURUSD=X" }];
+  const b = [{ symbol: "EURUSD", candleSymbol: "frxEURUSD" }];
+  const source = candles.sourceFor(a[0].candleSymbol).source;
+  const signature = brain.signatureFor(a);
+
+  assert.strictEqual(signature, brain.signatureFor([...a]), "the same inputs produced a different signature");
+  assert.ok(
+    signature.includes(`${a[0].symbol}:${a[0].candleSymbol}:${source}`),
+    `the signature does not carry the feed, so a switch could not re-arm it: ${signature}`
+  );
+  assert.notStrictEqual(
+    signature,
+    brain.signatureFor(b),
+    "an unchanged signature would not re-arm when the feed changed"
+  );
+});
+
+check("an unmeasured brain market names the input that moved", () => {
+  const inst = { symbol: "EURUSD", candleSymbol: "EURUSD=X" };
+  const expected = {
+    series: brain.entrySeries(inst.candleSymbol),
+    families: ["trend"],
+    costs: brain.costModelFor(inst.symbol),
+  };
+  const base = {
+    expected,
+    rulesVersion: strategies.RULES_VERSION,
+    barVersion: brain.BAR_VERSION,
+    invalidatedAt: null,
+  };
+  const rec = (patch = {}) => ({
+    at: new Date().toISOString(),
+    series: expected.series,
+    families: ["trend"],
+    costs: expected.costs,
+    ...patch,
+  });
+  const otherFeed = expected.series.configuredProvider === "deriv" ? "yahoo" : "deriv";
+
+  assert.strictEqual(
+    brain.whyUnmeasured({ ...base, stored: rec(), kept: rec() }),
+    null,
+    "a usable verdict was reported as pending"
+  );
+  assert.strictEqual(
+    brain.whyUnmeasured({ ...base, stored: null, kept: null }),
+    "never measured",
+    "a market that was never measured got another reason"
+  );
+  assert.ok(
+    /rules changed/.test(brain.whyUnmeasured({ ...base, stored: rec(), kept: null, rulesVersion: "v0" })),
+    "a rules bump was not named"
+  );
+  assert.ok(
+    /bar rules changed/.test(brain.whyUnmeasured({ ...base, stored: rec(), kept: null, barVersion: 1 })),
+    "a bar-rules bump was not named"
+  );
+
+  const expired = rec({ at: new Date(Date.now() - brain.TTL_MS - 3600000).toISOString() });
+  assert.ok(/h old/.test(brain.whyUnmeasured({ ...base, kept: expired })), "an expired verdict was not named");
+  assert.strictEqual(
+    brain.whyUnmeasured({ ...base, kept: rec(), invalidatedAt: new Date(Date.now() + 1000).toISOString() }),
+    "measured before the last build change",
+    "a verdict from before the last build was not named"
+  );
+
+  const noSeries = rec();
+  delete noSeries.series;
+  assert.strictEqual(
+    brain.whyUnmeasured({ ...base, stored: noSeries }),
+    "measured before the feed was recorded",
+    "a verdict with no recorded feed was not named"
+  );
+
+  const feed = brain.whyUnmeasured({
+    ...base,
+    stored: rec({ series: { ...expected.series, configuredProvider: otherFeed } }),
+  });
+  assert.ok(/entry series changed/.test(feed), `feed change reason was ${feed}`);
+  assert.ok(feed.includes(otherFeed), `the reason did not name the old feed: ${feed}`);
+
+  // A rule promoted since the measurement is "added"; one dropped is "removed".
+  const added = brain.whyUnmeasured({
+    ...base,
+    stored: rec(),
+    expected: { ...expected, families: ["trend", "breakout"] },
+  });
+  assert.ok(/rule list changed \(added breakout\)/.test(added), `promotion reason was ${added}`);
+
+  const removed = brain.whyUnmeasured({ ...base, stored: rec({ families: ["trend", "breakout"] }) });
+  assert.ok(/rule list changed \(removed breakout\)/.test(removed), `removal reason was ${removed}`);
+
+  assert.strictEqual(
+    brain.whyUnmeasured({
+      ...base,
+      stored: rec({ costs: { ...expected.costs, spread: Number(expected.costs.spread || 0) + 1 } }),
+    }),
+    "cost model changed",
+    "a cost change was not named"
+  );
+});
+
 /* --------------------------- gate digest --------------------------- */
 
 const NO_EDGE = {

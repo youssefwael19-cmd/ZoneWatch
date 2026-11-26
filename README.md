@@ -568,6 +568,21 @@ clears any bar. Twenty identical trades could have been called proven. A sample
 with no spread now returns no t-statistic at all, and `BAR_VERSION` was raised so
 cells judged under the old number are re-measured rather than trusted.
 
+A measurement records the hourly series, the rule list and the cost model it was
+taken on, and a market is re-measured when any of those stops matching what the
+build is using now — a provider switch, a promoted or removed rule, a new cost
+model or a new build. Every affected market is measured back to back, one per
+watch cycle, instead of one per half hour: a redeploy that retires all eleven
+refills in minutes, not half a day. A market that fails is tried once per change
+with its error kept, so a broken feed cannot spin the brain.
+
+`/api/brain` reports that in `pending`: one row per market with no usable
+verdict, the `reason` (`entry series changed (1y/deriv → 1y/yahoo)`, `rule list
+changed (added lab_orb)`, `measured before the last build change`, `never
+measured`), `open` for whether the market is trading now, and `error` for the
+last failure while measuring it. An empty `pending` means every market has a
+verdict the build stands behind.
+
 ### Which book a number came from
 
 Three things happen to a signal and they are counted separately, everywhere:
