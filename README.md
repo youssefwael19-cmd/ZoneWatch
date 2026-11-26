@@ -440,10 +440,16 @@ history than the range implies. The dashboard shows it as `data from → to`, so
 `/api/lab` reports that state in `pending`: one row per market with no usable
 verdict, the `reason` (for example `entry series changed (60d/yahoo → 1y/deriv)`,
 `rules changed (...)`, `never measured`), `open` for whether the market is
-trading right now — a holiday shows as `open: false` rather than as a feed
-fault — and `error` for the last failure while measuring it. An empty `pending`
-means every market has a verdict this build stands behind. The dashboard shows
-the same list under **Not measured**.
+trading right now — a holiday or a broker break shows as `open: false` rather
+than as a feed fault, and `closedBy` says whether the session calendar or the
+broker's own quote closed it — and `error` for the last failure while measuring
+it. An empty `pending` means every market has a verdict this build stands
+behind. The dashboard shows the same list under **Not measured**.
+
+`/api/audit` carries the daily guard's own account of itself:
+`gates.guard.contributors` lists the signals that resolved today, in the order
+they closed, with their side, outcome and R, whether the alert was delivered or
+held (and the held reason), and which of them the loss limit counted.
 
 ### Research families
 

@@ -2552,7 +2552,21 @@ app.get("/api/audit", async (_req, res) => {
       ? {
           checkedAt: snap.checkedAt,
           blockReason: snap.blockReason || null,
-          guard: snap.guard ? { stop: Boolean(snap.guard.stop), reason: snap.guard.reason } : null,
+          guard: snap.guard
+            ? {
+                stop: Boolean(snap.guard.stop),
+                reason: snap.guard.reason || null,
+                state: snap.guard.state || null,
+                // Which resolved signals the count came from, delivered or held,
+                // so a stop is a named list rather than a bare number.
+                contributors: guardMod.contributors(
+                  tracker.load().history,
+                  new Date(),
+                  guardResetAt,
+                  journal.readJournal().entries
+                ),
+              }
+            : null,
           blackout: snap.blackout ? { active: Boolean(snap.blackout.active) } : null,
           feed: snap.feed || null,
           signals: (snap.signals || []).length,

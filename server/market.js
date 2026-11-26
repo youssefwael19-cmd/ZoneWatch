@@ -536,6 +536,10 @@ async function getQuote(symbol) {
     fromCache: Boolean(quote.fromCache),
     cacheAgeMs: Number.isFinite(Number(quote.cacheAgeMs)) ? Number(quote.cacheAgeMs) : 0,
     stale: Boolean(quote.stale),
+    // Remembered so the lab's pending readout can say "market closed" for a
+    // broker closure the calendar does not know about (a daily break, a
+    // provider holiday), instead of insisting the market is open.
+    marketClosed: Boolean(quote.marketClosed),
     warning: quote.warning || quote.error || null,
     at: Date.now(),
   });
@@ -556,8 +560,25 @@ function quoteInfo(symbol) {
     fromCache: false,
     cacheAgeMs: 0,
     stale: false,
+    marketClosed: false,
     warning: null,
     at: null,
+  };
+}
+
+/**
+ * Is this market open, judged by the session calendar and the broker's own
+ * word? The calendar knows the exchange hours; only the quote provider knows
+ * its daily break or a holiday it observes, and a closed feed is a closed
+ * market even when the calendar says otherwise. `quote` is injectable so the
+ * rule can be checked without a live feed.
+ */
+function openState(symbol, calendarOpen, quote = quoteInfo(symbol)) {
+  const brokerClosed = Boolean(quote && quote.marketClosed);
+  const open = Boolean(calendarOpen) && !brokerClosed;
+  return {
+    open,
+    closedBy: calendarOpen && brokerClosed ? "broker" : calendarOpen ? null : "calendar",
   };
 }
 
@@ -607,6 +628,7 @@ module.exports = {
   getQuote,
   getQuotes,
   quoteInfo,
+  openState,
   providerInfo,
   testAll,
   providerFor,

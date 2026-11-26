@@ -65,4 +65,43 @@ function check({ history, maxLosses, maxLossR, ignoredBefore, now = new Date() }
   return { stop: false, reason: null, state };
 }
 
-module.exports = { check, todayState, dayKey };
+/**
+ * The resolved signals today's count came from, in the order they closed.
+ *
+ * A stop that says "4 losing signals" without naming them cannot be checked,
+ * and it cannot be told apart from a bug. `journal` is optional: when supplied,
+ * each row says whether the alert was delivered or held and why it was held.
+ * `counted` marks the outcomes the loss limit actually counted.
+ */
+function contributors(history, now = new Date(), ignoredBefore, journal) {
+  const key = dayKey(now);
+  const since = ignoredBefore ? Date.parse(ignoredBefore) : NaN;
+  const byId = new Map(
+    (Array.isArray(journal) ? journal : []).filter((e) => e && e.id).map((e) => [e.id, e])
+  );
+
+  return (history || [])
+    .filter(
+      (h) =>
+        typeof h.closedAt === "string" &&
+        h.closedAt.slice(0, 10) === key &&
+        (!Number.isFinite(since) || Date.parse(h.closedAt) >= since)
+    )
+    .map((h) => {
+      const entry = byId.get(h.id) || null;
+      return {
+        symbol: h.symbol || null,
+        side: h.side || null,
+        outcome: h.outcome || null,
+        rMultiple: h.rMultiple == null ? null : Number(h.rMultiple),
+        closedAt: h.closedAt,
+        // null when no journal row matches: unknown, not "held".
+        delivered: entry ? entry.status !== "held" : null,
+        heldReason: entry && entry.heldReason ? entry.heldReason : null,
+        counted: h.outcome === "loss",
+      };
+    })
+    .sort((a, b) => String(a.closedAt).localeCompare(String(b.closedAt)));
+}
+
+module.exports = { check, todayState, dayKey, contributors };

@@ -20,6 +20,7 @@ const audit = require("../server/audit");
 const brain = require("../server/brain");
 const locks = require("../server/locks");
 const gatedigest = require("../server/gatedigest");
+const guard = require("../server/guard");
 const paperreview = require("../server/paperreview");
 const buildInfo = require("../server/buildinfo");
 
@@ -752,6 +753,52 @@ check("an unmeasured brain market names the input that moved", () => {
     "cost model changed",
     "a cost change was not named"
   );
+});
+
+check("a broker closure reads as closed even when the calendar disagrees", () => {
+  const market = require("../server/market");
+  assert.deepEqual(market.openState("NASDAQ", true, { marketClosed: true }), {
+    open: false,
+    closedBy: "broker",
+  });
+  assert.deepEqual(market.openState("NASDAQ", true, { marketClosed: false }), {
+    open: true,
+    closedBy: null,
+  });
+  assert.deepEqual(market.openState("NASDAQ", false, { marketClosed: true }), {
+    open: false,
+    closedBy: "calendar",
+  });
+  assert.deepEqual(market.openState("NASDAQ", false, null), { open: false, closedBy: "calendar" });
+});
+
+check("the daily guard names the signals it counted", () => {
+  const now = new Date("2026-11-26T23:00:00.000Z");
+  const history = [
+    { id: "a", symbol: "EURUSD", side: "SELL", outcome: "loss", rMultiple: -1, closedAt: "2026-11-26T10:00:00.000Z" },
+    { id: "b", symbol: "BTCUSD", side: "BUY", outcome: "win", rMultiple: 0.6, closedAt: "2026-11-26T12:00:00.000Z" },
+    { id: "c", symbol: "AUDUSD", side: "BUY", outcome: "loss", rMultiple: -1, closedAt: "2026-11-25T10:00:00.000Z" },
+    { id: "d", symbol: "GBPUSD", side: "SELL", outcome: "loss", rMultiple: -1, closedAt: "2026-11-26T09:00:00.000Z" },
+  ];
+  const journal = [
+    { id: "a", status: "held", heldReason: "no proven rule" },
+    { id: "b", status: "delivered" },
+  ];
+
+  const rows = guard.contributors(history, now, "2026-11-26T09:30:00.000Z", journal);
+  assert.equal(rows.length, 2, "yesterday and pre-reset signals must not be counted");
+  assert.equal(rows[0].symbol, "EURUSD");
+  assert.equal(rows[0].delivered, false);
+  assert.equal(rows[0].heldReason, "no proven rule");
+  assert.equal(rows[0].counted, true);
+  assert.equal(rows[1].symbol, "BTCUSD");
+  assert.equal(rows[1].delivered, true);
+  assert.equal(rows[1].counted, false);
+
+  // Without a journal row, delivery is unknown rather than assumed held.
+  const unknown = guard.contributors(history, now, null, []);
+  assert.equal(unknown[0].delivered, null);
+  assert.equal(unknown.length, 3, "today's three closed signals should be listed");
 });
 
 /* --------------------------- gate digest --------------------------- */

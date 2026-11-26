@@ -2552,7 +2552,11 @@ async function loadBrain() {
             .map((p) => {
               const bits = [
                 p.reason,
-                p.open === false ? "market closed" : "",
+                p.open === false
+                  ? p.closedBy === "broker"
+                    ? "market closed (broker)"
+                    : "market closed"
+                  : "",
                 p.error ? `last error: ${p.error}` : "",
               ].filter(Boolean);
               return `<div><strong>${p.symbol}</strong> — ${bits.join(" · ")}</div>`;
@@ -3343,7 +3347,11 @@ async function loadLab() {
           .map((p) => {
             const bits = [
               p.reason,
-              p.open === false ? "market closed" : "",
+              p.open === false
+                ? p.closedBy === "broker"
+                  ? "market closed (broker)"
+                  : "market closed"
+                : "",
               p.error ? `last error: ${p.error}` : "",
             ].filter(Boolean);
             return `<div class="hint" style="margin-top:6px"><strong>${p.symbol}</strong> — ${bits.join(" · ")}</div>`;
