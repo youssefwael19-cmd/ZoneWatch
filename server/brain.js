@@ -653,12 +653,12 @@ function pendingReport(instruments = market.instrumentList()) {
       // The calendar knows the session; only the broker knows its own breaks
       // and holidays. A market it says is closed is closed, whatever the
       // calendar believes.
-      const state = market.openState(inst.symbol, sessions.instrumentMarketOpen(inst.symbol));
+      const openness = market.openState(inst.symbol, sessions.instrumentMarketOpen(inst.symbol));
       rows.push({
         symbol: inst.symbol,
         reason,
-        open: state.open,
-        closedBy: state.closedBy,
+        open: openness.open,
+        closedBy: openness.closedBy,
         storedAt: stored ? stored.at || null : null,
         error: state.errors[inst.symbol] || null,
       });
