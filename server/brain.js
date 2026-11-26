@@ -1044,6 +1044,9 @@ function summary() {
       symbol,
       at: r.at,
       condition,
+      // What this verdict actually measured, which can be shorter than the year
+      // requested. Display-only: it is not part of the reuse test.
+      covered: r.covered || null,
       adjacent: adjacent
         ? {
             condition: near,
