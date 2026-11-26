@@ -610,6 +610,17 @@ check("a verdict from another feed, rule list or cost model needs re-measuring",
     true,
     "a verdict from another rule list was trusted"
   );
+  // The feed that actually served the bars is a cache detail, not an input:
+  // comparing it retired live verdicts that nothing changed for.
+  assert.strictEqual(
+    brain.needsMeasure(
+      inst,
+      file({ ...good, series: { ...good.series, provider: "some-other-feed", fallback: true } }),
+      families
+    ),
+    false,
+    "an observed feed flip retired a verdict whose configured source did not change"
+  );
   assert.strictEqual(
     brain.needsMeasure(inst, file({ ...good, costs: { ...costs, spread: Number(costs.spread || 0) + 1 } }), families),
     true,
@@ -708,6 +719,14 @@ check("an unmeasured brain market names the input that moved", () => {
   });
   assert.ok(/entry series changed/.test(feed), `feed change reason was ${feed}`);
   assert.ok(feed.includes(otherFeed), `the reason did not name the old feed: ${feed}`);
+  assert.strictEqual(
+    brain.whyUnmeasured({
+      ...base,
+      stored: rec({ series: { ...expected.series, provider: "some-other-feed", fallback: true } }),
+    }),
+    null,
+    "an observed feed flip was reported as a reason"
+  );
 
   // A rule promoted since the measurement is "added"; one dropped is "removed".
   const added = brain.whyUnmeasured({

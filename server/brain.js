@@ -467,16 +467,12 @@ function entrySeries(candleSymbol) {
   };
 }
 
-const SERIES_KEYS = [
-  "ticker",
-  "interval",
-  "range",
-  "configuredProvider",
-  "configuredSymbol",
-  "provider",
-  "providerSymbol",
-  "fallback",
-];
+// Only the inputs a verdict was *asked* for. The feed that actually served the
+// bars (provider, providerSymbol, fallback) is recorded for the readout but not
+// compared: the candle cache holds whichever fetch filled it last, so comparing
+// it would retire verdicts that nothing about the configuration changed for. A
+// provider switch is a change to the configured source, which is compared.
+const SERIES_KEYS = ["ticker", "interval", "range", "configuredProvider", "configuredSymbol"];
 
 function sameSeries(a, b) {
   if (!a || !b) return false;
@@ -597,13 +593,7 @@ function whyUnmeasured({
   if (!sameSeries(rec.series, want.series)) {
     const was = rec.series;
     const now2 = want.series || {};
-    if (was.range !== now2.range || was.configuredProvider !== now2.configuredProvider) {
-      return `entry series changed (${was.range}/${was.configuredProvider} → ${now2.range}/${now2.configuredProvider})`;
-    }
-    if (was.provider !== now2.provider || was.fallback !== now2.fallback) {
-      return `entry feed changed (${was.provider} → ${now2.provider})`;
-    }
-    return "entry series changed";
+    return `entry series changed (${was.range}/${was.configuredProvider} → ${now2.range}/${now2.configuredProvider})`;
   }
 
   const families = familyDifference(rec.families, want.families);
