@@ -73,6 +73,13 @@ function check({ history, maxLosses, maxLossR, ignoredBefore, now = new Date() }
  * each row says whether the alert was delivered or held and why it was held.
  * `counted` marks the outcomes the loss limit actually counted.
  */
+// The rule the stop has always applied, written down: every resolved signal
+// counts, whether or not a channel sent it. A strategy that loses on paper is
+// still losing, so withholding an alert is not a way around the loss limit.
+const BASIS = "all-resolved";
+const BASIS_NOTE =
+  "The daily stop counts every resolved signal, delivered or withheld. A losing signal is still a loss when no alert went out.";
+
 function contributors(history, now = new Date(), ignoredBefore, journal) {
   const key = dayKey(now);
   const since = ignoredBefore ? Date.parse(ignoredBefore) : NaN;
@@ -95,8 +102,10 @@ function contributors(history, now = new Date(), ignoredBefore, journal) {
         outcome: h.outcome || null,
         rMultiple: h.rMultiple == null ? null : Number(h.rMultiple),
         closedAt: h.closedAt,
-        // null when no journal row matches: unknown, not "held".
-        delivered: entry ? entry.status !== "held" : null,
+        // The journal's own status; null when no row matches. "approved" is a
+        // decision no channel carried, which is not the same as delivered.
+        delivery: entry ? entry.status || null : null,
+        delivered: entry ? entry.status === "sent" : null,
         heldReason: entry && entry.heldReason ? entry.heldReason : null,
         counted: h.outcome === "loss",
       };
@@ -104,4 +113,4 @@ function contributors(history, now = new Date(), ignoredBefore, journal) {
     .sort((a, b) => String(a.closedAt).localeCompare(String(b.closedAt)));
 }
 
-module.exports = { check, todayState, dayKey, contributors };
+module.exports = { check, todayState, dayKey, contributors, BASIS, BASIS_NOTE };

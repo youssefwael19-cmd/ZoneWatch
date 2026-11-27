@@ -684,6 +684,8 @@
             <span class="pill" id="perfStreak">…</span>
             <a class="btn tiny" href="/api/export/signals.csv" style="margin-left:auto">Download CSV</a>
           </div>
+          <p class="hint" style="margin:14px 0 0">By delivery — the same closed signals, split by whether the alert was actually sent.</p>
+          <div id="perfBooks" style="display:grid;gap:5px;margin-top:8px"></div>
           <div id="perfMarkets" style="display:grid;gap:5px;margin-top:14px"></div>
         </div>
 
@@ -1624,6 +1626,26 @@ async function loadPerformance() {
     document.getElementById("perfAvg").textContent = p.avgR == null ? "—" : `${p.avgR > 0 ? "+" : ""}${p.avgR}R per trade`;
     document.getElementById("perfDrawdown").textContent = `worst drawdown ${p.maxDrawdownR ?? 0}R`;
     document.getElementById("perfStreak").textContent = `longest losing run ${p.worstLosingStreak ?? 0}`;
+
+    // The delivered book is what the owner could actually have traded; the
+    // withheld book is what the gates refused. Reading the overall win rate as
+    // if it were the delivered one is how a filter gets mistaken for an edge.
+    const bookLabels = {
+      delivered: "delivered — alert actually sent",
+      withheld: "withheld — held back by a gate",
+      unsent: "approved — no channel carried it",
+      unknown: "unattributed — no journal row",
+    };
+    document.getElementById("perfBooks").innerHTML = Object.entries(p.books || {})
+      .filter(([key, b]) => b && (b.count > 0 || key === "delivered" || key === "withheld"))
+      .map(
+        ([key, b]) => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.05)">
+          <strong>${bookLabels[key] || key}</strong>
+          <span class="hint">${b.count} trade${b.count === 1 ? "" : "s"} · ${b.wins}W/${b.losses}L/${b.breakevens}BE${b.winrate == null ? "" : ` · ${b.winrate}%`}</span>
+          <span style="color:${b.totalR >= 0 ? "#7ee0a8" : "#ff8b8b"};font-weight:600">${b.totalR > 0 ? "+" : ""}${b.totalR}R</span>
+        </div>`
+      )
+      .join("");
 
     document.getElementById("perfMarkets").innerHTML = (p.byMarket || [])
       .map(

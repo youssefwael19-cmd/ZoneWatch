@@ -2407,6 +2407,9 @@ app.get("/api/performance", (_req, res) => {
     maxDrawdownR: Number(maxDrawdown.toFixed(2)),
     worstLosingStreak: worstStreak,
     series,
+    // The same closed signals split by what became of the alert, so a losing
+    // strategy can be told apart from a losing delivery filter.
+    books: journal.deliverySplit(closed, journal.readJournal().entries),
     byMarket: [...byMarket.values()]
       .map((m) => ({
         ...m,
@@ -2552,21 +2555,36 @@ app.get("/api/audit", async (_req, res) => {
       ? {
           checkedAt: snap.checkedAt,
           blockReason: snap.blockReason || null,
-          guard: snap.guard
-            ? {
-                stop: Boolean(snap.guard.stop),
-                reason: snap.guard.reason || null,
-                state: snap.guard.state || null,
-                // Which resolved signals the count came from, delivered or held,
-                // so a stop is a named list rather than a bare number.
-                contributors: guardMod.contributors(
-                  tracker.load().history,
-                  new Date(),
-                  guardResetAt,
-                  journal.readJournal().entries
-                ),
-              }
-            : null,
+          guard: (() => {
+            if (!snap.guard) return null;
+            // Which resolved signals the count came from, delivered or held, so
+            // a stop is a named list rather than a bare number.
+            const contributors = guardMod.contributors(
+              tracker.load().history,
+              new Date(),
+              guardResetAt,
+              journal.readJournal().entries
+            );
+            const counted = { delivered: 0, unsent: 0, withheld: 0, unknown: 0 };
+            for (const c of contributors) {
+              if (!c.counted) continue;
+              if (c.delivery === "sent") counted.delivered += 1;
+              else if (c.delivery === "held") counted.withheld += 1;
+              else if (c.delivery === "approved") counted.unsent += 1;
+              else counted.unknown += 1;
+            }
+            return {
+              stop: Boolean(snap.guard.stop),
+              reason: snap.guard.reason || null,
+              state: snap.guard.state || null,
+              // The policy the stop applies, stated in the output rather than
+              // left to be inferred: withheld losses count toward the limit.
+              basis: guardMod.BASIS,
+              basisNote: guardMod.BASIS_NOTE,
+              counted,
+              contributors,
+            };
+          })(),
           blackout: snap.blackout ? { active: Boolean(snap.blackout.active) } : null,
           feed: snap.feed || null,
           signals: (snap.signals || []).length,

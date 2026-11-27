@@ -21,6 +21,7 @@ const brain = require("../server/brain");
 const locks = require("../server/locks");
 const gatedigest = require("../server/gatedigest");
 const guard = require("../server/guard");
+const journalMod = require("../server/journal");
 const paperreview = require("../server/paperreview");
 const buildInfo = require("../server/buildinfo");
 
@@ -773,6 +774,8 @@ check("a broker closure reads as closed even when the calendar disagrees", () =>
 });
 
 check("the daily guard names the signals it counted", () => {
+  assert.equal(guard.BASIS, "all-resolved", "the stop counts withheld signals too");
+  assert.match(guard.BASIS_NOTE, /delivered or withheld/);
   const now = new Date("2026-11-26T23:00:00.000Z");
   const history = [
     { id: "a", symbol: "EURUSD", side: "SELL", outcome: "loss", rMultiple: -1, closedAt: "2026-11-26T10:00:00.000Z" },
@@ -782,23 +785,58 @@ check("the daily guard names the signals it counted", () => {
   ];
   const journal = [
     { id: "a", status: "held", heldReason: "no proven rule" },
-    { id: "b", status: "delivered" },
+    { id: "b", status: "sent" },
   ];
 
   const rows = guard.contributors(history, now, "2026-11-26T09:30:00.000Z", journal);
   assert.equal(rows.length, 2, "yesterday and pre-reset signals must not be counted");
   assert.equal(rows[0].symbol, "EURUSD");
   assert.equal(rows[0].delivered, false);
+  assert.equal(rows[0].delivery, "held");
   assert.equal(rows[0].heldReason, "no proven rule");
   assert.equal(rows[0].counted, true);
   assert.equal(rows[1].symbol, "BTCUSD");
   assert.equal(rows[1].delivered, true);
+  assert.equal(rows[1].delivery, "sent");
   assert.equal(rows[1].counted, false);
 
   // Without a journal row, delivery is unknown rather than assumed held.
   const unknown = guard.contributors(history, now, null, []);
   assert.equal(unknown[0].delivered, null);
   assert.equal(unknown.length, 3, "today's three closed signals should be listed");
+});
+
+check("the track record splits by what became of the alert", () => {
+  const history = [
+    { id: "a", symbol: "EURUSD", side: "BUY", outcome: "loss", rMultiple: -1 },
+    { id: "b", symbol: "BTCUSD", side: "SELL", outcome: "win", rMultiple: 2 },
+    { id: "c", symbol: "USDJPY", side: "BUY", outcome: "breakeven", rMultiple: 0 },
+    { id: "d", symbol: "AUDUSD", side: "SELL", outcome: "loss", rMultiple: -1 },
+    { id: "e", symbol: "NZDJPY", side: "BUY", outcome: "open" },
+  ];
+  const entries = [
+    { id: "a", status: "sent" },
+    { id: "b", status: "held" },
+    { id: "c", status: "approved" },
+  ];
+
+  const books = journalMod.deliverySplit(history, entries);
+  assert.equal(books.delivered.count, 1);
+  assert.equal(books.delivered.totalR, -1);
+  assert.equal(books.delivered.losses, 1);
+  assert.equal(books.withheld.count, 1);
+  assert.equal(books.withheld.wins, 1);
+  assert.equal(books.withheld.totalR, 2);
+  assert.equal(books.unsent.count, 1, "approved-but-unsent is not delivered");
+  assert.equal(books.unsent.breakevens, 1);
+  assert.equal(books.unknown.count, 1, "a closed signal with no journal row is unattributed");
+  assert.equal(books.delivered.winrate, 0);
+  assert.equal(books.withheld.winrate, 100);
+  // Open signals are not part of any closed book.
+  assert.equal(
+    books.delivered.count + books.withheld.count + books.unsent.count + books.unknown.count,
+    4
+  );
 });
 
 /* --------------------------- gate digest --------------------------- */

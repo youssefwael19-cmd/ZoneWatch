@@ -544,6 +544,26 @@ the trend; it is not a forecast, and the checks do not know the news. Treat them
 as a prompt to look at the chart, never as a reason to place a trade on their
 own.
 
+### Delivered, withheld, and the daily stop
+
+The track record keeps two questions apart. `delivered` is what a channel
+actually sent; `withheld` is what a gate held back; `unsent` is approved with no
+channel to carry it; `unknown` is older than the journal and cannot be
+attributed. `/api/performance` returns all four as `books` — count, wins,
+losses, break-evens, win rate and R — and the Learning tab prints the split above
+the per-market table. A held-back signal was never a trade the owner could have
+taken, so reading the mixed win rate as if it were the delivered one is how a
+filter gets mistaken for an edge.
+
+The daily stop counts **all resolved signals**, delivered or withheld, and
+`/api/audit` now says so instead of leaving it implicit: `gates.guard.basis` is
+`all-resolved`, with a note, and `counted` splits the day's counted losses by
+delivery (`delivered`, `unsent`, `withheld`, `unknown`). The limit counts losing
+resolutions, not R, so four small losses trip it the same as four full ones.
+Withholding an alert is not a way around the limit — a strategy that loses on
+paper is still losing — and the contributor list makes a stop built only from
+withheld signals visible as exactly that.
+
 ### How it decides to trade at all
 
 Three answers, in order, and each one says which it gave:

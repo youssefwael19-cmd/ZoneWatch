@@ -353,4 +353,53 @@ function summary() {
   };
 }
 
-module.exports = { record, resolve, backfill, summary, classifyFailure, readJournal };
+/** One closed book: the counts a win rate is made of, plus the R it earned. */
+function book(rows) {
+  const totalR = rows.reduce((a, h) => a + (Number(h.rMultiple) || 0), 0);
+  const wins = rows.filter((h) => h.outcome === "win").length;
+  const losses = rows.filter((h) => h.outcome === "loss").length;
+  const breakevens = rows.filter((h) => h.outcome === "breakeven").length;
+  return {
+    count: rows.length,
+    wins,
+    losses,
+    breakevens,
+    winrate: rows.length ? Number(((wins / rows.length) * 100).toFixed(1)) : null,
+    totalR: Number(totalR.toFixed(2)),
+    avgR: rows.length ? Number((totalR / rows.length).toFixed(3)) : null,
+  };
+}
+
+/**
+ * The track record split by what became of the alert.
+ *
+ * `delivered` is what a channel actually sent; `withheld` is what a gate held
+ * back; `unsent` is approved with no channel to carry it; `unknown` is older
+ * than the journal and cannot be attributed either way. Keeping them separate
+ * is the difference between "the strategy loses" and "the filter loses": a
+ * held-back signal was never a trade the owner could have taken.
+ */
+function deliverySplit(history = [], entries = readJournal().entries) {
+  const byId = new Map(
+    (Array.isArray(entries) ? entries : []).filter((e) => e && e.id).map((e) => [e.id, e])
+  );
+  const closed = (Array.isArray(history) ? history : []).filter(
+    (h) => h && (h.outcome === "win" || h.outcome === "loss" || h.outcome === "breakeven")
+  );
+  const buckets = { delivered: [], withheld: [], unsent: [], unknown: [] };
+  for (const h of closed) {
+    const entry = byId.get(h.id);
+    if (!entry) buckets.unknown.push(h);
+    else if (entry.status === "sent") buckets.delivered.push(h);
+    else if (entry.status === "held") buckets.withheld.push(h);
+    else buckets.unsent.push(h);
+  }
+  return {
+    delivered: book(buckets.delivered),
+    withheld: book(buckets.withheld),
+    unsent: book(buckets.unsent),
+    unknown: book(buckets.unknown),
+  };
+}
+
+module.exports = { record, resolve, backfill, summary, classifyFailure, readJournal, deliverySplit };
